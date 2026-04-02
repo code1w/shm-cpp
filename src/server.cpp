@@ -1,4 +1,7 @@
 // server.cpp — Multi-client server using RingChannel + EventLoop
+//
+// Notifications use shared eventfd (exchanged during handshake).
+// Unix socket is kept only for fd exchange and disconnect detection.
 
 #include <shm_ipc/ring_channel.hpp>
 #include <shm_ipc/event_loop.hpp>
@@ -29,9 +32,10 @@ struct ClientState {
     shm_ipc::UniqueFd     socket_fd;
     Channel               channel;
     int                   timer_fd = -1;
+    int                   notify_efd = -1; // eventfd we poll for client notifications
     int                   tick = 0;
     int                   total_read = 0;
-    std::unique_ptr<char[]> read_buf; // heap-allocated read buffer
+    std::unique_ptr<char[]> read_buf;
 };
 
 shm_ipc::EventLoop *g_loop = nullptr;
@@ -59,6 +63,16 @@ shm_ipc::UniqueFd create_listen_socket(const char *path) {
     return sfd;
 }
 
+// Remove all fds associated with a client from the event loop
+void remove_client(shm_ipc::EventLoop &loop,
+                   std::unordered_map<int, std::unique_ptr<ClientState>> &clients,
+                   int client_fd, ClientState *csp) {
+    loop.remove_timer(csp->timer_fd);
+    loop.remove_fd(csp->notify_efd);
+    loop.remove_fd(client_fd);
+    clients.erase(client_fd);
+}
+
 } // anonymous namespace
 
 int main() {
@@ -76,10 +90,9 @@ int main() {
         int next_client_id = 1;
 
         auto listen_fd = create_listen_socket(shm_ipc::kDefaultSocketPath);
-        std::printf("server: listening on %s (max %d clients, ring=%zuMB, max_msg=%zuB)\n",
+        std::printf("server: listening on %s (max %d clients, ring=%zuMB, eventfd notify)\n",
                     shm_ipc::kDefaultSocketPath, kMaxClients,
-                    Channel::Ring::capacity / (1024 * 1024),
-                    Channel::max_msg_size);
+                    Channel::Ring::capacity / (1024 * 1024));
 
         // --- Accept callback ---
         loop.add_fd(listen_fd.get(), [&](int lfd, short /*revents*/) {
@@ -99,24 +112,24 @@ int main() {
             cs->id = cid;
             cs->channel = Channel::accept(cfd.get());
             cs->read_buf = std::make_unique<char[]>(Channel::max_msg_size);
-            std::printf("server: client #%d ring channel established\n", cid);
+            std::printf("server: client #%d ring channel established (eventfd notify)\n", cid);
 
             int client_fd = cfd.get();
             cs->socket_fd = std::move(cfd);
+            cs->notify_efd = cs->channel.notify_read_fd();
 
             ClientState *csp = cs.get();
+
+            // --- Per-client timer: write responses + batch-read ---
             int tfd = loop.add_timer(kTimerIntervalMs, [&loop, &clients, client_fd, csp](int tfd, short /*rev*/) {
                 shm_ipc::EventLoop::drain_timerfd(tfd);
 
                 if (++csp->tick > kMaxTicks) {
                     std::printf("server: client #%d max ticks reached\n", csp->id);
-                    loop.remove_timer(tfd);
-                    loop.remove_fd(client_fd);
-                    clients.erase(client_fd);
+                    remove_client(loop, clients, client_fd, csp);
                     return;
                 }
 
-                // Write a response message
                 auto now = std::time(nullptr);
                 std::array<char, 32> ts{};
                 std::strftime(ts.data(), ts.size(), "%H:%M:%S", std::localtime(&now));
@@ -128,39 +141,44 @@ int main() {
 
                 if (csp->channel.try_write(msg.data(),
                         static_cast<uint32_t>(msg_len + 1), csp->tick) == 0) {
-                    char notify = 'S';
-                    ::write(client_fd, &notify, 1);
+                    csp->channel.notify_peer();  // eventfd notification
                 }
 
                 // Batch-read all available client messages
                 uint32_t len{}, seq{};
                 int batch = 0;
                 while (csp->channel.try_read(csp->read_buf.get(), &len, &seq) == 0) {
-                    std::printf("Tserver: client #%d [seq=%03u len=%u]: %.*s\n",
+                    std::printf("server: client #%d [seq=%03u len=%u]: %.*s\n",
                                 csp->id, seq, len,
                                 static_cast<int>(len), csp->read_buf.get());
                     ++csp->total_read;
                     ++batch;
                 }
                 if (batch > 0) {
-                    std::printf("Tserver: client #%d batch=%d total=%d\n",
+                    std::printf("server: client #%d batch=%d total=%d\n",
                                 csp->id, batch, csp->total_read);
                 }
             });
             csp->timer_fd = tfd;
 
+            // --- Eventfd: client wrote new data (just drain, batch-read on timer) ---
+            loop.add_fd(csp->notify_efd, [csp](int efd, short /*revents*/) {
+                Channel::drain_notify(efd);
+                // Data will be batch-read on next timer tick
+            });
+
+            // --- Socket: disconnect detection only ---
             loop.add_fd(client_fd, [&loop, &clients, client_fd, csp](int /*fd*/, short revents) {
                 if (revents & (POLLHUP | POLLERR)) {
                     std::printf("server: client #%d disconnected (HUP/ERR)\n", csp->id);
-                    loop.remove_timer(csp->timer_fd);
-                    loop.remove_fd(client_fd);
-                    clients.erase(client_fd);
+                    remove_client(loop, clients, client_fd, csp);
                     return;
                 }
                 if (revents & POLLIN) {
-                    char notify{};
-                    auto n = ::read(client_fd, &notify, 1);
-                    if (n <= 0 || notify == 0) {
+                    char buf{};
+                    auto n = ::read(client_fd, &buf, 1);
+                    if (n <= 0 || buf == 0) {
+                        // Drain remaining messages
                         uint32_t len{}, seq{};
                         while (csp->channel.try_read(csp->read_buf.get(), &len, &seq) == 0) {
                             std::printf("server: client #%d [seq=%03u len=%u]: %.*s\n",
@@ -170,9 +188,7 @@ int main() {
                         }
                         std::printf("server: client #%d disconnected, total read=%d\n",
                                     csp->id, csp->total_read);
-                        loop.remove_timer(csp->timer_fd);
-                        loop.remove_fd(client_fd);
-                        clients.erase(client_fd);
+                        remove_client(loop, clients, client_fd, csp);
                         return;
                     }
                 }

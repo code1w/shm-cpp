@@ -1,4 +1,7 @@
 // client.cpp — Client using RingChannel + EventLoop
+//
+// Notifications use shared eventfd (exchanged during handshake).
+// Unix socket is kept only for fd exchange and disconnect detection.
 
 #include <shm_ipc/ring_channel.hpp>
 #include <shm_ipc/event_loop.hpp>
@@ -55,7 +58,7 @@ int main() {
         std::printf("client: connected to %s\n", shm_ipc::kDefaultSocketPath);
 
         auto channel = shm_ipc::DefaultRingChannel::connect(sfd.get());
-        std::printf("client: ring channel established (capacity=%zuMB, max_msg=%zuB)\n\n",
+        std::printf("client: ring channel established (capacity=%zuMB, max_msg=%zuB, eventfd notify)\n\n",
                     shm_ipc::DefaultRingChannel::Ring::capacity / (1024 * 1024),
                     shm_ipc::DefaultRingChannel::max_msg_size);
 
@@ -65,10 +68,9 @@ int main() {
         int tick = 0, write_ok = 0, write_full = 0;
         int socket_fd = sfd.get();
 
-        // Heap-allocated read buffer (max_msg_size can be ~4MB)
         auto read_buf = std::make_unique<char[]>(shm_ipc::DefaultRingChannel::max_msg_size);
 
-        // --- Timer: write messages to ring buffer ---
+        // --- Timer: write messages to ring buffer, notify via eventfd ---
         loop.add_timer(kTimerIntervalMs, [&](int tfd, short /*rev*/) {
             shm_ipc::EventLoop::drain_timerfd(tfd);
 
@@ -88,8 +90,7 @@ int main() {
             if (channel.try_write(msg.data(),
                     static_cast<uint32_t>(msg_len + 1), tick) == 0) {
                 ++write_ok;
-                char notify = 'C';
-                ::write(socket_fd, &notify, 1);
+                channel.notify_peer();  // eventfd notification
             } else {
                 ++write_full;
                 std::fprintf(stderr, "client: [seq=%03d] ring full! (ok=%d, full=%d)\n",
@@ -103,7 +104,17 @@ int main() {
             }
         });
 
-        // --- Socket: read server notifications ---
+        // --- Eventfd: server wrote new data to our read ring ---
+        loop.add_fd(channel.notify_read_fd(), [&](int efd, short /*revents*/) {
+            shm_ipc::DefaultRingChannel::drain_notify(efd);
+            uint32_t len{}, seq{};
+            while (channel.try_read(read_buf.get(), &len, &seq) == 0) {
+                std::printf("client: server [seq=%03u len=%u]: %.*s\n",
+                            seq, len, static_cast<int>(len), read_buf.get());
+            }
+        });
+
+        // --- Socket: disconnect detection only ---
         loop.add_fd(socket_fd, [&](int /*fd*/, short revents) {
             if (revents & (POLLHUP | POLLERR)) {
                 std::printf("client: server disconnected\n");
@@ -111,19 +122,11 @@ int main() {
                 return;
             }
             if (revents & POLLIN) {
-                char notify{};
-                auto n = ::read(socket_fd, &notify, 1);
-                if (n <= 0 || notify == 0) {
+                char buf{};
+                auto n = ::read(socket_fd, &buf, 1);
+                if (n <= 0 || buf == 0) {
                     std::printf("client: server disconnected\n");
                     loop.stop();
-                    return;
-                }
-                if (notify == 'S') {
-                    uint32_t len{}, seq{};
-                    while (channel.try_read(read_buf.get(), &len, &seq) == 0) {
-                        std::printf("client: server [seq=%03u len=%u]: %.*s\n",
-                                    seq, len, static_cast<int>(len), read_buf.get());
-                    }
                 }
             }
         });

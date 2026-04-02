@@ -11,6 +11,7 @@
 #include <utility>
 
 #include <linux/memfd.h>
+#include <sys/eventfd.h>
 #include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/syscall.h>
@@ -92,6 +93,21 @@ private:
 };
 
 // ---------------------------------------------------------------------------
+// Fd type tags — carried in the iovec data alongside SCM_RIGHTS
+// ---------------------------------------------------------------------------
+
+/// Tag identifying the kind of file descriptor being exchanged.
+enum class FdTag : uint32_t {
+    kMemfd   = 0x4D454D46, // "MEMF"
+    kEventfd = 0x45564644, // "EVFD"
+};
+
+struct TaggedFd {
+    UniqueFd fd;
+    FdTag    tag;
+};
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -108,8 +124,12 @@ private:
 }
 
 /// Send a file descriptor over a Unix socket using SCM_RIGHTS.
-inline void send_fd(int socket, int fd) {
+/// The FdTag is carried in the iovec payload so the receiver can identify
+/// the fd type without relying on strict ordering.
+inline void send_fd(int socket, int fd, FdTag tag) {
     std::array<char, 256> dummy{};
+    auto tag_val = static_cast<uint32_t>(tag);
+    std::memcpy(dummy.data(), &tag_val, sizeof(tag_val));
     iovec io{dummy.data(), dummy.size()};
 
     alignas(cmsghdr) std::array<char, CMSG_SPACE(sizeof(int))> ctrl{};
@@ -129,8 +149,9 @@ inline void send_fd(int socket, int fd) {
         throw std::runtime_error(std::string("sendmsg: ") + std::strerror(errno));
 }
 
-/// Receive a file descriptor from a Unix socket using SCM_RIGHTS.
-[[nodiscard]] inline UniqueFd recv_fd(int socket) {
+/// Receive a tagged file descriptor from a Unix socket using SCM_RIGHTS.
+/// Returns both the fd and the FdTag carried in the iovec payload.
+[[nodiscard]] inline TaggedFd recv_fd(int socket) {
     std::array<char, 256> data{};
     iovec io{data.data(), data.size()};
 
@@ -147,6 +168,30 @@ inline void send_fd(int socket, int fd) {
     auto *cmsg = CMSG_FIRSTHDR(&msg);
     int fd = -1;
     std::memcpy(&fd, CMSG_DATA(cmsg), sizeof(int));
+
+    uint32_t tag_val = 0;
+    std::memcpy(&tag_val, data.data(), sizeof(tag_val));
+
+    return TaggedFd{UniqueFd{fd}, static_cast<FdTag>(tag_val)};
+}
+
+/// Receive a tagged fd and verify it matches the expected type.
+[[nodiscard]] inline UniqueFd recv_fd_expect(int socket, FdTag expected) {
+    auto [fd, tag] = recv_fd(socket);
+    if (tag != expected) {
+        const char *exp = (expected == FdTag::kMemfd) ? "memfd" : "eventfd";
+        const char *got = (tag == FdTag::kMemfd) ? "memfd" : (tag == FdTag::kEventfd) ? "eventfd" : "unknown";
+        throw std::runtime_error(
+            std::string("recv_fd: expected ") + exp + " but got " + got);
+    }
+    return std::move(fd);
+}
+
+/// Create a non-blocking eventfd for cross-process notification.
+[[nodiscard]] inline UniqueFd create_eventfd() {
+    int fd = ::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+    if (fd < 0)
+        throw std::runtime_error(std::string("eventfd: ") + std::strerror(errno));
     return UniqueFd{fd};
 }
 
