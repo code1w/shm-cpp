@@ -31,6 +31,7 @@ struct ClientState {
     int                   timer_fd = -1;
     int                   tick = 0;
     int                   total_read = 0;
+    std::unique_ptr<char[]> read_buf; // heap-allocated read buffer
 };
 
 shm_ipc::EventLoop *g_loop = nullptr;
@@ -62,7 +63,6 @@ shm_ipc::UniqueFd create_listen_socket(const char *path) {
 
 int main() {
     try {
-        // Graceful shutdown on SIGINT/SIGTERM
         struct sigaction sa{};
         sa.sa_handler = signal_handler;
         ::sigemptyset(&sa.sa_mask);
@@ -76,8 +76,10 @@ int main() {
         int next_client_id = 1;
 
         auto listen_fd = create_listen_socket(shm_ipc::kDefaultSocketPath);
-        std::printf("server: listening on %s (max %d clients)\n",
-                    shm_ipc::kDefaultSocketPath, kMaxClients);
+        std::printf("server: listening on %s (max %d clients, ring=%zuMB, max_msg=%zuB)\n",
+                    shm_ipc::kDefaultSocketPath, kMaxClients,
+                    Channel::Ring::capacity / (1024 * 1024),
+                    Channel::max_msg_size);
 
         // --- Accept callback ---
         loop.add_fd(listen_fd.get(), [&](int lfd, short /*revents*/) {
@@ -96,12 +98,12 @@ int main() {
             auto cs = std::make_unique<ClientState>();
             cs->id = cid;
             cs->channel = Channel::accept(cfd.get());
+            cs->read_buf = std::make_unique<char[]>(Channel::max_msg_size);
             std::printf("server: client #%d ring channel established\n", cid);
 
             int client_fd = cfd.get();
             cs->socket_fd = std::move(cfd);
 
-            // Per-client timer
             ClientState *csp = cs.get();
             int tfd = loop.add_timer(kTimerIntervalMs, [&loop, &clients, client_fd, csp](int tfd, short /*rev*/) {
                 shm_ipc::EventLoop::drain_timerfd(tfd);
@@ -119,7 +121,7 @@ int main() {
                 std::array<char, 32> ts{};
                 std::strftime(ts.data(), ts.size(), "%H:%M:%S", std::localtime(&now));
 
-                std::array<char, 256> msg{};
+                std::array<char, 4096> msg{};
                 int msg_len = std::snprintf(msg.data(), msg.size(),
                     "[server seq=%03d time=%s client=#%d] tick=%d",
                     csp->tick, ts.data(), csp->id, csp->tick);
@@ -131,23 +133,22 @@ int main() {
                 }
 
                 // Batch-read all available client messages
-                std::array<char, 256> data{};
                 uint32_t len{}, seq{};
                 int batch = 0;
-                while (csp->channel.try_read(data.data(), &len, &seq) == 0) {
-                    std::printf("server: client #%d [seq=%03u]: %.*s\n",
-                                csp->id, seq, static_cast<int>(len), data.data());
+                while (csp->channel.try_read(csp->read_buf.get(), &len, &seq) == 0) {
+                    std::printf("Tserver: client #%d [seq=%03u len=%u]: %.*s\n",
+                                csp->id, seq, len,
+                                static_cast<int>(len), csp->read_buf.get());
                     ++csp->total_read;
                     ++batch;
                 }
                 if (batch > 0) {
-                    std::printf("server: client #%d batch=%d total=%d\n",
+                    std::printf("Tserver: client #%d batch=%d total=%d\n",
                                 csp->id, batch, csp->total_read);
                 }
             });
             csp->timer_fd = tfd;
 
-            // Client socket callback (notifications + disconnect)
             loop.add_fd(client_fd, [&loop, &clients, client_fd, csp](int /*fd*/, short revents) {
                 if (revents & (POLLHUP | POLLERR)) {
                     std::printf("server: client #%d disconnected (HUP/ERR)\n", csp->id);
@@ -160,12 +161,11 @@ int main() {
                     char notify{};
                     auto n = ::read(client_fd, &notify, 1);
                     if (n <= 0 || notify == 0) {
-                        // Drain remaining messages
-                        std::array<char, 256> data{};
                         uint32_t len{}, seq{};
-                        while (csp->channel.try_read(data.data(), &len, &seq) == 0) {
-                            std::printf("server: client #%d [seq=%03u]: %.*s\n",
-                                        csp->id, seq, static_cast<int>(len), data.data());
+                        while (csp->channel.try_read(csp->read_buf.get(), &len, &seq) == 0) {
+                            std::printf("server: client #%d [seq=%03u len=%u]: %.*s\n",
+                                        csp->id, seq, len,
+                                        static_cast<int>(len), csp->read_buf.get());
                             ++csp->total_read;
                         }
                         std::printf("server: client #%d disconnected, total read=%d\n",
@@ -175,7 +175,6 @@ int main() {
                         clients.erase(client_fd);
                         return;
                     }
-                    // 'C' notification — data will be batch-read on next timer tick
                 }
             });
 

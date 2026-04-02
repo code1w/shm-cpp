@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <memory>
 
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -44,25 +45,28 @@ shm_ipc::UniqueFd connect_to_server(const char *path) {
 
 int main() {
     try {
-        // Graceful shutdown
         struct sigaction sa{};
         sa.sa_handler = signal_handler;
         ::sigemptyset(&sa.sa_mask);
         ::sigaction(SIGINT, &sa, nullptr);
         ::sigaction(SIGTERM, &sa, nullptr);
 
-        // Connect and establish bidirectional ring channel
         auto sfd = connect_to_server(shm_ipc::kDefaultSocketPath);
         std::printf("client: connected to %s\n", shm_ipc::kDefaultSocketPath);
 
         auto channel = shm_ipc::DefaultRingChannel::connect(sfd.get());
-        std::printf("client: ring channel established\n\n");
+        std::printf("client: ring channel established (capacity=%zuMB, max_msg=%zuB)\n\n",
+                    shm_ipc::DefaultRingChannel::Ring::capacity / (1024 * 1024),
+                    shm_ipc::DefaultRingChannel::max_msg_size);
 
         shm_ipc::EventLoop loop;
         g_loop = &loop;
 
         int tick = 0, write_ok = 0, write_full = 0;
         int socket_fd = sfd.get();
+
+        // Heap-allocated read buffer (max_msg_size can be ~4MB)
+        auto read_buf = std::make_unique<char[]>(shm_ipc::DefaultRingChannel::max_msg_size);
 
         // --- Timer: write messages to ring buffer ---
         loop.add_timer(kTimerIntervalMs, [&](int tfd, short /*rev*/) {
@@ -77,7 +81,7 @@ int main() {
             std::array<char, 32> ts{};
             std::strftime(ts.data(), ts.size(), "%H:%M:%S", std::localtime(&now));
 
-            std::array<char, 256> msg{};
+            std::array<char, 4096> msg{};
             int msg_len = std::snprintf(msg.data(), msg.size(),
                 "[client seq=%03d time=%s] tick=%d", tick, ts.data(), tick);
 
@@ -93,7 +97,7 @@ int main() {
             }
 
             if (tick % 10 == 0) {
-                std::printf("client: --- tick=%d ok=%d full=%d readable=%lu ---\n",
+                std::printf("client: --- tick=%d ok=%d full=%d ring_bytes=%lu ---\n",
                             tick, write_ok, write_full,
                             static_cast<unsigned long>(channel.readable()));
             }
@@ -115,11 +119,10 @@ int main() {
                     return;
                 }
                 if (notify == 'S') {
-                    std::array<char, 256> data{};
                     uint32_t len{}, seq{};
-                    while (channel.try_read(data.data(), &len, &seq) == 0) {
-                        std::printf("client: server [seq=%03u]: %.*s\n",
-                                    seq, static_cast<int>(len), data.data());
+                    while (channel.try_read(read_buf.get(), &len, &seq) == 0) {
+                        std::printf("client: server [seq=%03u len=%u]: %.*s\n",
+                                    seq, len, static_cast<int>(len), read_buf.get());
                     }
                 }
             }
@@ -128,7 +131,6 @@ int main() {
         std::printf("client: timer=%dms, max_ticks=%d\n\n", kTimerIntervalMs, kMaxTicks);
         loop.run();
 
-        // Shutdown
         std::printf("\nclient: done. ok=%d full=%d\n", write_ok, write_full);
         char end = 0;
         ::write(socket_fd, &end, 1);

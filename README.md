@@ -1,15 +1,16 @@
 # shm-cpp
 
-基于共享内存的高性能进程间通信 (IPC) 库，使用无锁 SPSC 环形缓冲区实现零拷贝消息传递。
+基于共享内存的高性能进程间通信 (IPC) 库，使用无锁 SPSC 字节环形缓冲区实现零拷贝消息传递，支持 4MB 以内任意长度的变长消息。
 
 ## 特性
 
-- **无锁 SPSC 环形缓冲区** — 单生产者-单消费者，cache-line 对齐，原子操作保证内存序
+- **无锁 SPSC 字节环形缓冲区** — 单生产者-单消费者，cache-line 对齐，原子操作保证内存序
+- **变长消息** — 支持 1 字节到 ~4MB 的任意长度消息，消息在环形缓冲区中紧凑排列，8 字节对齐
 - **零文件系统依赖** — 通过 `memfd_create` 创建匿名共享内存，无需 `/dev/shm` 或 tmpfs
 - **fd 传递** — 利用 Unix domain socket 的 `SCM_RIGHTS` 在进程间交换 memfd 文件描述符
 - **双向通信** — 每个连接包含两个独立环形缓冲区，分别用于收发
 - **多客户端** — 服务端支持同时处理多个客户端（默认最多 16 个），每个客户端拥有独立的缓冲区对
-- **编译期可配置** — 槽位数量、数据大小等参数均为模板参数，支持编译期特化
+- **编译期可配置** — 环形缓冲区容量为模板参数（默认 8MB），支持编译期特化
 - **事件驱动** — 基于 `poll` + `timerfd` 的事件循环，无信号依赖
 - **Header-only** — 库部分为纯头文件，通过 CMake INTERFACE target 引入即可使用
 
@@ -53,7 +54,7 @@ make -j$(nproc)
 shm-cpp/
 ├── CMakeLists.txt
 ├── include/shm_ipc/
-│   ├── ringbuf.hpp           # 模板化无锁 SPSC 环形缓冲区
+│   ├── ringbuf.hpp           # 字节环形缓冲区（变长消息，模板化容量）
 │   ├── common.hpp            # RAII 封装 (UniqueFd, MmapRegion) 和 fd 传递工具
 │   ├── ring_channel.hpp      # 双向环形缓冲区通道
 │   └── event_loop.hpp        # poll + timerfd 事件循环
@@ -85,33 +86,40 @@ shm-cpp/
 
 ### 共享内存布局
 
-每个环形缓冲区在共享内存中的布局：
+每个环形缓冲区在共享内存中的布局（默认 Capacity = 8MB）：
 
 ```
 偏移量    内容
-──────────────────────────────────────
-0x000     RingHeader
-            ├─ write_idx  (atomic u64)
-            ├─ _pad1[56]               ← cache-line 隔离
-            ├─ read_idx   (atomic u64)
+──────────────────────────────────────────────
+0x000     RingHeader (128 字节，cache-line 对齐)
+            ├─ write_pos (atomic u64)       写入字节偏移（单调递增）
+            ├─ _pad1[56]                    cache-line 隔离
+            ├─ read_pos  (atomic u64)       读取字节偏移（单调递增）
             └─ _pad2[56]
-0x080     RingSlot[0]
-            ├─ seq  (u32)             消息序列号
-            ├─ len  (u32)             有效数据长度
-            └─ data[SlotDataSize]     载荷
-0x188     RingSlot[1]
-...
-          RingSlot[SlotCount - 1]
+
+0x080     数据区 (Capacity 字节的连续字节环形缓冲区)
+            消息在数据区中紧凑排列，按 8 字节对齐：
+
+            ┌──────────┬──────────┬─────────────────────┬───────┐
+            │ len (u32)│ seq (u32)│ payload (len 字节)  │ pad   │
+            │ 数据长度  │ 序列号   │ 变长载荷 (0~4MB)     │ 对齐  │
+            └──────────┴──────────┴─────────────────────┴───────┘
+
+            当数据区尾部空间不足以容纳完整消息帧时，写入哨兵
+            (len = UINT32_MAX) 标记"跳转到数据区起始位置"。
 ```
 
-默认配置下 (`SlotCount=16, SlotDataSize=256`)，每个环形缓冲区占用 `sizeof(RingHeader) + 16 * sizeof(RingSlot)` = 4352 字节。
+默认配置下 (`Capacity = 8MB`)：
+- 每个环形缓冲区共享内存大小：`sizeof(RingHeader) + Capacity` = 8,388,736 字节
+- 单条消息最大载荷：`Capacity / 2 - 8` = 4,194,296 字节 (~4MB)
+- 每个双向通道使用 2 个环形缓冲区 = ~16MB 共享内存
 
 ### 核心组件
 
 | 组件 | 头文件 | 说明 |
 |------|--------|------|
-| `RingBuf<N, S>` | `ringbuf.hpp` | 无锁环形缓冲区，N = 槽位数（2 的幂），S = 每槽数据字节数 |
-| `RingChannel<N, S>` | `ring_channel.hpp` | 封装一对 RingBuf + memfd 创建 + fd 交换握手 |
+| `RingBuf<Capacity>` | `ringbuf.hpp` | 无锁字节环形缓冲区，Capacity 为数据区大小（2 的幂，默认 8MB） |
+| `RingChannel<Capacity>` | `ring_channel.hpp` | 封装一对 RingBuf + memfd 创建 + fd 交换握手 |
 | `EventLoop` | `event_loop.hpp` | 基于 poll + timerfd 的单线程事件循环 |
 | `UniqueFd` | `common.hpp` | RAII 文件描述符 |
 | `MmapRegion` | `common.hpp` | RAII mmap 映射区 |
@@ -119,17 +127,29 @@ shm-cpp/
 
 ## API 用法
 
-### 自定义环形缓冲区参数
+### 自定义环形缓冲区容量
 
 ```cpp
 #include <shm_ipc/ring_channel.hpp>
 
-// 64 个槽位，每槽 1024 字节
-using MyChannel = shm_ipc::RingChannel<64, 1024>;
+// 16MB 容量（单条消息最大 ~8MB）
+using LargeChannel = shm_ipc::RingChannel<16 * 1024 * 1024>;
 
-auto ch = MyChannel::connect(socket_fd);
-ch.try_write(data, len, seq);
-ch.try_read(buf, &len, &seq);
+auto ch = LargeChannel::connect(socket_fd);
+
+// 发送变长消息（1 字节到 max_msg_size）
+ch.try_write(data, len, seq);            // 写不下返回 -1
+ch.force_write(data, len, seq);          // 写不下时丢弃最旧消息
+
+// 接收消息
+char buf[8 * 1024 * 1024];
+uint32_t len, seq;
+ch.try_read(buf, &len, &seq);            // 无消息返回 -1
+
+// 查询状态
+ch.readable();        // 读端已使用字节数
+ch.writable_bytes();  // 写端剩余字节数
+ch.max_msg_size;      // 编译期常量：单条消息最大载荷
 ```
 
 ### 使用事件循环
@@ -158,22 +178,32 @@ loop.run();
 ```cpp
 #include <shm_ipc/ringbuf.hpp>
 
-using Ring = shm_ipc::RingBuf<16, 256>;
+// 默认 8MB 容量
+using Ring = shm_ipc::RingBuf<>;
 
-void *shm = /* mmap 得到的共享内存指针 */;
+void *shm = /* mmap 得到的共享内存指针，大小 >= Ring::shm_size */;
 Ring::init(shm);
 
+// 写入变长消息
 Ring::try_write(shm, "hello", 6, /*seq=*/1);
 
-char buf[256];
+// 写入大消息（最大 Ring::max_msg_size ≈ 4MB）
+std::vector<char> big_data(4 * 1024 * 1024, 'X');
+Ring::try_write(shm, big_data.data(), big_data.size(), /*seq=*/2);
+
+// 读取
+auto buf = std::make_unique<char[]>(Ring::max_msg_size);
 uint32_t len, seq;
-Ring::try_read(shm, buf, &len, &seq);
+Ring::try_read(shm, buf.get(), &len, &seq);
 ```
 
 ## 设计决策
 
 | 决策 | 理由 |
 |------|------|
+| 字节环形缓冲区而非固定槽位 | 支持 1B~4MB 变长消息，小消息不浪费空间，大消息不需要分片 |
+| 8 字节对齐 + 哨兵换行 | 保证 `MsgHeader` 始终可原子读写，哨兵标记让读端跳过尾部碎片，避免消息跨缓冲区边界 |
+| 单消息上限 = Capacity/2 | 保证写入时无论物理偏移在何处，要么能直接写入，要么写哨兵后从头写入一定有足够空间 |
 | SPSC 而非 MPMC | 每个连接方向只有一个生产者和一个消费者，SPSC 不需要 CAS 循环，延迟更低 |
 | `memfd_create` 而非 `shm_open` | 匿名内存，无需管理 `/dev/shm` 下的文件生命周期 |
 | `timerfd` 而非 `SIGALRM` | timerfd 是普通 fd，可以和 socket fd 一起放入 poll；SIGALRM 是进程全局的，无法为每个客户端独立计时 |

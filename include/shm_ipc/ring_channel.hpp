@@ -1,6 +1,6 @@
 // ring_channel.hpp — Bidirectional shared-memory ring channel (C++17)
 //
-// Wraps a pair of RingBuf regions (one for writing, one for reading) and
+// Wraps a pair of byte ring buffers (one for writing, one for reading) and
 // encapsulates the memfd creation + fd-exchange handshake.
 
 #ifndef SHM_IPC_RING_CHANNEL_HPP
@@ -13,10 +13,10 @@
 
 namespace shm_ipc {
 
-template <int SlotCount = 16, int SlotDataSize = 256>
+template <std::size_t Capacity = 8 * 1024 * 1024>
 class RingChannel {
 public:
-    using Ring = RingBuf<SlotCount, SlotDataSize>;
+    using Ring = RingBuf<Capacity>;
 
     RingChannel() = default;
 
@@ -30,13 +30,11 @@ public:
     [[nodiscard]] static RingChannel connect(int socket_fd) {
         RingChannel ch;
 
-        // Create the client→server ring buffer
         ch.write_memfd_ = create_memfd("client_to_server", Ring::shm_size);
         ch.write_region_ = MmapRegion{ch.write_memfd_.get(), Ring::shm_size,
                                       PROT_READ | PROT_WRITE, MAP_SHARED};
         Ring::init(ch.write_region_.get());
 
-        // Exchange: send ours, receive theirs
         send_fd(socket_fd, ch.write_memfd_.get());
         ch.read_memfd_ = recv_fd(socket_fd);
         ch.read_region_ = MmapRegion{ch.read_memfd_.get(), Ring::shm_size,
@@ -48,18 +46,15 @@ public:
     [[nodiscard]] static RingChannel accept(int socket_fd) {
         RingChannel ch;
 
-        // Receive the client→server ring buffer
         ch.read_memfd_ = recv_fd(socket_fd);
         ch.read_region_ = MmapRegion{ch.read_memfd_.get(), Ring::shm_size,
                                      PROT_READ | PROT_WRITE, MAP_SHARED};
 
-        // Create the server→client ring buffer
         ch.write_memfd_ = create_memfd("server_to_client", Ring::shm_size);
         ch.write_region_ = MmapRegion{ch.write_memfd_.get(), Ring::shm_size,
                                       PROT_READ | PROT_WRITE, MAP_SHARED};
         Ring::init(ch.write_region_.get());
 
-        // Send our ring fd to the client
         send_fd(socket_fd, ch.write_memfd_.get());
         return ch;
     }
@@ -82,9 +77,12 @@ public:
         return Ring::available(read_region_.get());
     }
 
-    uint64_t writable_slots() const {
-        return static_cast<uint64_t>(SlotCount) - Ring::available(write_region_.get());
+    uint64_t writable_bytes() const {
+        return Capacity - Ring::available(write_region_.get());
     }
+
+    /// Maximum payload size for a single message.
+    static constexpr std::size_t max_msg_size = Ring::max_msg_size;
 
 private:
     UniqueFd   write_memfd_;
@@ -93,8 +91,8 @@ private:
     MmapRegion read_region_;
 };
 
-/// Convenience alias for the default configuration.
-using DefaultRingChannel = RingChannel<16, 256>;
+/// Convenience alias for the default configuration (8MB ring, ~4MB max message).
+using DefaultRingChannel = RingChannel<>;
 
 } // namespace shm_ipc
 
