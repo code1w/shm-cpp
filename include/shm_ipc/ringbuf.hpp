@@ -219,6 +219,52 @@ public:
         return 0;
     }
 
+    /// Zero-copy read: return a pointer into the ring buffer without copying.
+    /// The returned pointer is valid until commit_read() is called.
+    /// Returns -1 when empty.
+    static int peek_read(void *shm, const void **data, uint32_t *len, uint32_t *seq) {
+        auto *hdr = header(shm);
+        const char *base = data_region(shm);
+
+        uint64_t r = hdr->read_pos.load(std::memory_order_relaxed);
+        uint64_t w = hdr->write_pos.load(std::memory_order_acquire);
+
+        if (r >= w) return -1;
+
+        std::size_t phys_r = mask(r);
+        auto *mh = reinterpret_cast<const MsgHeader *>(base + phys_r);
+
+        if (mh->len == kSentinel) {
+            r += Capacity - phys_r;
+            if (r >= w) return -1;
+            phys_r = mask(r);
+            mh = reinterpret_cast<const MsgHeader *>(base + phys_r);
+        }
+
+        if (len) *len = mh->len;
+        if (seq) *seq = mh->seq;
+        if (data) *data = base + phys_r + msg_header_size;
+        return 0;
+    }
+
+    /// Commit a previous peek_read, advancing read_pos.
+    /// `len` must be the same value returned by peek_read.
+    static void commit_read(void *shm, uint32_t len) {
+        auto *hdr = header(shm);
+        const char *base = data_region(shm);
+
+        uint64_t r = hdr->read_pos.load(std::memory_order_relaxed);
+        std::size_t phys_r = mask(r);
+        auto *mh = reinterpret_cast<const MsgHeader *>(base + phys_r);
+
+        // Skip sentinel if present (same logic as peek_read)
+        if (mh->len == kSentinel) {
+            r += Capacity - phys_r;
+        }
+
+        hdr->read_pos.store(r + frame_size(len), std::memory_order_release);
+    }
+
     /// Bytes used in the ring (including headers, padding, sentinels).
     static uint64_t available(const void *shm) {
         auto *hdr = header(shm);

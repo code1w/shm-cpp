@@ -108,6 +108,14 @@ public:
         return Ring::try_read(read_region_.get(), data, len, seq);
     }
 
+    int peek_read(const void **data, uint32_t *len, uint32_t *seq) {
+        return Ring::peek_read(read_region_.get(), data, len, seq);
+    }
+
+    void commit_read(uint32_t len) {
+        Ring::commit_read(read_region_.get(), len);
+    }
+
     uint64_t readable() const {
         return Ring::available(read_region_.get());
     }

@@ -45,18 +45,18 @@ constexpr int kWarmup = 1000;
 
 void run_server(int socket_fd) {
     auto channel = Channel::accept(socket_fd);
-    auto buf = std::make_unique<char[]>(Channel::max_msg_size);
 
     for (auto &tc : kTests) {
         int total = kWarmup + tc.rounds;
         for (int i = 0; i < total; ++i) {
-            // Busy-poll read
+            // Zero-copy read: get pointer directly into ring buffer
+            const void *data{};
             uint32_t len{}, seq{};
-            while (channel.try_read(buf.get(), &len, &seq) != 0)
+            while (channel.peek_read(&data, &len, &seq) != 0)
                 ;
-            // Echo back
-            channel.try_write(buf.get(), len, seq);
-            channel.notify_peer();
+            // Write directly from read ring to write ring (1 memcpy instead of 2)
+            channel.try_write(data, len, seq);
+            channel.commit_read(len);
         }
     }
 
@@ -83,7 +83,6 @@ void run_client(int socket_fd) {
         // Warmup
         for (int i = 0; i < kWarmup; ++i) {
             channel.try_write(send_buf.get(), msg_len, static_cast<uint32_t>(i));
-            channel.notify_peer();
             uint32_t len{}, seq{};
             while (channel.try_read(recv_buf.get(), &len, &seq) != 0)
                 ;
@@ -93,7 +92,6 @@ void run_client(int socket_fd) {
         uint64_t t0 = now_ns();
         for (int i = 0; i < tc.rounds; ++i) {
             channel.try_write(send_buf.get(), msg_len, static_cast<uint32_t>(i));
-            channel.notify_peer();
             uint32_t len{}, seq{};
             while (channel.try_read(recv_buf.get(), &len, &seq) != 0)
                 ;
