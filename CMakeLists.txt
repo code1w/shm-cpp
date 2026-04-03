@@ -15,3 +15,9 @@ target_link_libraries(client PRIVATE shm_ipc)
 
 add_executable(server src/server.cpp)
 target_link_libraries(server PRIVATE shm_ipc)
+
+add_executable(bench_socket bench/bench_socket.cpp)
+target_link_libraries(bench_socket PRIVATE shm_ipc)
+
+add_executable(bench_shm bench/bench_shm.cpp)
+target_link_libraries(bench_shm PRIVATE shm_ipc)
