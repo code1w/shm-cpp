@@ -6,7 +6,7 @@
  * Unix socket 仅用于 fd 交换和断连检测。
  */
 
-#include <shm_ipc/ring_channel.hpp>
+#include <shm_ipc/client_state.hpp>
 #include <shm_ipc/event_loop.hpp>
 
 #include <array>
@@ -67,10 +67,13 @@ int main()
         ::sigaction(SIGINT, &sa, nullptr);
         ::sigaction(SIGTERM, &sa, nullptr);
 
-        auto sfd = ConnectToServer(shm_ipc::kDefaultSocketPath);
+        shm_ipc::ClientState cs;
+        cs.socket_fd = ConnectToServer(shm_ipc::kDefaultSocketPath);
         std::printf("client: connected to %s\n", shm_ipc::kDefaultSocketPath);
 
-        auto channel = shm_ipc::DefaultRingChannel::Connect(sfd.Get());
+        cs.channel    = shm_ipc::DefaultRingChannel::Connect(cs.socket_fd.Get());
+        cs.notify_efd = cs.channel.NotifyReadFd();
+        cs.read_buf   = std::make_unique<char[]>(shm_ipc::DefaultRingChannel::max_msg_size);
         std::printf("client: ring channel established (capacity=%zuMB, max_msg=%zuB, eventfd notify)\n\n",
                     shm_ipc::DefaultRingChannel::Ring::capacity / (1024 * 1024),
                     shm_ipc::DefaultRingChannel::max_msg_size);
@@ -78,18 +81,14 @@ int main()
         shm_ipc::EventLoop loop;
         gLoop = &loop;
 
-        int tick       = 0;
         int write_ok   = 0;
         int write_full = 0;
-        int socket_fd  = sfd.Get();
-
-        auto read_buf = std::make_unique<char[]>(shm_ipc::DefaultRingChannel::max_msg_size);
 
         // --- 定时器：向环形缓冲区写消息，通过 eventfd 通知 ---
         loop.AddTimer(kTimerIntervalMs, [&](int tfd, short /*rev*/) {
             shm_ipc::EventLoop::DrainTimerfd(tfd);
 
-            if (++tick > kMaxTicks)
+            if (++cs.tick > kMaxTicks)
             {
                 loop.Stop();
                 return;
@@ -101,43 +100,44 @@ int main()
 
             std::array<char, 4096> msg{};
             int msg_len = std::snprintf(msg.data(), msg.size(),
-                "[client seq=%03d time=%s] tick=%d", tick, ts.data(), tick);
+                "[client seq=%03d time=%s] tick=%d", cs.tick, ts.data(), cs.tick);
 
-            if (channel.TryWrite(msg.data(),
-                    static_cast<uint32_t>(msg_len + 1), tick) == 0)
+            if (cs.channel.TryWrite(msg.data(),
+                    static_cast<uint32_t>(msg_len + 1), cs.tick) == 0)
             {
                 ++write_ok;
-                channel.NotifyPeer();
+                cs.channel.NotifyPeer();
             }
             else
             {
                 ++write_full;
                 std::fprintf(stderr, "client: [seq=%03d] ring full! (ok=%d, full=%d)\n",
-                             tick, write_ok, write_full);
+                             cs.tick, write_ok, write_full);
             }
 
-            if (tick % 10 == 0)
+            if (cs.tick % 10 == 0)
             {
                 std::printf("client: --- tick=%d ok=%d full=%d ring_bytes=%lu ---\n",
-                            tick, write_ok, write_full,
-                            static_cast<unsigned long>(channel.Readable()));
+                            cs.tick, write_ok, write_full,
+                            static_cast<unsigned long>(cs.channel.Readable()));
             }
         });
 
-        // --- Eventfd：服务端向读环写入新数据 ---
-        loop.AddFd(channel.NotifyReadFd(), [&](int efd, short /*revents*/) {
+        // --- Eventfd：服务端向读环写入新数据，立即读取 ---
+        loop.AddFd(cs.notify_efd, [&](int efd, short /*revents*/) {
             shm_ipc::DefaultRingChannel::DrainNotify(efd);
             uint32_t len = 0;
             uint32_t seq = 0;
-            while (channel.TryRead(read_buf.get(), &len, &seq) == 0)
+            while (cs.channel.TryRead(cs.read_buf.get(), &len, &seq) == 0)
             {
                 std::printf("client: server [seq=%03u len=%u]: %.*s\n",
-                            seq, len, static_cast<int>(len), read_buf.get());
+                            seq, len, static_cast<int>(len), cs.read_buf.get());
+                ++cs.total_read;
             }
         });
 
         // --- Socket：仅用于断连检测 ---
-        loop.AddFd(socket_fd, [&](int /*fd*/, short revents) {
+        loop.AddFd(cs.socket_fd.Get(), [&](int /*fd*/, short revents) {
             if (revents & (POLLHUP | POLLERR))
             {
                 std::printf("client: server disconnected\n");
@@ -147,7 +147,7 @@ int main()
             if (revents & POLLIN)
             {
                 char buf{};
-                auto n = ::read(socket_fd, &buf, 1);
+                auto n = ::read(cs.socket_fd.Get(), &buf, 1);
                 if (n <= 0 || buf == 0)
                 {
                     std::printf("client: server disconnected\n");
@@ -159,9 +159,10 @@ int main()
         std::printf("client: timer=%dms, max_ticks=%d\n\n", kTimerIntervalMs, kMaxTicks);
         loop.Run();
 
-        std::printf("\nclient: done. ok=%d full=%d\n", write_ok, write_full);
+        std::printf("\nclient: done. ok=%d full=%d total_read=%d\n",
+                    write_ok, write_full, cs.total_read);
         char end = 0;
-        ::write(socket_fd, &end, 1);
+        ::write(cs.socket_fd.Get(), &end, 1);
         ::usleep(100000);
 
     }

@@ -9,7 +9,7 @@
  * Unix socket 仅用于 fd 交换和断连检测。
  */
 
-#include <shm_ipc/ring_channel.hpp>
+#include <shm_ipc/client_state.hpp>
 #include <shm_ipc/event_loop.hpp>
 
 #include <array>
@@ -31,20 +31,8 @@ constexpr int kHeartbeatMs = 300; ///< 心跳定时器间隔（毫秒）
 constexpr int kMaxTicks    = 40;  ///< 每客户端最大心跳次数
 constexpr int kMaxClients  = 16;  ///< 最大并发客户端数
 
-using Channel = shm_ipc::DefaultRingChannel;
-
-/** @brief 单个客户端的运行状态 */
-struct ClientState
-{
-    int                     id         = 0;  ///< 客户端 ID
-    shm_ipc::UniqueFd       socket_fd;       ///< 客户端 socket fd
-    Channel                 channel;          ///< 双向共享内存通道
-    int                     timer_fd   = -1; ///< 心跳定时器 fd
-    int                     notify_efd = -1; ///< 客户端写入通知的 eventfd
-    int                     tick       = 0;  ///< 当前心跳计数
-    int                     total_read = 0;  ///< 累计读取消息数
-    std::unique_ptr<char[]> read_buf;         ///< 消息读取缓冲区
-};
+using Channel     = shm_ipc::DefaultRingChannel;
+using ClientState = shm_ipc::ClientState;
 
 /// 全局事件循环指针，供信号处理器使用
 shm_ipc::EventLoop* gLoop = nullptr;
