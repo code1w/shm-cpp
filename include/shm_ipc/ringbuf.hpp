@@ -1,28 +1,34 @@
-// ringbuf.hpp — Byte-oriented lock-free SPSC ring buffer (C++17)
-//
-// Supports variable-length messages up to ~4MB (Capacity/2 - 8 bytes).
-// Messages are length-prefixed and 8-byte aligned in a contiguous byte ring.
-//
-// Memory layout:
-// ┌──────────────────────────────────────────────┐
-// │ RingHeader (control, cache-line padded)       │
-// ├──────────────────────────────────────────────┤
-// │ [MsgHdr][payload..][pad] [MsgHdr][payload..] │
-// │ [pad] [MsgHdr][payload..][pad] ...           │
-// │         (contiguous byte ring)                │
-// └──────────────────────────────────────────────┘
-//
-// Message frame:
-// ┌────────┬────────┬─────────────────┬─────────┐
-// │ len u32│ seq u32│ payload (len B) │ pad to 8│
-// └────────┴────────┴─────────────────┴─────────┘
-//
-// Wrap handling: when contiguous tail space < frame_size, a sentinel
-// (len = UINT32_MAX) is written to mark "skip to offset 0".
-// 8-byte alignment guarantees the sentinel header always fits.
+/**
+ * @file ringbuf.hpp
+ * @brief 字节级无锁 SPSC 环形缓冲区（C++17）
+ *
+ * 支持可变长度消息，最大 ~4MB（Capacity/2 - 8 字节）。
+ * 消息带长度前缀，在连续字节环中以 8 字节对齐存储。
+ *
+ * 内存布局：
+ * @code
+ * ┌──────────────────────────────────────────────┐
+ * │ RingHeader（控制区，缓存行对齐填充）          │
+ * ├──────────────────────────────────────────────┤
+ * │ [MsgHdr][payload..][pad] [MsgHdr][payload..] │
+ * │ [pad] [MsgHdr][payload..][pad] ...           │
+ * │         （连续字节环）                        │
+ * └──────────────────────────────────────────────┘
+ * @endcode
+ *
+ * 消息帧格式：
+ * @code
+ * ┌────────┬────────┬─────────────────┬─────────┐
+ * │ len u32│ seq u32│ payload (len B) │ pad to 8│
+ * └────────┴────────┴─────────────────┴─────────┘
+ * @endcode
+ *
+ * 回绕处理：当尾部剩余连续空间不足一个帧时，写入哨兵（len = UINT32_MAX）
+ * 标记"跳转到偏移 0"。8 字节对齐保证哨兵头总能写入。
+ */
 
-#ifndef SHM_IPC_RINGBUF_HPP
-#define SHM_IPC_RINGBUF_HPP
+#ifndef SHM_IPC_RINGBUF_HPP_
+#define SHM_IPC_RINGBUF_HPP_
 
 #include <atomic>
 #include <cstdint>
@@ -31,36 +37,45 @@
 namespace shm_ipc {
 
 // ---------------------------------------------------------------------------
-// Shared-memory structures (POD, no pointers)
+// 共享内存结构（POD，无指针）
 // ---------------------------------------------------------------------------
 
-struct RingHeader {
-    std::atomic<uint64_t> write_pos;
-    char _pad1[56];
-    std::atomic<uint64_t> read_pos;
-    char _pad2[56];
+/** @brief 环形缓冲区控制头，写/读位置各占独立缓存行 */
+struct RingHeader
+{
+    std::atomic<uint64_t> write_pos; ///< 写位置（单调递增字节偏移）
+    char _pad1[56];                  ///< 填充至 64 字节（一个缓存行）
+    std::atomic<uint64_t> read_pos;  ///< 读位置（单调递增字节偏移）
+    char _pad2[56];                  ///< 填充至 64 字节
 };
 
-struct MsgHeader {
-    uint32_t len;
-    uint32_t seq;
+/** @brief 消息帧头，紧跟 payload */
+struct MsgHeader
+{
+    uint32_t len; ///< payload 长度（字节），UINT32_MAX 表示哨兵
+    uint32_t seq; ///< 消息序列号
 };
 
 static_assert(sizeof(MsgHeader) == 8, "MsgHeader must be 8 bytes");
 
 // ---------------------------------------------------------------------------
 // RingBuf<Capacity>
-//
-// All operations are static and take a raw shm pointer.  The ring buffer
-// is a pure POD memory layout living entirely in shared memory — no vtable,
-// no heap, no cross-process pointers.
-//
-// write_pos / read_pos are monotonically increasing byte offsets.
-// Physical offset = pos & (Capacity - 1)  (Capacity must be power of 2).
 // ---------------------------------------------------------------------------
 
+/**
+ * @brief 无锁 SPSC 环形缓冲区
+ *
+ * 所有操作均为静态方法，接受原始共享内存指针。
+ * 环形缓冲区为纯 POD 内存布局，完全位于共享内存中——无虚表、无堆、无跨进程指针。
+ *
+ * write_pos / read_pos 为单调递增字节偏移。
+ * 物理偏移 = pos & (Capacity - 1)（Capacity 必须为 2 的幂）。
+ *
+ * @tparam Capacity 环形缓冲区容量（字节），必须为 2 的幂，默认 8MB
+ */
 template <std::size_t Capacity = 8 * 1024 * 1024>
-class RingBuf {
+class RingBuf
+{
     static_assert((Capacity & (Capacity - 1)) == 0,
                   "Capacity must be a power of 2");
     static_assert(Capacity >= 1024,
@@ -72,59 +87,76 @@ public:
     static constexpr std::size_t msg_header_size = sizeof(MsgHeader);
     static constexpr std::size_t max_msg_size    = Capacity / 2 - msg_header_size;
 
-    static constexpr uint32_t kSentinel = UINT32_MAX;
+    static constexpr uint32_t kSentinel = UINT32_MAX; ///< 回绕哨兵标记
 
-    /// Round (header + payload) up to 8-byte alignment.
-    static constexpr std::size_t frame_size(uint32_t len) {
+    /**
+     * @brief 将（头 + payload）向上对齐到 8 字节
+     * @param len payload 长度
+     * @return 帧总大小（字节）
+     */
+    static constexpr std::size_t FrameSize(uint32_t len)
+    {
         return (msg_header_size + len + 7) & ~std::size_t(7);
     }
 
-    // ---- init ----
+    // ---- 初始化 ----
 
-    static void init(void *shm) {
+    /**
+     * @brief 初始化共享内存区域（清零）
+     * @param shm 指向共享内存起始位置的指针
+     */
+    static void Init(void* shm)
+    {
         std::memset(shm, 0, shm_size);
     }
 
-    // ---- write ----
+    // ---- 写入 ----
 
-    /// Try to write a variable-length message.  Returns -1 if full or too large.
-    static int try_write(void *shm, const void *data, uint32_t len, uint32_t seq) {
+    /**
+     * @brief 尝试写入可变长消息，缓冲区满或消息过大时返回 -1
+     * @param shm  共享内存指针
+     * @param data payload 数据
+     * @param len  payload 长度
+     * @param seq  消息序列号
+     * @return 0 成功，-1 失败
+     */
+    static int TryWrite(void* shm, const void* data, uint32_t len, uint32_t seq)
+    {
         if (len > max_msg_size) return -1;
 
-        auto *hdr = header(shm);
-        char *base = data_region(shm);
+        auto*  hdr    = Header(shm);
+        char*  base   = DataRegion(shm);
 
-        uint64_t w = hdr->write_pos.load(std::memory_order_relaxed);
-        uint64_t r = hdr->read_pos.load(std::memory_order_acquire);
+        uint64_t    w      = hdr->write_pos.load(std::memory_order_relaxed);
+        uint64_t    r      = hdr->read_pos.load(std::memory_order_acquire);
+        std::size_t total  = FrameSize(len);
+        std::size_t phys_w = Mask(w);
+        std::size_t tail   = Capacity - phys_w;
 
-        std::size_t total = frame_size(len);
-        std::size_t phys_w = mask(w);
-        std::size_t tail = Capacity - phys_w;
-
-        if (total > tail) {
-            // Need sentinel wrap: tail bytes for sentinel + total bytes at offset 0
+        if (total > tail)
+        {
+            // 需要哨兵回绕：tail 字节写哨兵 + total 字节从偏移 0 写正文
             if ((w + tail + total) - r > Capacity) return -1;
 
-            // Write sentinel at current position
-            auto *sentinel = reinterpret_cast<MsgHeader *>(base + phys_w);
-            sentinel->len = kSentinel;
-            sentinel->seq = 0;
+            auto* sentinel     = reinterpret_cast<MsgHeader*>(base + phys_w);
+            sentinel->len      = kSentinel;
+            sentinel->seq      = 0;
+            w                 += tail;
 
-            w += tail; // advance past sentinel region, now phys = 0
-
-            // Write real message at offset 0
-            auto *mh = reinterpret_cast<MsgHeader *>(base);
-            mh->len = len;
-            mh->seq = seq;
+            auto* mh = reinterpret_cast<MsgHeader*>(base);
+            mh->len  = len;
+            mh->seq  = seq;
             std::memcpy(base + msg_header_size, data, len);
 
             hdr->write_pos.store(w + total, std::memory_order_release);
-        } else {
+        }
+        else
+        {
             if ((w + total) - r > Capacity) return -1;
 
-            auto *mh = reinterpret_cast<MsgHeader *>(base + phys_w);
-            mh->len = len;
-            mh->seq = seq;
+            auto* mh = reinterpret_cast<MsgHeader*>(base + phys_w);
+            mh->len  = len;
+            mh->seq  = seq;
             std::memcpy(base + phys_w + msg_header_size, data, len);
 
             hdr->write_pos.store(w + total, std::memory_order_release);
@@ -132,168 +164,205 @@ public:
         return 0;
     }
 
-    /// Force write — discards oldest messages when the buffer is full.
-    static void force_write(void *shm, const void *data, uint32_t len, uint32_t seq) {
+    /**
+     * @brief 强制写入：缓冲区满时丢弃最旧消息
+     * @param shm  共享内存指针
+     * @param data payload 数据
+     * @param len  payload 长度
+     * @param seq  消息序列号
+     */
+    static void ForceWrite(void* shm, const void* data, uint32_t len, uint32_t seq)
+    {
         if (len > max_msg_size) return;
 
-        auto *hdr = header(shm);
-        char *base = data_region(shm);
+        auto*  hdr    = Header(shm);
+        char*  base   = DataRegion(shm);
 
-        uint64_t w = hdr->write_pos.load(std::memory_order_relaxed);
-        uint64_t r = hdr->read_pos.load(std::memory_order_acquire);
+        uint64_t    w            = hdr->write_pos.load(std::memory_order_relaxed);
+        uint64_t    r            = hdr->read_pos.load(std::memory_order_acquire);
+        std::size_t total        = FrameSize(len);
+        std::size_t phys_w       = Mask(w);
+        std::size_t tail         = Capacity - phys_w;
+        bool        need_sentinel = (total > tail);
+        std::size_t cost         = need_sentinel ? (tail + total) : total;
 
-        std::size_t total = frame_size(len);
-        std::size_t phys_w = mask(w);
-        std::size_t tail = Capacity - phys_w;
-
-        bool need_sentinel = (total > tail);
-        std::size_t cost = need_sentinel ? (tail + total) : total;
-
-        // Discard oldest messages until we have room
-        while ((w + cost) - r > Capacity) {
-            std::size_t phys_r = mask(r);
-            auto *mh = reinterpret_cast<const MsgHeader *>(base + phys_r);
-            if (mh->len == kSentinel) {
-                r += Capacity - phys_r; // skip sentinel region
-            } else {
-                r += frame_size(mh->len);
-            }
+        // 丢弃最旧消息直到有足够空间
+        while ((w + cost) - r > Capacity)
+        {
+            std::size_t phys_r = Mask(r);
+            auto* mh = reinterpret_cast<const MsgHeader*>(base + phys_r);
+            if (mh->len == kSentinel)
+                r += Capacity - phys_r;
+            else
+                r += FrameSize(mh->len);
         }
         hdr->read_pos.store(r, std::memory_order_release);
 
-        // Now write (guaranteed space)
-        if (need_sentinel) {
-            auto *sentinel = reinterpret_cast<MsgHeader *>(base + phys_w);
-            sentinel->len = kSentinel;
-            sentinel->seq = 0;
-            w += tail;
+        // 保证空间后写入
+        if (need_sentinel)
+        {
+            auto* sentinel = reinterpret_cast<MsgHeader*>(base + phys_w);
+            sentinel->len  = kSentinel;
+            sentinel->seq  = 0;
+            w             += tail;
 
-            auto *mh = reinterpret_cast<MsgHeader *>(base);
-            mh->len = len;
-            mh->seq = seq;
+            auto* mh = reinterpret_cast<MsgHeader*>(base);
+            mh->len  = len;
+            mh->seq  = seq;
             std::memcpy(base + msg_header_size, data, len);
 
             hdr->write_pos.store(w + total, std::memory_order_release);
-        } else {
-            auto *mh = reinterpret_cast<MsgHeader *>(base + phys_w);
-            mh->len = len;
-            mh->seq = seq;
+        }
+        else
+        {
+            auto* mh = reinterpret_cast<MsgHeader*>(base + phys_w);
+            mh->len  = len;
+            mh->seq  = seq;
             std::memcpy(base + phys_w + msg_header_size, data, len);
 
             hdr->write_pos.store(w + total, std::memory_order_release);
         }
     }
 
-    // ---- read ----
+    // ---- 读取 ----
 
-    /// Try to read one variable-length message.  Returns -1 when empty.
-    /// `data` must point to a buffer of at least `max_msg_size` bytes (or the
-    /// caller must know the upper bound of incoming message sizes).
-    static int try_read(void *shm, void *data, uint32_t *len, uint32_t *seq) {
-        auto *hdr = header(shm);
-        const char *base = data_region(shm);
+    /**
+     * @brief 尝试读取一条可变长消息，缓冲区空时返回 -1
+     * @param shm  共享内存指针
+     * @param data 输出缓冲区，至少 max_msg_size 字节
+     * @param len  输出：payload 长度
+     * @param seq  输出：消息序列号
+     * @return 0 成功，-1 缓冲区为空
+     */
+    static int TryRead(void* shm, void* data, uint32_t* len, uint32_t* seq)
+    {
+        auto*       hdr    = Header(shm);
+        const char* base   = DataRegion(shm);
 
         uint64_t r = hdr->read_pos.load(std::memory_order_relaxed);
         uint64_t w = hdr->write_pos.load(std::memory_order_acquire);
 
         if (r >= w) return -1;
 
-        std::size_t phys_r = mask(r);
-        auto *mh = reinterpret_cast<const MsgHeader *>(base + phys_r);
+        std::size_t phys_r = Mask(r);
+        auto*       mh     = reinterpret_cast<const MsgHeader*>(base + phys_r);
 
-        // Skip sentinel if present
-        if (mh->len == kSentinel) {
-            r += Capacity - phys_r;
-            if (r >= w) return -1; // empty after skipping sentinel
+        // 遇到哨兵则跳转到偏移 0
+        if (mh->len == kSentinel)
+        {
+            r     += Capacity - phys_r;
+            if (r >= w) return -1;
 
-            phys_r = mask(r); // should be 0
-            mh = reinterpret_cast<const MsgHeader *>(base + phys_r);
+            phys_r = Mask(r); // 此时应为 0
+            mh     = reinterpret_cast<const MsgHeader*>(base + phys_r);
         }
 
         uint32_t payload_len = mh->len;
-        if (seq) *seq = mh->seq;
-        if (len) *len = payload_len;
+        if (seq)  *seq = mh->seq;
+        if (len)  *len = payload_len;
         if (data) std::memcpy(data, base + phys_r + msg_header_size, payload_len);
 
-        hdr->read_pos.store(r + frame_size(payload_len), std::memory_order_release);
+        hdr->read_pos.store(r + FrameSize(payload_len), std::memory_order_release);
         return 0;
     }
 
-    /// Zero-copy read: return a pointer into the ring buffer without copying.
-    /// The returned pointer is valid until commit_read() is called.
-    /// Returns -1 when empty.
-    static int peek_read(void *shm, const void **data, uint32_t *len, uint32_t *seq) {
-        auto *hdr = header(shm);
-        const char *base = data_region(shm);
+    /**
+     * @brief 零拷贝读取：返回指向环形缓冲区内部的指针，无需复制
+     *
+     * 返回的指针在调用 CommitRead() 之前有效。
+     * @param shm  共享内存指针
+     * @param data 输出：指向 payload 的指针
+     * @param len  输出：payload 长度
+     * @param seq  输出：消息序列号
+     * @return 0 成功，-1 缓冲区为空
+     */
+    static int PeekRead(void* shm, const void** data, uint32_t* len, uint32_t* seq)
+    {
+        auto*       hdr    = Header(shm);
+        const char* base   = DataRegion(shm);
 
         uint64_t r = hdr->read_pos.load(std::memory_order_relaxed);
         uint64_t w = hdr->write_pos.load(std::memory_order_acquire);
 
         if (r >= w) return -1;
 
-        std::size_t phys_r = mask(r);
-        auto *mh = reinterpret_cast<const MsgHeader *>(base + phys_r);
+        std::size_t phys_r = Mask(r);
+        auto*       mh     = reinterpret_cast<const MsgHeader*>(base + phys_r);
 
-        if (mh->len == kSentinel) {
-            r += Capacity - phys_r;
+        if (mh->len == kSentinel)
+        {
+            r     += Capacity - phys_r;
             if (r >= w) return -1;
-            phys_r = mask(r);
-            mh = reinterpret_cast<const MsgHeader *>(base + phys_r);
+            phys_r = Mask(r);
+            mh     = reinterpret_cast<const MsgHeader*>(base + phys_r);
         }
 
-        if (len) *len = mh->len;
-        if (seq) *seq = mh->seq;
+        if (len)  *len  = mh->len;
+        if (seq)  *seq  = mh->seq;
         if (data) *data = base + phys_r + msg_header_size;
         return 0;
     }
 
-    /// Commit a previous peek_read, advancing read_pos.
-    /// `len` must be the same value returned by peek_read.
-    static void commit_read(void *shm, uint32_t len) {
-        auto *hdr = header(shm);
-        const char *base = data_region(shm);
+    /**
+     * @brief 提交上一次 PeekRead，推进 read_pos
+     * @param shm 共享内存指针
+     * @param len PeekRead 返回的 payload 长度
+     */
+    static void CommitRead(void* shm, uint32_t len)
+    {
+        auto*       hdr    = Header(shm);
+        const char* base   = DataRegion(shm);
 
-        uint64_t r = hdr->read_pos.load(std::memory_order_relaxed);
-        std::size_t phys_r = mask(r);
-        auto *mh = reinterpret_cast<const MsgHeader *>(base + phys_r);
+        uint64_t    r      = hdr->read_pos.load(std::memory_order_relaxed);
+        std::size_t phys_r = Mask(r);
+        auto*       mh     = reinterpret_cast<const MsgHeader*>(base + phys_r);
 
-        // Skip sentinel if present (same logic as peek_read)
-        if (mh->len == kSentinel) {
+        // 如遇哨兵则先跳过（与 PeekRead 逻辑一致）
+        if (mh->len == kSentinel)
             r += Capacity - phys_r;
-        }
 
-        hdr->read_pos.store(r + frame_size(len), std::memory_order_release);
+        hdr->read_pos.store(r + FrameSize(len), std::memory_order_release);
     }
 
-    /// Bytes used in the ring (including headers, padding, sentinels).
-    static uint64_t available(const void *shm) {
-        auto *hdr = header(shm);
-        uint64_t w = hdr->write_pos.load(std::memory_order_acquire);
-        uint64_t r = hdr->read_pos.load(std::memory_order_acquire);
+    /**
+     * @brief 返回环中已使用字节数（含帧头、填充、哨兵）
+     * @param shm 共享内存指针（const）
+     * @return 已使用字节数
+     */
+    static uint64_t Available(const void* shm)
+    {
+        auto*    hdr = Header(shm);
+        uint64_t w   = hdr->write_pos.load(std::memory_order_acquire);
+        uint64_t r   = hdr->read_pos.load(std::memory_order_acquire);
         return w - r;
     }
 
 private:
-    static RingHeader *header(void *shm) {
-        return static_cast<RingHeader *>(shm);
+    static RingHeader* Header(void* shm)
+    {
+        return static_cast<RingHeader*>(shm);
     }
-    static const RingHeader *header(const void *shm) {
-        return static_cast<const RingHeader *>(shm);
+    static const RingHeader* Header(const void* shm)
+    {
+        return static_cast<const RingHeader*>(shm);
     }
-    static char *data_region(void *shm) {
-        return static_cast<char *>(shm) + sizeof(RingHeader);
+    static char* DataRegion(void* shm)
+    {
+        return static_cast<char*>(shm) + sizeof(RingHeader);
     }
-    static const char *data_region(const void *shm) {
-        return static_cast<const char *>(shm) + sizeof(RingHeader);
+    static const char* DataRegion(const void* shm)
+    {
+        return static_cast<const char*>(shm) + sizeof(RingHeader);
     }
-    static constexpr std::size_t mask(uint64_t pos) {
+    static constexpr std::size_t Mask(uint64_t pos)
+    {
         return static_cast<std::size_t>(pos & (Capacity - 1));
     }
 };
 
-/// Convenience alias for the default configuration (8MB ring, ~4MB max message).
+/// @brief 默认配置别名（8MB 环，~4MB 最大消息）
 using DefaultRingBuf = RingBuf<>;
 
 } // namespace shm_ipc
 
-#endif // SHM_IPC_RINGBUF_HPP
+#endif // SHM_IPC_RINGBUF_HPP_

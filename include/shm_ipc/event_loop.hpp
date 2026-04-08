@@ -1,10 +1,13 @@
-// event_loop.hpp — poll + timerfd event loop (C++17)
-//
-// Provides a simple single-threaded event loop suitable for managing multiple
-// clients, each with their own timer and socket fd.
+/**
+ * @file event_loop.hpp
+ * @brief 基于 poll + timerfd 的事件循环（C++17）
+ *
+ * 提供简单的单线程事件循环，适用于管理多客户端场景，
+ * 每个客户端拥有独立的定时器和 socket fd。
+ */
 
-#ifndef SHM_IPC_EVENT_LOOP_HPP
-#define SHM_IPC_EVENT_LOOP_HPP
+#ifndef SHM_IPC_EVENT_LOOP_HPP_
+#define SHM_IPC_EVENT_LOOP_HPP_
 
 #include "common.hpp"
 
@@ -21,30 +24,49 @@
 
 namespace shm_ipc {
 
-class EventLoop {
+/** @brief 基于 poll + timerfd 的单线程事件循环 */
+class EventLoop
+{
 public:
     using Callback = std::function<void(int fd, short revents)>;
 
     EventLoop() = default;
     ~EventLoop() = default;
 
-    // Non-copyable, non-movable (callbacks may reference local state)
-    EventLoop(const EventLoop &) = delete;
-    EventLoop &operator=(const EventLoop &) = delete;
+    // 禁止复制和移动（回调可能引用外部局部状态）
+    EventLoop(const EventLoop&) = delete;
+    EventLoop& operator=(const EventLoop&) = delete;
 
-    /// Register an fd for monitoring. `events` defaults to POLLIN.
-    void add_fd(int fd, Callback cb, short events = POLLIN) {
+    /**
+     * @brief 注册一个 fd 进行监听
+     * @param fd     待监听的文件描述符
+     * @param cb     事件触发时的回调
+     * @param events 监听的事件掩码，默认 POLLIN
+     */
+    void AddFd(int fd, Callback cb, short events = POLLIN)
+    {
         entries_.push_back({fd, events, std::move(cb)});
     }
 
-    /// Remove an fd from monitoring. Safe to call from within a callback.
-    void remove_fd(int fd) {
+    /**
+     * @brief 从监听列表中移除一个 fd（可在回调内安全调用）
+     * @param fd 待移除的文件描述符
+     */
+    void RemoveFd(int fd)
+    {
         pending_removals_.push_back(fd);
     }
 
-    /// Create a repeating timerfd and register it. Returns the timerfd.
-    /// The caller does NOT need to close the fd — EventLoop owns it.
-    int add_timer(int interval_ms, Callback cb) {
+    /**
+     * @brief 创建重复触发的 timerfd 并注册到事件循环
+     *
+     * 调用方无需自行关闭 fd，EventLoop 持有其所有权。
+     * @param interval_ms 定时间隔（毫秒）
+     * @param cb          定时器触发时的回调
+     * @return timerfd 文件描述符
+     */
+    int AddTimer(int interval_ms, Callback cb)
+    {
         int tfd = ::timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC);
         if (tfd < 0)
             throw std::runtime_error(std::string("timerfd_create: ") + std::strerror(errno));
@@ -52,86 +74,109 @@ public:
         itimerspec ts{};
         ts.it_value.tv_sec  = interval_ms / 1000;
         ts.it_value.tv_nsec = (interval_ms % 1000) * 1000000L;
-        ts.it_interval = ts.it_value;
+        ts.it_interval      = ts.it_value;
 
-        if (::timerfd_settime(tfd, 0, &ts, nullptr) < 0) {
+        if (::timerfd_settime(tfd, 0, &ts, nullptr) < 0)
+        {
             ::close(tfd);
             throw std::runtime_error(std::string("timerfd_settime: ") + std::strerror(errno));
         }
 
         owned_timerfds_.emplace_back(tfd);
-        add_fd(tfd, std::move(cb));
+        AddFd(tfd, std::move(cb));
         return tfd;
     }
 
-    /// Remove a timer fd (stops the timer and closes the fd).
-    void remove_timer(int tfd) {
-        remove_fd(tfd);
+    /**
+     * @brief 移除定时器 fd（停止定时器并关闭 fd）
+     * @param tfd AddTimer 返回的 timerfd
+     */
+    void RemoveTimer(int tfd)
+    {
+        RemoveFd(tfd);
         auto it = std::find_if(owned_timerfds_.begin(), owned_timerfds_.end(),
-                               [tfd](const UniqueFd &u) { return u.get() == tfd; });
+                               [tfd](const UniqueFd& u) { return u.Get() == tfd; });
         if (it != owned_timerfds_.end())
             owned_timerfds_.erase(it);
     }
 
-    /// Run the event loop until stop() is called. Poll timeout in ms (-1 = block).
-    void run(int poll_timeout_ms = 500) {
+    /**
+     * @brief 运行事件循环，直到 Stop() 被调用
+     * @param poll_timeout_ms poll 超时（毫秒），-1 表示阻塞等待
+     */
+    void Run(int poll_timeout_ms = 500)
+    {
         running_ = true;
-        while (running_) {
-            // Build pollfd array
+        while (running_)
+        {
+            // 构建 pollfd 数组
             std::vector<pollfd> pfds;
             pfds.reserve(entries_.size());
-            for (auto &e : entries_)
+            for (auto& e : entries_)
                 pfds.push_back({e.fd, e.events, 0});
 
-            int ret = ::poll(pfds.data(), pfds.size(), poll_timeout_ms);
-            if (ret < 0) {
+            int ret = ::poll(pfds.data(), static_cast<nfds_t>(pfds.size()), poll_timeout_ms);
+            if (ret < 0)
+            {
                 if (errno == EINTR) continue;
                 throw std::runtime_error(std::string("poll: ") + std::strerror(errno));
             }
 
-            // Dispatch events
-            for (std::size_t i = 0; i < pfds.size() && running_; ++i) {
+            // 分发事件
+            for (std::size_t i = 0; i < pfds.size() && running_; ++i)
+            {
                 if (pfds[i].revents != 0 && entries_[i].cb)
                     entries_[i].cb(pfds[i].fd, pfds[i].revents);
             }
 
-            // Process deferred removals
-            apply_pending_removals();
+            // 处理延迟移除
+            ApplyPendingRemovals();
         }
     }
 
-    void stop() { running_ = false; }
+    /** @brief 停止事件循环（线程安全） */
+    void Stop() { running_ = false; }
 
-    /// Drain a timerfd (must be called from the timer callback to clear the event).
-    static uint64_t drain_timerfd(int tfd) {
+    /**
+     * @brief 排空 timerfd（必须在定时器回调中调用以清除事件）
+     * @param tfd timerfd 文件描述符
+     * @return 到期次数
+     */
+    static uint64_t DrainTimerfd(int tfd)
+    {
         uint64_t expirations = 0;
         ::read(tfd, &expirations, sizeof(expirations));
         return expirations;
     }
 
 private:
-    struct Entry {
-        int      fd;
-        short    events;
-        Callback cb;
+    /** @brief fd 监听条目 */
+    struct Entry
+    {
+        int      fd;     ///< 文件描述符
+        short    events; ///< 监听事件掩码
+        Callback cb;     ///< 事件回调
     };
 
-    void apply_pending_removals() {
-        for (int fd : pending_removals_) {
+    /** @brief 处理所有待移除的 fd */
+    void ApplyPendingRemovals()
+    {
+        for (int fd : pending_removals_)
+        {
             entries_.erase(
                 std::remove_if(entries_.begin(), entries_.end(),
-                               [fd](const Entry &e) { return e.fd == fd; }),
+                               [fd](const Entry& e) { return e.fd == fd; }),
                 entries_.end());
         }
         pending_removals_.clear();
     }
 
-    std::vector<Entry>    entries_;
-    std::vector<int>      pending_removals_;
-    std::vector<UniqueFd> owned_timerfds_;
-    bool                  running_ = false;
+    std::vector<Entry>    entries_;          ///< 当前监听的 fd 条目列表
+    std::vector<int>      pending_removals_; ///< 待移除的 fd 列表（延迟删除）
+    std::vector<UniqueFd> owned_timerfds_;   ///< EventLoop 持有的 timerfd 列表
+    bool                  running_ = false;  ///< 事件循环运行标志
 };
 
 } // namespace shm_ipc
 
-#endif // SHM_IPC_EVENT_LOOP_HPP
+#endif // SHM_IPC_EVENT_LOOP_HPP_

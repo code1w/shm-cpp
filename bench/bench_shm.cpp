@@ -1,7 +1,10 @@
-// bench_shm.cpp — Shared-memory RingChannel echo ping-pong benchmark
-//
-// fork() + socketpair(): child = server (echo via ring), parent = client (measure RTT).
-// Uses busy-poll (no EventLoop) for lowest latency.
+/**
+ * @file bench_shm.cpp
+ * @brief 共享内存 RingChannel 回声 ping-pong 基准测试
+ *
+ * 使用 fork() + socketpair()：子进程为服务端（通过环形缓冲区回声），
+ * 父进程为客户端（测量 RTT）。采用忙轮询以获得最低延迟。
+ */
 
 #include <shm_ipc/ring_channel.hpp>
 
@@ -21,15 +24,20 @@ namespace {
 
 using Channel = shm_ipc::DefaultRingChannel;
 
-uint64_t now_ns() {
+/** @brief 返回单调时钟的纳秒时间戳 */
+uint64_t NowNs()
+{
     timespec ts{};
     ::clock_gettime(CLOCK_MONOTONIC, &ts);
-    return static_cast<uint64_t>(ts.tv_sec) * 1000000000ULL + static_cast<uint64_t>(ts.tv_nsec);
+    return static_cast<uint64_t>(ts.tv_sec) * 1000000000ULL
+         + static_cast<uint64_t>(ts.tv_nsec);
 }
 
-struct TestCase {
-    std::size_t msg_size;
-    int         rounds;
+/** @brief 单个测试用例 */
+struct TestCase
+{
+    std::size_t msg_size; ///< 消息大小（字节）
+    int         rounds;   ///< 测试轮次
 };
 
 constexpr std::array<TestCase, 6> kTests = {{
@@ -41,34 +49,47 @@ constexpr std::array<TestCase, 6> kTests = {{
     { 524288,   5000},
 }};
 
-constexpr int kWarmup = 1000;
+constexpr int kWarmup = 1000; ///< 预热轮次
 
-void run_server(int socket_fd) {
-    auto channel = Channel::accept(socket_fd);
+/**
+ * @brief 服务端运行逻辑：零拷贝读后立即回写
+ * @param socket_fd 与客户端共享的 socket fd
+ */
+void RunServer(int socket_fd)
+{
+    auto channel = Channel::Accept(socket_fd);
 
-    for (auto &tc : kTests) {
+    for (auto& tc : kTests)
+    {
         int total = kWarmup + tc.rounds;
-        for (int i = 0; i < total; ++i) {
-            // Zero-copy read: get pointer directly into ring buffer
-            const void *data{};
-            uint32_t len{}, seq{};
-            while (channel.peek_read(&data, &len, &seq) != 0)
+        for (int i = 0; i < total; ++i)
+        {
+            // 零拷贝读：直接获取环形缓冲区内的指针
+            const void* data = nullptr;
+            uint32_t    len  = 0;
+            uint32_t    seq  = 0;
+            while (channel.PeekRead(&data, &len, &seq) != 0)
                 ;
-            // Write directly from read ring to write ring (1 memcpy instead of 2)
-            channel.try_write(data, len, seq);
-            channel.commit_read(len);
+            // 直接从读环写到写环（仅 1 次 memcpy）
+            channel.TryWrite(data, len, seq);
+            channel.CommitRead(len);
         }
     }
 
-    // Signal completion
+    // 通知客户端完成
     char end = 0;
     ::write(socket_fd, &end, 1);
     ::close(socket_fd);
     std::_Exit(0);
 }
 
-void run_client(int socket_fd) {
-    auto channel = Channel::connect(socket_fd);
+/**
+ * @brief 客户端运行逻辑：发送消息并等待回声，统计 RTT
+ * @param socket_fd 与服务端共享的 socket fd
+ */
+void RunClient(int socket_fd)
+{
+    auto channel  = Channel::Connect(socket_fd);
     auto send_buf = std::make_unique<char[]>(Channel::max_msg_size);
     auto recv_buf = std::make_unique<char[]>(Channel::max_msg_size);
     std::memset(send_buf.get(), 'B', Channel::max_msg_size);
@@ -77,65 +98,76 @@ void run_client(int socket_fd) {
     std::printf("%10s %10s %12s %14s %16s\n",
                 "msg_size", "rounds", "total_us", "avg_rtt_ns", "throughput_MB/s");
 
-    for (auto &tc : kTests) {
+    for (auto& tc : kTests)
+    {
         auto msg_len = static_cast<uint32_t>(tc.msg_size);
 
-        // Warmup
-        for (int i = 0; i < kWarmup; ++i) {
-            channel.try_write(send_buf.get(), msg_len, static_cast<uint32_t>(i));
-            uint32_t len{}, seq{};
-            while (channel.try_read(recv_buf.get(), &len, &seq) != 0)
+        // 预热
+        for (int i = 0; i < kWarmup; ++i)
+        {
+            channel.TryWrite(send_buf.get(), msg_len, static_cast<uint32_t>(i));
+            uint32_t len = 0;
+            uint32_t seq = 0;
+            while (channel.TryRead(recv_buf.get(), &len, &seq) != 0)
                 ;
         }
 
-        // Benchmark
-        uint64_t t0 = now_ns();
-        for (int i = 0; i < tc.rounds; ++i) {
-            channel.try_write(send_buf.get(), msg_len, static_cast<uint32_t>(i));
-            uint32_t len{}, seq{};
-            while (channel.try_read(recv_buf.get(), &len, &seq) != 0)
+        // 正式测试
+        uint64_t t0 = NowNs();
+        for (int i = 0; i < tc.rounds; ++i)
+        {
+            channel.TryWrite(send_buf.get(), msg_len, static_cast<uint32_t>(i));
+            uint32_t len = 0;
+            uint32_t seq = 0;
+            while (channel.TryRead(recv_buf.get(), &len, &seq) != 0)
                 ;
         }
-        uint64_t elapsed_ns = now_ns() - t0;
+        uint64_t elapsed_ns = NowNs() - t0;
 
-        double total_us = static_cast<double>(elapsed_ns) / 1000.0;
-        double avg_rtt_ns = static_cast<double>(elapsed_ns) / tc.rounds;
-        double throughput = static_cast<double>(tc.msg_size) * 2.0 * tc.rounds
-                            / (static_cast<double>(elapsed_ns) / 1e9) / (1024.0 * 1024.0);
+        double total_us    = static_cast<double>(elapsed_ns) / 1000.0;
+        double avg_rtt_ns  = static_cast<double>(elapsed_ns) / tc.rounds;
+        double throughput  = static_cast<double>(tc.msg_size) * 2.0 * tc.rounds
+                           / (static_cast<double>(elapsed_ns) / 1e9) / (1024.0 * 1024.0);
 
         std::printf("%10zu %10d %12.0f %14.0f %16.2f\n",
                     tc.msg_size, tc.rounds, total_us, avg_rtt_ns, throughput);
     }
 
-    // Wait for server to finish
+    // 等待服务端完成
     char buf{};
     ::read(socket_fd, &buf, 1);
     ::close(socket_fd);
 }
 
-} // namespace
+} // anonymous namespace
 
-int main() {
+int main()
+{
     int sv[2];
-    if (::socketpair(AF_UNIX, SOCK_STREAM, 0, sv) < 0) {
+    if (::socketpair(AF_UNIX, SOCK_STREAM, 0, sv) < 0)
+    {
         std::perror("socketpair");
         return 1;
     }
 
     pid_t pid = ::fork();
-    if (pid < 0) {
+    if (pid < 0)
+    {
         std::perror("fork");
         return 1;
     }
 
-    if (pid == 0) {
-        // Child = server
+    if (pid == 0)
+    {
+        // 子进程 = 服务端
         ::close(sv[0]);
-        run_server(sv[1]);
-    } else {
-        // Parent = client
+        RunServer(sv[1]);
+    }
+    else
+    {
+        // 父进程 = 客户端
         ::close(sv[1]);
-        run_client(sv[0]);
+        RunClient(sv[0]);
         ::waitpid(pid, nullptr, 0);
     }
 
