@@ -1,6 +1,9 @@
 /**
  * @file server.cpp
- * @brief 多客户端服务端，基于 RingChannel + EventLoop
+ * @brief 多客户端服务端，基于 RingChannel + EventLoop（实时读版本）
+ *
+ * 读取策略：客户端 eventfd 触发时立即消费所有消息（实时），
+ * 不再依赖定时器批量读。定时器仅用于向客户端发送心跳。
  *
  * 通知机制：使用握手时交换的共享 eventfd。
  * Unix socket 仅用于 fd 交换和断连检测。
@@ -24,9 +27,9 @@
 
 namespace {
 
-constexpr int kTimerIntervalMs = 300; ///< 定时器间隔（毫秒）
-constexpr int kMaxTicks        = 40;  ///< 每客户端最大 tick 数
-constexpr int kMaxClients      = 16;  ///< 最大并发客户端数
+constexpr int kHeartbeatMs = 300; ///< 心跳定时器间隔（毫秒）
+constexpr int kMaxTicks    = 40;  ///< 每客户端最大心跳次数
+constexpr int kMaxClients  = 16;  ///< 最大并发客户端数
 
 using Channel = shm_ipc::DefaultRingChannel;
 
@@ -36,9 +39,9 @@ struct ClientState
     int                     id         = 0;  ///< 客户端 ID
     shm_ipc::UniqueFd       socket_fd;       ///< 客户端 socket fd
     Channel                 channel;          ///< 双向共享内存通道
-    int                     timer_fd   = -1; ///< 定时器 fd
-    int                     notify_efd = -1; ///< 轮询客户端通知的 eventfd
-    int                     tick       = 0;  ///< 当前 tick 计数
+    int                     timer_fd   = -1; ///< 心跳定时器 fd
+    int                     notify_efd = -1; ///< 客户端写入通知的 eventfd
+    int                     tick       = 0;  ///< 当前心跳计数
     int                     total_read = 0;  ///< 累计读取消息数
     std::unique_ptr<char[]> read_buf;         ///< 消息读取缓冲区
 };
@@ -77,7 +80,7 @@ shm_ipc::UniqueFd CreateListenSocket(const char* path)
 }
 
 /**
- * @brief 从事件循环中移除客户端的所有关联 fd
+ * @brief 从事件循环中移除客户端的所有关联 fd 并销毁状态
  * @param loop      事件循环
  * @param clients   客户端状态映射表
  * @param client_fd 客户端 socket fd（作为 map key）
@@ -91,6 +94,27 @@ void RemoveClient(shm_ipc::EventLoop& loop,
     loop.RemoveFd(csp->notify_efd);
     loop.RemoveFd(client_fd);
     clients.erase(client_fd);
+}
+
+/**
+ * @brief 读取并打印客户端环形缓冲区中所有待处理消息
+ * @param csp 客户端状态指针
+ * @return 本次读取的消息条数
+ */
+int DrainClientRing(ClientState* csp)
+{
+    uint32_t len   = 0;
+    uint32_t seq   = 0;
+    int      count = 0;
+    while (csp->channel.TryRead(csp->read_buf.get(), &len, &seq) == 0)
+    {
+        std::printf("server: client #%d [seq=%03u len=%u]: %.*s\n",
+                    csp->id, seq, len,
+                    static_cast<int>(len), csp->read_buf.get());
+        ++csp->total_read;
+        ++count;
+    }
+    return count;
 }
 
 } // anonymous namespace
@@ -112,7 +136,7 @@ int main()
         int next_client_id = 1;
 
         auto listen_fd = CreateListenSocket(shm_ipc::kDefaultSocketPath);
-        std::printf("server: listening on %s (max %d clients, ring=%zuMB, eventfd notify)\n",
+        std::printf("server: listening on %s (max %d clients, ring=%zuMB, realtime eventfd read)\n",
                     shm_ipc::kDefaultSocketPath, kMaxClients,
                     Channel::Ring::capacity / (1024 * 1024));
 
@@ -135,21 +159,21 @@ int main()
             cs->id       = cid;
             cs->channel  = Channel::Accept(cfd.Get());
             cs->read_buf = std::make_unique<char[]>(Channel::max_msg_size);
-            std::printf("server: client #%d ring channel established (eventfd notify)\n", cid);
+            std::printf("server: client #%d ring channel established\n", cid);
 
-            int         client_fd = cfd.Get();
-            cs->socket_fd         = std::move(cfd);
-            cs->notify_efd        = cs->channel.NotifyReadFd();
+            int          client_fd = cfd.Get();
+            cs->socket_fd          = std::move(cfd);
+            cs->notify_efd         = cs->channel.NotifyReadFd();
 
             ClientState* csp = cs.get();
 
-            // --- 每客户端定时器：发送响应 + 批量读 ---
-            int tfd = loop.AddTimer(kTimerIntervalMs, [&loop, &clients, client_fd, csp](int timer_fd, short /*rev*/) {
+            // --- 心跳定时器：仅向客户端发送心跳，不读数据 ---
+            int tfd = loop.AddTimer(kHeartbeatMs, [&loop, &clients, client_fd, csp](int timer_fd, short /*rev*/) {
                 shm_ipc::EventLoop::DrainTimerfd(timer_fd);
 
                 if (++csp->tick > kMaxTicks)
                 {
-                    std::printf("server: client #%d max ticks reached\n", csp->id);
+                    std::printf("server: client #%d max ticks reached, disconnecting\n", csp->id);
                     RemoveClient(loop, clients, client_fd, csp);
                     return;
                 }
@@ -160,39 +184,26 @@ int main()
 
                 std::array<char, 4096> msg{};
                 int msg_len = std::snprintf(msg.data(), msg.size(),
-                    "[server seq=%03d time=%s client=#%d] tick=%d",
-                    csp->tick, ts.data(), csp->id, csp->tick);
+                    "[server heartbeat seq=%03d time=%s client=#%d]",
+                    csp->tick, ts.data(), csp->id);
 
                 if (csp->channel.TryWrite(msg.data(),
                         static_cast<uint32_t>(msg_len + 1), csp->tick) == 0)
                 {
                     csp->channel.NotifyPeer();
                 }
-
-                // 批量读取客户端消息
-                uint32_t len = 0;
-                uint32_t seq = 0;
-                int      batch = 0;
-                while (csp->channel.TryRead(csp->read_buf.get(), &len, &seq) == 0)
-                {
-                    std::printf("server: client #%d [seq=%03u len=%u]: %.*s\n",
-                                csp->id, seq, len,
-                                static_cast<int>(len), csp->read_buf.get());
-                    ++csp->total_read;
-                    ++batch;
-                }
-                if (batch > 0)
-                {
-                    std::printf("server: client #%d batch=%d total=%d\n",
-                                csp->id, batch, csp->total_read);
-                }
             });
             csp->timer_fd = tfd;
 
-            // --- Eventfd：客户端写入新数据（仅排空，由定时器批量读） ---
+            // --- Eventfd：客户端写入新数据，立即实时读取 ---
             loop.AddFd(csp->notify_efd, [csp](int efd, short /*revents*/) {
                 Channel::DrainNotify(efd);
-                // 数据将在下次定时器 tick 批量读取
+                int count = DrainClientRing(csp);
+                if (count > 0)
+                {
+                    std::printf("server: client #%d realtime read count=%d total=%d\n",
+                                csp->id, count, csp->total_read);
+                }
             });
 
             // --- Socket：仅用于断连检测 ---
@@ -209,18 +220,11 @@ int main()
                     auto n = ::read(client_fd, &buf, 1);
                     if (n <= 0 || buf == 0)
                     {
-                        // 排空剩余消息
-                        uint32_t len = 0;
-                        uint32_t seq = 0;
-                        while (csp->channel.TryRead(csp->read_buf.get(), &len, &seq) == 0)
-                        {
-                            std::printf("server: client #%d [seq=%03u len=%u]: %.*s\n",
-                                        csp->id, seq, len,
-                                        static_cast<int>(len), csp->read_buf.get());
-                            ++csp->total_read;
-                        }
-                        std::printf("server: client #%d disconnected, total read=%d\n",
-                                    csp->id, csp->total_read);
+                        // 排空断连前残留的消息
+                        int remaining = DrainClientRing(csp);
+                        std::printf("server: client #%d disconnected, "
+                                    "drained %d remaining, total read=%d\n",
+                                    csp->id, remaining, csp->total_read);
                         RemoveClient(loop, clients, client_fd, csp);
                         return;
                     }
