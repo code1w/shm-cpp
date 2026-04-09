@@ -27,15 +27,15 @@ namespace shm_ipc {
 /** @brief 基于 poll + timerfd 的单线程事件循环 */
 class EventLoop
 {
-public:
+ public:
     using Callback = std::function<void(int fd, short revents)>;
 
-    EventLoop() = default;
+    EventLoop()  = default;
     ~EventLoop() = default;
 
     // 禁止复制和移动（回调可能引用外部局部状态）
-    EventLoop(const EventLoop&) = delete;
-    EventLoop& operator=(const EventLoop&) = delete;
+    EventLoop(const EventLoop &)            = delete;
+    EventLoop &operator=(const EventLoop &) = delete;
 
     /**
      * @brief 注册一个 fd 进行监听
@@ -52,10 +52,7 @@ public:
      * @brief 从监听列表中移除一个 fd（可在回调内安全调用）
      * @param fd 待移除的文件描述符
      */
-    void RemoveFd(int fd)
-    {
-        pending_removals_.push_back(fd);
-    }
+    void RemoveFd(int fd) { pending_removals_.push_back(fd); }
 
     /**
      * @brief 创建重复触发的 timerfd 并注册到事件循环
@@ -69,7 +66,8 @@ public:
     {
         int tfd = ::timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC);
         if (tfd < 0)
-            throw std::runtime_error(std::string("timerfd_create: ") + std::strerror(errno));
+            throw std::runtime_error(std::string("timerfd_create: ") +
+                                     std::strerror(errno));
 
         itimerspec ts{};
         ts.it_value.tv_sec  = interval_ms / 1000;
@@ -79,7 +77,8 @@ public:
         if (::timerfd_settime(tfd, 0, &ts, nullptr) < 0)
         {
             ::close(tfd);
-            throw std::runtime_error(std::string("timerfd_settime: ") + std::strerror(errno));
+            throw std::runtime_error(std::string("timerfd_settime: ") +
+                                     std::strerror(errno));
         }
 
         owned_timerfds_.emplace_back(tfd);
@@ -95,7 +94,7 @@ public:
     {
         RemoveFd(tfd);
         auto it = std::find_if(owned_timerfds_.begin(), owned_timerfds_.end(),
-                               [tfd](const UniqueFd& u) { return u.Get() == tfd; });
+                               [tfd](const UniqueFd &u) { return u.Get() == tfd; });
         if (it != owned_timerfds_.end())
             owned_timerfds_.erase(it);
     }
@@ -112,13 +111,15 @@ public:
             // 构建 pollfd 数组
             std::vector<pollfd> pfds;
             pfds.reserve(entries_.size());
-            for (auto& e : entries_)
+            for (auto &e : entries_)
                 pfds.push_back({e.fd, e.events, 0});
 
-            int ret = ::poll(pfds.data(), static_cast<nfds_t>(pfds.size()), poll_timeout_ms);
+            int ret = ::poll(pfds.data(), static_cast<nfds_t>(pfds.size()),
+                             poll_timeout_ms);
             if (ret < 0)
             {
-                if (errno == EINTR) continue;
+                if (errno == EINTR)
+                    continue;
                 throw std::runtime_error(std::string("poll: ") + std::strerror(errno));
             }
 
@@ -149,13 +150,13 @@ public:
         return expirations;
     }
 
-private:
+ private:
     /** @brief fd 监听条目 */
     struct Entry
     {
-        int      fd;     ///< 文件描述符
-        short    events; ///< 监听事件掩码
-        Callback cb;     ///< 事件回调
+        int fd;        ///< 文件描述符
+        short events;  ///< 监听事件掩码
+        Callback cb;   ///< 事件回调
     };
 
     /** @brief 处理所有待移除的 fd */
@@ -165,18 +166,18 @@ private:
         {
             entries_.erase(
                 std::remove_if(entries_.begin(), entries_.end(),
-                               [fd](const Entry& e) { return e.fd == fd; }),
+                               [fd](const Entry &e) { return e.fd == fd; }),
                 entries_.end());
         }
         pending_removals_.clear();
     }
 
-    std::vector<Entry>    entries_;          ///< 当前监听的 fd 条目列表
-    std::vector<int>      pending_removals_; ///< 待移除的 fd 列表（延迟删除）
-    std::vector<UniqueFd> owned_timerfds_;   ///< EventLoop 持有的 timerfd 列表
-    bool                  running_ = false;  ///< 事件循环运行标志
+    std::vector<Entry> entries_;            ///< 当前监听的 fd 条目列表
+    std::vector<int> pending_removals_;     ///< 待移除的 fd 列表（延迟删除）
+    std::vector<UniqueFd> owned_timerfds_;  ///< EventLoop 持有的 timerfd 列表
+    bool running_ = false;                  ///< 事件循环运行标志
 };
 
-} // namespace shm_ipc
+}  // namespace shm_ipc
 
-#endif // SHM_IPC_EVENT_LOOP_HPP_
+#endif  // SHM_IPC_EVENT_LOOP_HPP_

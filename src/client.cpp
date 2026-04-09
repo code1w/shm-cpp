@@ -7,15 +7,17 @@
  */
 
 #include <shm_ipc/client_state.hpp>
+#include <shm_ipc/codec.hpp>
 #include <shm_ipc/event_loop.hpp>
+#include <shm_ipc/messages.hpp>
 
-#include <array>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <memory>
+#include <random>
 
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -23,15 +25,16 @@
 
 namespace {
 
-constexpr int kTimerIntervalMs = 100; ///< 定时器间隔（毫秒）
-constexpr int kMaxTicks        = 100; ///< 最大 tick 数
+constexpr int kTimerIntervalMs = 100;  ///< 定时器间隔（毫秒）
+constexpr int kMaxTicks        = 100;  ///< 最大 tick 数
 
 /// 全局事件循环指针，供信号处理器使用
-shm_ipc::EventLoop* gLoop = nullptr;
+shm_ipc::EventLoop *gLoop = nullptr;
 
 void SignalHandler(int /*signo*/)
 {
-    if (gLoop) gLoop->Stop();
+    if (gLoop)
+        gLoop->Stop();
 }
 
 /**
@@ -39,7 +42,7 @@ void SignalHandler(int /*signo*/)
  * @param path socket 文件路径
  * @return 已连接的 UniqueFd
  */
-shm_ipc::UniqueFd ConnectToServer(const char* path)
+shm_ipc::UniqueFd ConnectToServer(const char *path)
 {
     shm_ipc::UniqueFd sfd{::socket(AF_UNIX, SOCK_STREAM, 0)};
     if (!sfd)
@@ -49,19 +52,21 @@ shm_ipc::UniqueFd ConnectToServer(const char* path)
     addr.sun_family = AF_UNIX;
     std::strncpy(addr.sun_path, path, sizeof(addr.sun_path) - 1);
 
-    if (::connect(sfd.Get(), reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0)
+    if (::connect(sfd.Get(), reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) <
+        0)
         throw std::runtime_error(std::string("connect: ") + std::strerror(errno));
 
     return sfd;
 }
 
-} // anonymous namespace
+}  // anonymous namespace
 
 int main()
 {
     try
     {
-        struct sigaction sa{};
+        struct sigaction sa
+        {};
         sa.sa_handler = SignalHandler;
         ::sigemptyset(&sa.sa_mask);
         ::sigaction(SIGINT, &sa, nullptr);
@@ -73,8 +78,10 @@ int main()
 
         cs.channel    = shm_ipc::DefaultRingChannel::Connect(cs.socket_fd.Get());
         cs.notify_efd = cs.channel.NotifyReadFd();
-        cs.read_buf   = std::make_unique<char[]>(shm_ipc::DefaultRingChannel::max_msg_size);
-        std::printf("client: ring channel established (capacity=%zuMB, max_msg=%zuB, eventfd notify)\n\n",
+        cs.read_buf =
+            std::make_unique<char[]>(shm_ipc::DefaultRingChannel::max_msg_size);
+        std::printf("client: ring channel established (capacity=%zuMB, "
+                    "max_msg=%zuB, eventfd notify)\n\n",
                     shm_ipc::DefaultRingChannel::Ring::capacity / (1024 * 1024),
                     shm_ipc::DefaultRingChannel::max_msg_size);
 
@@ -83,8 +90,13 @@ int main()
 
         int write_ok   = 0;
         int write_full = 0;
+        shm_ipc::PodReader<Heartbeat> hb_reader;
 
-        // --- 定时器：向环形缓冲区写消息，通过 eventfd 通知 ---
+        // --- 定时器：向环形缓冲区写 ClientMsg POD（随机 payload 长度） ---
+        std::mt19937 rng{std::random_device{}()};
+        std::uniform_int_distribution<uint32_t> len_dist(
+            16, sizeof(ClientMsg::payload));
+
         loop.AddTimer(kTimerIntervalMs, [&](int tfd, short /*rev*/) {
             shm_ipc::EventLoop::DrainTimerfd(tfd);
 
@@ -94,19 +106,17 @@ int main()
                 return;
             }
 
-            auto              now = std::time(nullptr);
-            std::array<char, 32> ts{};
-            std::strftime(ts.data(), ts.size(), "%H:%M:%S", std::localtime(&now));
+            ClientMsg msg{};
+            msg.seq         = cs.tick;
+            msg.tick        = cs.tick;
+            msg.timestamp   = std::time(nullptr);
+            msg.payload_len = len_dist(rng);
+            std::memset(msg.payload, 'C', msg.payload_len);
 
-            std::array<char, 4096> msg{};
-            int msg_len = std::snprintf(msg.data(), msg.size(),
-                "[client seq=%03d time=%s] tick=%d", cs.tick, ts.data(), cs.tick);
-
-            if (cs.channel.TryWrite(msg.data(),
-                    static_cast<uint32_t>(msg_len + 1), cs.tick) == 0)
+            if (shm_ipc::SendPod(cs.channel, msg, static_cast<uint32_t>(cs.tick)) ==
+                0)
             {
                 ++write_ok;
-                cs.channel.NotifyPeer();
             }
             else
             {
@@ -123,15 +133,14 @@ int main()
             }
         });
 
-        // --- Eventfd：服务端向读环写入新数据，立即读取 ---
+        // --- Eventfd：服务端向读环写入新数据，流式拆包 Heartbeat ---
         loop.AddFd(cs.notify_efd, [&](int efd, short /*revents*/) {
             shm_ipc::DefaultRingChannel::DrainNotify(efd);
-            uint32_t len = 0;
-            uint32_t seq = 0;
-            while (cs.channel.TryRead(cs.read_buf.get(), &len, &seq) == 0)
+            Heartbeat hb{};
+            while (hb_reader.TryRecv(cs.channel, &hb) == 0)
             {
-                std::printf("client: server [seq=%03u len=%u]: %.*s\n",
-                            seq, len, static_cast<int>(len), cs.read_buf.get());
+                std::printf("client: heartbeat [client_id=%d seq=%d ts=%ld]\n",
+                            hb.client_id, hb.seq, static_cast<long>(hb.timestamp));
                 ++cs.total_read;
             }
         });
@@ -156,17 +165,17 @@ int main()
             }
         });
 
-        std::printf("client: timer=%dms, max_ticks=%d\n\n", kTimerIntervalMs, kMaxTicks);
+        std::printf("client: timer=%dms, max_ticks=%d\n\n", kTimerIntervalMs,
+                    kMaxTicks);
         loop.Run();
 
-        std::printf("\nclient: done. ok=%d full=%d total_read=%d\n",
-                    write_ok, write_full, cs.total_read);
+        std::printf("\nclient: done. ok=%d full=%d total_read=%d\n", write_ok,
+                    write_full, cs.total_read);
         char end = 0;
         ::write(cs.socket_fd.Get(), &end, 1);
         ::usleep(100000);
-
     }
-    catch (const std::exception& e)
+    catch (const std::exception &e)
     {
         std::fprintf(stderr, "client: error: %s\n", e.what());
         return EXIT_FAILURE;

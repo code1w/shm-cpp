@@ -22,7 +22,7 @@
 
 namespace shm_ipc {
 
-inline constexpr const char* kDefaultSocketPath = "/tmp/fd-pass.socket";
+inline constexpr const char *kDefaultSocketPath = "/tmp/fd-pass.socket";
 
 // ---------------------------------------------------------------------------
 // UniqueFd — 移动语义 RAII 文件描述符包装
@@ -31,13 +31,13 @@ inline constexpr const char* kDefaultSocketPath = "/tmp/fd-pass.socket";
 /** @brief 移动语义 RAII 文件描述符包装，禁止复制 */
 class UniqueFd
 {
-public:
+ public:
     UniqueFd() = default;
     explicit UniqueFd(int fd) noexcept : fd_(fd) {}
     ~UniqueFd() { Reset(); }
 
-    UniqueFd(UniqueFd&& o) noexcept : fd_(std::exchange(o.fd_, -1)) {}
-    UniqueFd& operator=(UniqueFd&& o) noexcept
+    UniqueFd(UniqueFd &&o) noexcept : fd_(std::exchange(o.fd_, -1)) {}
+    UniqueFd &operator=(UniqueFd &&o) noexcept
     {
         if (this != &o)
         {
@@ -46,20 +46,25 @@ public:
         }
         return *this;
     }
-    UniqueFd(const UniqueFd&) = delete;
-    UniqueFd& operator=(const UniqueFd&) = delete;
+    UniqueFd(const UniqueFd &)            = delete;
+    UniqueFd &operator=(const UniqueFd &) = delete;
 
-    [[nodiscard]] int Get() const noexcept { return fd_; }
+    [[nodiscard]]
+    int Get() const noexcept
+    {
+        return fd_;
+    }
     int Release() noexcept { return std::exchange(fd_, -1); }
     void Reset(int fd = -1) noexcept
     {
-        if (fd_ >= 0) ::close(fd_);
+        if (fd_ >= 0)
+            ::close(fd_);
         fd_ = fd;
     }
     explicit operator bool() const noexcept { return fd_ >= 0; }
 
-private:
-    int fd_ = -1; ///< 持有的文件描述符，-1 表示无效
+ private:
+    int fd_ = -1;  ///< 持有的文件描述符，-1 表示无效
 };
 
 // ---------------------------------------------------------------------------
@@ -69,7 +74,7 @@ private:
 /** @brief 移动语义 RAII mmap 区域包装，禁止复制 */
 class MmapRegion
 {
-public:
+ public:
     MmapRegion() = default;
     MmapRegion(int fd, std::size_t size, int prot, int flags) : size_(size)
     {
@@ -79,31 +84,41 @@ public:
     }
     ~MmapRegion()
     {
-        if (addr_ != MAP_FAILED) ::munmap(addr_, size_);
+        if (addr_ != MAP_FAILED)
+            ::munmap(addr_, size_);
     }
 
-    MmapRegion(MmapRegion&& o) noexcept
+    MmapRegion(MmapRegion &&o) noexcept
         : addr_(std::exchange(o.addr_, MAP_FAILED)), size_(o.size_) {}
-    MmapRegion& operator=(MmapRegion&& o) noexcept
+    MmapRegion &operator=(MmapRegion &&o) noexcept
     {
         if (this != &o)
         {
-            if (addr_ != MAP_FAILED) ::munmap(addr_, size_);
+            if (addr_ != MAP_FAILED)
+                ::munmap(addr_, size_);
             addr_ = std::exchange(o.addr_, MAP_FAILED);
             size_ = o.size_;
         }
         return *this;
     }
-    MmapRegion(const MmapRegion&) = delete;
-    MmapRegion& operator=(const MmapRegion&) = delete;
+    MmapRegion(const MmapRegion &)            = delete;
+    MmapRegion &operator=(const MmapRegion &) = delete;
 
-    [[nodiscard]] void* Get() const noexcept { return addr_; }
-    [[nodiscard]] std::size_t Size() const noexcept { return size_; }
+    [[nodiscard]]
+    void *Get() const noexcept
+    {
+        return addr_;
+    }
+    [[nodiscard]]
+    std::size_t Size() const noexcept
+    {
+        return size_;
+    }
     explicit operator bool() const noexcept { return addr_ != MAP_FAILED; }
 
-private:
-    void*       addr_ = MAP_FAILED; ///< mmap 起始地址
-    std::size_t size_ = 0;          ///< 映射长度（字节）
+ private:
+    void *addr_       = MAP_FAILED;  ///< mmap 起始地址
+    std::size_t size_ = 0;           ///< 映射长度（字节）
 };
 
 // ---------------------------------------------------------------------------
@@ -113,15 +128,15 @@ private:
 /// @brief 文件描述符类型标签，随 iovec 数据一并传输
 enum class FdTag : uint32_t
 {
-    kMemfd   = 0x4D454D46, ///< "MEMF"
-    kEventfd = 0x45564644, ///< "EVFD"
+    kMemfd   = 0x4D454D46,  ///< "MEMF"
+    kEventfd = 0x45564644,  ///< "EVFD"
 };
 
 /** @brief 携带类型标签的文件描述符 */
 struct TaggedFd
 {
     UniqueFd fd;  ///< 文件描述符
-    FdTag    tag; ///< 类型标签
+    FdTag tag;    ///< 类型标签
 };
 
 // ---------------------------------------------------------------------------
@@ -134,11 +149,13 @@ struct TaggedFd
  * @param size  文件大小（字节）
  * @return 持有 memfd 的 UniqueFd
  */
-[[nodiscard]] inline UniqueFd CreateMemfd(const char* name, std::size_t size)
+[[nodiscard]]
+inline UniqueFd CreateMemfd(const char *name, std::size_t size)
 {
     int fd = static_cast<int>(::syscall(__NR_memfd_create, name, 0u));
     if (fd < 0)
-        throw std::runtime_error(std::string("memfd_create: ") + std::strerror(errno));
+        throw std::runtime_error(std::string("memfd_create: ") +
+                                 std::strerror(errno));
     if (::ftruncate(fd, static_cast<off_t>(size)) < 0)
     {
         ::close(fd);
@@ -167,10 +184,10 @@ inline void SendFd(int socket, int fd, FdTag tag)
     msg.msg_control    = ctrl.data();
     msg.msg_controllen = ctrl.size();
 
-    auto* cmsg        = CMSG_FIRSTHDR(&msg);
-    cmsg->cmsg_level  = SOL_SOCKET;
-    cmsg->cmsg_type   = SCM_RIGHTS;
-    cmsg->cmsg_len    = CMSG_LEN(sizeof(int));
+    auto *cmsg       = CMSG_FIRSTHDR(&msg);
+    cmsg->cmsg_level = SOL_SOCKET;
+    cmsg->cmsg_type  = SCM_RIGHTS;
+    cmsg->cmsg_len   = CMSG_LEN(sizeof(int));
     std::memcpy(CMSG_DATA(cmsg), &fd, sizeof(int));
 
     if (::sendmsg(socket, &msg, 0) < 0)
@@ -182,7 +199,8 @@ inline void SendFd(int socket, int fd, FdTag tag)
  * @param socket  Unix socket fd
  * @return 包含 fd 与 FdTag 的 TaggedFd
  */
-[[nodiscard]] inline TaggedFd RecvFd(int socket)
+[[nodiscard]]
+inline TaggedFd RecvFd(int socket)
 {
     std::array<char, 256> data{};
     iovec io{data.data(), data.size()};
@@ -197,8 +215,8 @@ inline void SendFd(int socket, int fd, FdTag tag)
     if (::recvmsg(socket, &msg, 0) < 0)
         throw std::runtime_error(std::string("recvmsg: ") + std::strerror(errno));
 
-    auto* cmsg = CMSG_FIRSTHDR(&msg);
-    int   fd   = -1;
+    auto *cmsg = CMSG_FIRSTHDR(&msg);
+    int fd     = -1;
     std::memcpy(&fd, CMSG_DATA(cmsg), sizeof(int));
 
     uint32_t tag_val = 0;
@@ -214,17 +232,18 @@ inline void SendFd(int socket, int fd, FdTag tag)
  * @return 校验通过后的 UniqueFd
  * @see RecvFd
  */
-[[nodiscard]] inline UniqueFd RecvFdExpect(int socket, FdTag expected)
+[[nodiscard]]
+inline UniqueFd RecvFdExpect(int socket, FdTag expected)
 {
     auto [fd, tag] = RecvFd(socket);
     if (tag != expected)
     {
-        const char* exp = (expected == FdTag::kMemfd) ? "memfd" : "eventfd";
-        const char* got = (tag == FdTag::kMemfd)
-                              ? "memfd"
-                              : (tag == FdTag::kEventfd) ? "eventfd" : "unknown";
-        throw std::runtime_error(
-            std::string("recv_fd: expected ") + exp + " but got " + got);
+        const char *exp = (expected == FdTag::kMemfd) ? "memfd" : "eventfd";
+        const char *got = (tag == FdTag::kMemfd)     ? "memfd"
+                          : (tag == FdTag::kEventfd) ? "eventfd"
+                                                     : "unknown";
+        throw std::runtime_error(std::string("recv_fd: expected ") + exp +
+                                 " but got " + got);
     }
     return std::move(fd);
 }
@@ -233,7 +252,8 @@ inline void SendFd(int socket, int fd, FdTag tag)
  * @brief 创建用于跨进程通知的非阻塞 eventfd
  * @return 持有 eventfd 的 UniqueFd
  */
-[[nodiscard]] inline UniqueFd CreateEventfd()
+[[nodiscard]]
+inline UniqueFd CreateEventfd()
 {
     int fd = ::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
     if (fd < 0)
@@ -241,6 +261,6 @@ inline void SendFd(int socket, int fd, FdTag tag)
     return UniqueFd{fd};
 }
 
-} // namespace shm_ipc
+}  // namespace shm_ipc
 
-#endif // SHM_IPC_COMMON_HPP_
+#endif  // SHM_IPC_COMMON_HPP_
