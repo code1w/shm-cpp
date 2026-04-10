@@ -186,31 +186,30 @@ class RingBuf
 
         uint64_t w         = hdr->write_pos.load(std::memory_order_relaxed);
         std::size_t total  = FrameSize(len);
-
-    retry:
-        uint64_t r         = hdr->read_pos.load(std::memory_order_acquire);
         std::size_t phys_w = Mask(w);
         std::size_t tail   = Capacity - phys_w;
         bool need_sentinel = (total > tail);
         std::size_t cost   = need_sentinel ? (tail + total) : total;
 
-        // 丢弃最旧消息直到有足够空间
-        uint64_t new_r = r;
-        while ((w + cost) - new_r > Capacity)
+        // CAS 循环：丢弃最旧消息直到有足够空间
+        for (;;)
         {
-            std::size_t phys_r = Mask(new_r);
-            auto *mh           = reinterpret_cast<const MsgHeader *>(base + phys_r);
-            if (mh->len == kSentinel)
-                new_r += Capacity - phys_r;
-            else
-                new_r += FrameSize(mh->len);
-        }
-        // CAS 推进 read_pos：如果读方已推进得更远，CAS 失败后重试
-        if (new_r != r)
-        {
-            if (!hdr->read_pos.compare_exchange_strong(
+            uint64_t r = hdr->read_pos.load(std::memory_order_acquire);
+            uint64_t new_r = r;
+            while ((w + cost) - new_r > Capacity)
+            {
+                std::size_t phys_r = Mask(new_r);
+                auto *mh = reinterpret_cast<const MsgHeader *>(base + phys_r);
+                if (mh->len == kSentinel)
+                    new_r += Capacity - phys_r;
+                else
+                    new_r += FrameSize(mh->len);
+            }
+            // CAS 推进 read_pos：读方已推进得更远时 CAS 失败，重新计算
+            if (new_r == r ||
+                hdr->read_pos.compare_exchange_strong(
                     r, new_r, std::memory_order_release, std::memory_order_acquire))
-                goto retry;  // 读方已推进，重新计算空间
+                break;
         }
 
         // 保证空间后写入
