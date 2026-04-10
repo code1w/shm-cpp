@@ -220,8 +220,11 @@ class PodReader
                 uint32_t leftover = len - kFrameSize;
                 if (leftover > 0)
                 {
-                    std::memcpy(spill_, src + kFrameSize, leftover);
-                    used_ = leftover;
+                    // 限制存入量不超过 spill 容量，多余字节属于更远的帧，
+                    // 会在后续 TryRecv 调用中重新从 ring 读取
+                    uint32_t to_spill = (leftover <= kFrameSize) ? leftover : kFrameSize;
+                    std::memcpy(spill_, src + kFrameSize, to_spill);
+                    used_ = to_spill;
                 }
 
                 ch.CommitRead(len);
@@ -247,16 +250,20 @@ class PodReader
                 if (tag != TypeTag<T>::value)
                 {
                     used_ = 0;
-                    // 把 leftover 作为新的 spill 起点
-                    std::memcpy(spill_, src + take, leftover);
-                    used_ = leftover;
+                    // 把 leftover 作为新的 spill 起点（限制不超过 spill 容量）
+                    uint32_t to_spill = (leftover <= kFrameSize) ? leftover : kFrameSize;
+                    std::memcpy(spill_, src + take, to_spill);
+                    used_ = to_spill;
                     ch.CommitRead(len);
                     continue;
                 }
                 std::memcpy(out, spill_ + kTagSize, sizeof(T));
-                // 存入 leftover
-                std::memcpy(spill_, src + take, leftover);
-                used_ = leftover;
+                // 存入 leftover（限制不超过 spill 容量）
+                {
+                    uint32_t to_spill = (leftover <= kFrameSize) ? leftover : kFrameSize;
+                    std::memcpy(spill_, src + take, to_spill);
+                    used_ = to_spill;
+                }
                 ch.CommitRead(len);
                 return 0;
             }

@@ -165,6 +165,11 @@ class RingBuf
 
     /**
      * @brief 强制写入：缓冲区满时丢弃最旧消息
+     *
+     * **注意**：此函数从写方推进 read_pos，使用 compare_exchange 避免
+     * 与读方的 store 竞争。仅在读方可能已消费更多数据时让步（CAS 失败
+     * 意味着读方已推进 read_pos，重新计算空间即可）。
+     *
      * @param shm  共享内存指针
      * @param data payload 数据
      * @param len  payload 长度
@@ -180,24 +185,33 @@ class RingBuf
         char *base = DataRegion(shm);
 
         uint64_t w         = hdr->write_pos.load(std::memory_order_relaxed);
-        uint64_t r         = hdr->read_pos.load(std::memory_order_acquire);
         std::size_t total  = FrameSize(len);
+
+    retry:
+        uint64_t r         = hdr->read_pos.load(std::memory_order_acquire);
         std::size_t phys_w = Mask(w);
         std::size_t tail   = Capacity - phys_w;
         bool need_sentinel = (total > tail);
         std::size_t cost   = need_sentinel ? (tail + total) : total;
 
         // 丢弃最旧消息直到有足够空间
-        while ((w + cost) - r > Capacity)
+        uint64_t new_r = r;
+        while ((w + cost) - new_r > Capacity)
         {
-            std::size_t phys_r = Mask(r);
+            std::size_t phys_r = Mask(new_r);
             auto *mh           = reinterpret_cast<const MsgHeader *>(base + phys_r);
             if (mh->len == kSentinel)
-                r += Capacity - phys_r;
+                new_r += Capacity - phys_r;
             else
-                r += FrameSize(mh->len);
+                new_r += FrameSize(mh->len);
         }
-        hdr->read_pos.store(r, std::memory_order_release);
+        // CAS 推进 read_pos：如果读方已推进得更远，CAS 失败后重试
+        if (new_r != r)
+        {
+            if (!hdr->read_pos.compare_exchange_strong(
+                    r, new_r, std::memory_order_release, std::memory_order_acquire))
+                goto retry;  // 读方已推进，重新计算空间
+        }
 
         // 保证空间后写入
         if (need_sentinel)
@@ -261,6 +275,8 @@ class RingBuf
         }
 
         uint32_t payload_len = mh->len;
+        if (payload_len > max_msg_size)
+            return -1;  // 防御性检查：损坏的 shm 数据
         if (seq)
             *seq = mh->seq;
         if (len)
@@ -305,6 +321,9 @@ class RingBuf
             phys_r = Mask(r);
             mh     = reinterpret_cast<const MsgHeader *>(base + phys_r);
         }
+
+        if (mh->len > max_msg_size)
+            return -1;  // 防御性检查：损坏的 shm 数据
 
         if (len)
             *len = mh->len;

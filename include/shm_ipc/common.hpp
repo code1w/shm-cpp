@@ -29,7 +29,7 @@ inline constexpr const char *kDefaultSocketPath = "/tmp/fd-pass.socket";
 // ---------------------------------------------------------------------------
 
 /** @brief 移动语义 RAII 文件描述符包装，禁止复制 */
-class UniqueFd
+class [[nodiscard]] UniqueFd
 {
  public:
     UniqueFd() = default;
@@ -97,7 +97,7 @@ class MmapRegion
             if (addr_ != MAP_FAILED)
                 ::munmap(addr_, size_);
             addr_ = std::exchange(o.addr_, MAP_FAILED);
-            size_ = o.size_;
+            size_ = std::exchange(o.size_, 0);
         }
         return *this;
     }
@@ -190,8 +190,11 @@ inline void SendFd(int socket, int fd, FdTag tag)
     cmsg->cmsg_len   = CMSG_LEN(sizeof(int));
     std::memcpy(CMSG_DATA(cmsg), &fd, sizeof(int));
 
-    if (::sendmsg(socket, &msg, 0) < 0)
+    ssize_t sent = ::sendmsg(socket, &msg, 0);
+    if (sent < 0)
         throw std::runtime_error(std::string("sendmsg: ") + std::strerror(errno));
+    if (static_cast<std::size_t>(sent) < io.iov_len)
+        throw std::runtime_error("sendmsg: partial send");
 }
 
 /**
@@ -212,11 +215,16 @@ inline TaggedFd RecvFd(int socket)
     msg.msg_control    = ctrl.data();
     msg.msg_controllen = ctrl.size();
 
-    if (::recvmsg(socket, &msg, 0) < 0)
+    ssize_t received = ::recvmsg(socket, &msg, 0);
+    if (received < 0)
         throw std::runtime_error(std::string("recvmsg: ") + std::strerror(errno));
+    if (received == 0)
+        throw std::runtime_error("recvmsg: connection closed during fd transfer");
 
     auto *cmsg = CMSG_FIRSTHDR(&msg);
-    int fd     = -1;
+    if (!cmsg || cmsg->cmsg_level != SOL_SOCKET || cmsg->cmsg_type != SCM_RIGHTS)
+        throw std::runtime_error("RecvFd: no SCM_RIGHTS in control message");
+    int fd = -1;
     std::memcpy(&fd, CMSG_DATA(cmsg), sizeof(int));
 
     uint32_t tag_val = 0;

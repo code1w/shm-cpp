@@ -12,6 +12,7 @@
 #include "common.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cstring>
 #include <functional>
 #include <stdexcept>
@@ -45,7 +46,10 @@ class EventLoop
      */
     void AddFd(int fd, Callback cb, short events = POLLIN)
     {
-        entries_.push_back({fd, events, std::move(cb)});
+        if (dispatching_)
+            pending_additions_.push_back({fd, events, std::move(cb)});
+        else
+            entries_.push_back({fd, events, std::move(cb)});
     }
 
     /**
@@ -105,8 +109,8 @@ class EventLoop
      */
     void Run(int poll_timeout_ms = 500)
     {
-        running_ = true;
-        while (running_)
+        running_.store(true, std::memory_order_relaxed);
+        while (running_.load(std::memory_order_relaxed))
         {
             // 构建 pollfd 数组
             std::vector<pollfd> pfds;
@@ -124,19 +128,22 @@ class EventLoop
             }
 
             // 分发事件
-            for (std::size_t i = 0; i < pfds.size() && running_; ++i)
+            dispatching_ = true;
+            for (std::size_t i = 0; i < pfds.size() && running_.load(std::memory_order_relaxed); ++i)
             {
                 if (pfds[i].revents != 0 && entries_[i].cb)
                     entries_[i].cb(pfds[i].fd, pfds[i].revents);
             }
+            dispatching_ = false;
 
-            // 处理延迟移除
+            // 处理延迟添加和移除
+            ApplyPendingAdditions();
             ApplyPendingRemovals();
         }
     }
 
-    /** @brief 停止事件循环（线程安全） */
-    void Stop() { running_ = false; }
+    /** @brief 停止事件循环（线程安全、信号安全） */
+    void Stop() { running_.store(false, std::memory_order_relaxed); }
 
     /**
      * @brief 排空 timerfd（必须在定时器回调中调用以清除事件）
@@ -172,10 +179,20 @@ class EventLoop
         pending_removals_.clear();
     }
 
+    /** @brief 处理所有待添加的 fd（回调分发期间延迟添加） */
+    void ApplyPendingAdditions()
+    {
+        for (auto &e : pending_additions_)
+            entries_.push_back(std::move(e));
+        pending_additions_.clear();
+    }
+
     std::vector<Entry> entries_;            ///< 当前监听的 fd 条目列表
     std::vector<int> pending_removals_;     ///< 待移除的 fd 列表（延迟删除）
+    std::vector<Entry> pending_additions_;  ///< 待添加的 fd 条目（延迟添加）
     std::vector<UniqueFd> owned_timerfds_;  ///< EventLoop 持有的 timerfd 列表
-    bool running_ = false;                  ///< 事件循环运行标志
+    std::atomic<bool> running_{false};      ///< 事件循环运行标志（atomic 以支持信号处理器写入）
+    bool dispatching_ = false;              ///< 正在分发回调标志
 };
 
 }  // namespace shm_ipc

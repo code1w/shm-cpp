@@ -17,6 +17,7 @@
 #include "ringbuf.hpp"
 
 #include <sys/mman.h>
+#include <sys/time.h>
 
 namespace shm_ipc {
 
@@ -53,6 +54,7 @@ class RingChannel
     [[nodiscard]]
     static RingChannel Connect(int socket_fd)
     {
+        SetHandshakeTimeout(socket_fd);
         RingChannel ch;
 
         // 创建写环（client→server）
@@ -92,6 +94,7 @@ class RingChannel
     [[nodiscard]]
     static RingChannel Accept(int socket_fd)
     {
+        SetHandshakeTimeout(socket_fd);
         RingChannel ch;
 
         // 接收：memfd_c2s、efd_client
@@ -198,7 +201,10 @@ class RingChannel
     void NotifyPeer() const
     {
         uint64_t v = 1;
-        ::write(notify_write_efd_.Get(), &v, sizeof(v));
+        ssize_t r;
+        do {
+            r = ::write(notify_write_efd_.Get(), &v, sizeof(v));
+        } while (r < 0 && errno == EINTR);
     }
 
     /**
@@ -217,6 +223,16 @@ class RingChannel
     static constexpr std::size_t max_msg_size = Ring::max_msg_size;
 
  private:
+    /// @brief 设置握手阶段 socket 收发超时（5秒），防止半连接阻塞
+    static void SetHandshakeTimeout(int socket_fd)
+    {
+        timeval tv{};
+        tv.tv_sec  = 5;
+        tv.tv_usec = 0;
+        ::setsockopt(socket_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+        ::setsockopt(socket_fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+    }
+
     UniqueFd write_memfd_;     ///< 写环对应的 memfd
     MmapRegion write_region_;  ///< 写环的 mmap 映射区域
     UniqueFd read_memfd_;      ///< 读环对应的 memfd

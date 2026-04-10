@@ -166,9 +166,13 @@ int main()
             ClientState *csp = cs.get();
 
             // --- 心跳定时器：向客户端发送 Heartbeat POD ---
-            int tfd       = loop.AddTimer(kHeartbeatMs, [&loop, &clients, client_fd,
-                                                   csp](int timer_fd, short /*rev*/) {
+            int tfd       = loop.AddTimer(kHeartbeatMs, [&loop, &clients, client_fd](int timer_fd, short /*rev*/) {
                 shm_ipc::EventLoop::DrainTimerfd(timer_fd);
+
+                auto it = clients.find(client_fd);
+                if (it == clients.end())
+                    return;  // 已被其他回调移除
+                ClientState *csp = it->second.get();
 
                 if (++csp->tick > kMaxTicks)
                 {
@@ -193,8 +197,12 @@ int main()
             csp->timer_fd = tfd;
 
             // --- Eventfd：客户端写入新数据，立即实时读取 ---
-            loop.AddFd(csp->notify_efd, [client_fd, csp](int efd, short /*revents*/) {
+            loop.AddFd(csp->notify_efd, [&clients, client_fd](int efd, short /*revents*/) {
                 Channel::DrainNotify(efd);
+                auto it = clients.find(client_fd);
+                if (it == clients.end())
+                    return;  // 已被其他回调移除
+                ClientState *csp = it->second.get();
                 int count = DrainClientRing(client_fd, csp);
                 if (count > 0)
                 {
@@ -204,8 +212,13 @@ int main()
             });
 
             // --- Socket：仅用于断连检测 ---
-            loop.AddFd(client_fd, [&loop, &clients, client_fd, csp](int /*fd*/,
+            loop.AddFd(client_fd, [&loop, &clients, client_fd](int /*fd*/,
                                                                     short revents) {
+                auto it = clients.find(client_fd);
+                if (it == clients.end())
+                    return;  // 已被其他回调移除
+                ClientState *csp = it->second.get();
+
                 if (revents & (POLLHUP | POLLERR))
                 {
                     std::printf("server: client #%d disconnected (HUP/ERR)\n", csp->id);
