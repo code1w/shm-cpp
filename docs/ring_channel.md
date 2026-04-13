@@ -656,7 +656,86 @@ Client 进程                                        Server 进程
 
 ---
 
-## 10. 源文件索引
+## 10. 为什么 write_pos / read_pos 必须是原子变量
+
+`RingHeader` 中的 `write_pos` 和 `read_pos` 声明为 `std::atomic<uint64_t>` 而非普通 `uint64_t`，解决两个具体问题。
+
+### 10.1 防止撕裂读写（Tearing）
+
+`write_pos` 和 `read_pos` 是 8 字节的 `uint64_t`。在 32 位系统上，一次普通的 64 位写入会被拆成两条 32 位指令：
+
+```
+普通 uint64_t 写入（32 位系统）:
+  store [addr],   low_32    ← 先写低 4 字节
+  store [addr+4], high_32   ← 再写高 4 字节
+
+如果读方在两条指令之间读取：
+  读到：高位是旧值，低位是新值 → 得到一个从未存在过的中间值
+```
+
+`std::atomic<uint64_t>` 保证 load/store 是不可分割的，不会读到半新半旧的值。
+
+在 64 位 x86 上，对齐的 64 位读写本身就是原子的，`atomic` 的 tearing 防护开销为零。但代码不应依赖平台假设——本项目需要在不同架构上正确运行。
+
+### 10.2 控制内存可见性顺序
+
+这是使用原子变量的核心原因。两个进程各自有独立的 CPU 缓存和 store buffer，**没有原子操作的内存序约束，一个进程的写入对另一个进程不保证可见，也不保证顺序**。
+
+```
+写方 CPU                              读方 CPU
+─────────                             ─────────
+memcpy(payload)      ①                 
+write_pos = new_val  ②                 load write_pos  → 看到 new_val
+                                       memcpy(payload)  → 可能看到旧数据！
+```
+
+问题：CPU 和编译器都可能重排指令。如果 ② 被提前到 ① 之前执行（或 ① 的结果还在 store buffer 中未刷出），读方看到了新的 `write_pos` 但 payload 数据还没就绪——读到脏数据。
+
+`atomic` + `release/acquire` 建立了先行发生（happens-before）关系：
+
+```
+写方                                  读方
+─────                                ─────
+memcpy(payload)                      
+write_pos.store(release)  ③          write_pos.load(acquire)  ⑤
+       │                                    │
+       │  release 保证：                     │  acquire 保证：
+       │  ③ 之前的所有写入                   │  ⑤ 之后的所有读取
+       │  不会被重排到 ③ 之后                │  不会被重排到 ⑤ 之前
+       │                                    │
+       └──── 当 ⑤ 看到 ③ 的值时 ────────────┘
+              payload 一定已经对读方可见
+```
+
+### 10.3 如果不用 atomic 会怎样
+
+假设改成普通 `uint64_t`：
+
+```cpp
+uint64_t write_pos;   // 非 atomic
+uint64_t read_pos;    // 非 atomic
+```
+
+两个后果：
+
+1. **编译器重排**：编译器认为 `write_pos = ...` 和前面的 `memcpy` 没有数据依赖，可能将赋值提前到 memcpy 之前执行——读方看到新 write_pos 时 payload 还未写入。
+2. **CPU 重排 + 缓存不可见**：即使编译器没重排，CPU 的 store buffer 和缓存一致性协议也不保证写入顺序对其他核心可见。写方的 `memcpy` 结果可能还躺在 store buffer 里，读方就已经看到了更新的 `write_pos`。
+
+`atomic` 同时解决这两层问题——既阻止编译器重排，又插入必要的硬件屏障（或利用硬件的内存模型保证）。
+
+### 10.4 在 x86 上的实际开销
+
+x86 是 TSO（Total Store Order）架构，硬件保证：
+- 所有 store 按程序顺序对其他核心可见
+- 所有 load 按程序顺序执行
+
+因此 `acquire` load 和 `release` store **不需要额外的硬件屏障指令**，编译器只需禁止自身的指令重排即可。在 x86 上，`atomic` + `acquire/release` 的性能与普通变量访问几乎相同——这是零成本的正确性保障。
+
+在 ARM/RISC-V 等弱内存序架构上，`acquire` 和 `release` 会生成对应的屏障指令（如 ARM 的 `dmb` / `ldar` / `stlr`），存在少量性能开销，但这是弱内存序架构上正确性的必要代价。
+
+---
+
+## 11. 源文件索引
 
 | 文件 | 职责 |
 |------|------|
