@@ -6,9 +6,9 @@
 #ifndef SHM_IPC_CLIENT_STATE_HPP_
 #define SHM_IPC_CLIENT_STATE_HPP_
 
-#include "ring_channel.hpp"
-
 #include <memory>
+
+#include "ring_channel.hpp"
 
 namespace shm_ipc {
 

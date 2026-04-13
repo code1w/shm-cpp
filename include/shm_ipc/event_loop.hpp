@@ -9,7 +9,9 @@
 #ifndef SHM_IPC_EVENT_LOOP_HPP_
 #define SHM_IPC_EVENT_LOOP_HPP_
 
-#include "common.hpp"
+#include <poll.h>
+#include <sys/timerfd.h>
+#include <unistd.h>
 
 #include <algorithm>
 #include <atomic>
@@ -19,9 +21,7 @@
 #include <string>
 #include <vector>
 
-#include <poll.h>
-#include <sys/timerfd.h>
-#include <unistd.h>
+#include "common.hpp"
 
 namespace shm_ipc {
 
@@ -37,6 +37,8 @@ class EventLoop
     // 禁止复制和移动（回调可能引用外部局部状态）
     EventLoop(const EventLoop &)            = delete;
     EventLoop &operator=(const EventLoop &) = delete;
+    EventLoop(EventLoop &&)                 = delete;
+    EventLoop &operator=(EventLoop &&)      = delete;
 
     /**
      * @brief 注册一个 fd 进行监听
@@ -153,7 +155,10 @@ class EventLoop
     static uint64_t DrainTimerfd(int tfd)
     {
         uint64_t expirations = 0;
-        ::read(tfd, &expirations, sizeof(expirations));
+        ssize_t r;
+        do {
+            r = ::read(tfd, &expirations, sizeof(expirations));
+        } while (r < 0 && errno == EINTR);
         return expirations;
     }
 

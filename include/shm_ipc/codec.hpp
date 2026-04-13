@@ -24,11 +24,11 @@
 #ifndef SHM_IPC_CODEC_HPP_
 #define SHM_IPC_CODEC_HPP_
 
-#include "ring_channel.hpp"
-
 #include <cstdint>
 #include <cstring>
 #include <type_traits>
+
+#include "ring_channel.hpp"
 
 namespace shm_ipc {
 

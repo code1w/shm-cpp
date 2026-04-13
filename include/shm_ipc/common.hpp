@@ -6,19 +6,19 @@
 #ifndef SHM_IPC_COMMON_HPP_
 #define SHM_IPC_COMMON_HPP_
 
-#include <array>
-#include <cerrno>
-#include <cstring>
-#include <stdexcept>
-#include <string>
-#include <utility>
-
 #include <linux/memfd.h>
 #include <sys/eventfd.h>
 #include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/syscall.h>
 #include <unistd.h>
+
+#include <array>
+#include <cerrno>
+#include <cstring>
+#include <stdexcept>
+#include <string>
+#include <utility>
 
 namespace shm_ipc {
 

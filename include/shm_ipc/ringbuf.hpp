@@ -41,13 +41,16 @@ namespace shm_ipc {
 // ---------------------------------------------------------------------------
 
 /** @brief 环形缓冲区控制头，写/读位置各占独立缓存行 */
-struct RingHeader
+struct alignas(64) RingHeader
 {
     std::atomic<uint64_t> write_pos;  ///< 写位置（单调递增字节偏移）
-    char _pad1[56];                   ///< 填充至 64 字节（一个缓存行）
+    char pad1[64 - sizeof(std::atomic<uint64_t>)];  ///< 填充至 64 字节（一个缓存行）
     std::atomic<uint64_t> read_pos;   ///< 读位置（单调递增字节偏移）
-    char _pad2[56];                   ///< 填充至 64 字节
+    char pad2[64 - sizeof(std::atomic<uint64_t>)];  ///< 填充至 64 字节
 };
+
+static_assert(sizeof(RingHeader) == 128, "RingHeader must be 128 bytes (2 cache lines)");
+static_assert(alignof(RingHeader) == 64, "RingHeader must be aligned to 64 bytes");
 
 /** @brief 消息帧头，紧跟 payload */
 struct MsgHeader

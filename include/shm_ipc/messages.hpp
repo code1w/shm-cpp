@@ -6,9 +6,9 @@
 #ifndef SHM_IPC_MESSAGES_HPP_
 #define SHM_IPC_MESSAGES_HPP_
 
-#include <shm_ipc/codec.hpp>
-
 #include <cstdint>
+
+#include <shm_ipc/codec.hpp>
 
 /// 服务端心跳消息
 struct Heartbeat
@@ -26,7 +26,7 @@ struct ClientMsg
     int32_t tick;
     int64_t timestamp;
     uint32_t payload_len;  ///< 有效载荷实际长度
-    char payload[4080];    ///< 载荷数据区
+    char payload[4080];    ///< 载荷数据区，sizeof(ClientMsg)=4100，codec帧=4104字节
 };
 SHM_IPC_REGISTER_POD(ClientMsg, 0x434C4D47)  // "CLMG"
 

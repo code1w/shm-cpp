@@ -9,10 +9,9 @@
  * Unix socket 仅用于 fd 交换和断连检测。
  */
 
-#include <shm_ipc/client_state.hpp>
-#include <shm_ipc/codec.hpp>
-#include <shm_ipc/event_loop.hpp>
-#include <shm_ipc/messages.hpp>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <unistd.h>
 
 #include <csignal>
 #include <cstdio>
@@ -22,9 +21,10 @@
 #include <memory>
 #include <unordered_map>
 
-#include <sys/socket.h>
-#include <sys/un.h>
-#include <unistd.h>
+#include <shm_ipc/client_state.hpp>
+#include <shm_ipc/codec.hpp>
+#include <shm_ipc/event_loop.hpp>
+#include <shm_ipc/messages.hpp>
 
 namespace {
 

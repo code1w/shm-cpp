@@ -13,11 +13,11 @@
 #ifndef SHM_IPC_RING_CHANNEL_HPP_
 #define SHM_IPC_RING_CHANNEL_HPP_
 
-#include "common.hpp"
-#include "ringbuf.hpp"
-
 #include <sys/mman.h>
 #include <sys/time.h>
+
+#include "common.hpp"
+#include "ringbuf.hpp"
 
 namespace shm_ipc {
 
@@ -215,7 +215,10 @@ class RingChannel
     static uint64_t DrainNotify(int efd)
     {
         uint64_t v = 0;
-        ::read(efd, &v, sizeof(v));
+        ssize_t r;
+        do {
+            r = ::read(efd, &v, sizeof(v));
+        } while (r < 0 && errno == EINTR);
         return v;
     }
 
