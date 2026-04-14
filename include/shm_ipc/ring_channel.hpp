@@ -174,6 +174,87 @@ class RingChannel
      */
     void CommitRead(uint32_t len) { Ring::CommitRead(read_region_.Get(), len); }
 
+    // ---- 批量写入 ----
+
+    /**
+     * @brief RAII 通道级批量写入器
+     *
+     * 封装 RingBuf::BatchWriter，Flush 时自动调用 NotifyPeer()。
+     * 将 N 条消息的原子操作从 3N 降至 2，eventfd 通知从 N 降至 1。
+     *
+     * @code
+     * {
+     *     auto batch = channel.StartBatch();
+     *     batch.TryWrite(data1, len1, seq1);
+     *     batch.TryWrite(data2, len2, seq2);
+     *     batch.Flush();  // store write_pos + NotifyPeer()
+     * }
+     * @endcode
+     */
+    class ChannelBatchWriter
+    {
+     public:
+        ChannelBatchWriter(typename Ring::BatchWriter &&bw,
+                           const RingChannel *ch)
+            : batch_(std::move(bw)), channel_(ch) {}
+
+        ~ChannelBatchWriter() { Flush(); }
+
+        ChannelBatchWriter(ChannelBatchWriter &&o) noexcept
+            : batch_(std::move(o.batch_)), channel_(o.channel_)
+        {
+            o.channel_ = nullptr;
+        }
+
+        ChannelBatchWriter &operator=(ChannelBatchWriter &&)      = delete;
+        ChannelBatchWriter(const ChannelBatchWriter &)            = delete;
+        ChannelBatchWriter &operator=(const ChannelBatchWriter &) = delete;
+
+        /**
+         * @brief 尝试写入一条消息（不触发原子 store 和通知）
+         * @param data payload 数据
+         * @param len  payload 长度
+         * @param seq  消息序列号
+         * @return 0 成功，-1 空间不足或消息过大
+         */
+        int TryWrite(const void *data, uint32_t len, uint32_t seq)
+        {
+            return batch_.TryWrite(data, len, seq);
+        }
+
+        /**
+         * @brief 发布所有累积写入并通知对端
+         * @return 自上次 Flush 以来写入的消息条数
+         */
+        int Flush()
+        {
+            int n = batch_.Flush();
+            if (n > 0 && channel_)
+                channel_->NotifyPeer();
+            return n;
+        }
+
+        /** @brief 自上次 Flush 以来已写入的消息条数 */
+        int Count() const noexcept { return batch_.Count(); }
+
+     private:
+        typename Ring::BatchWriter batch_;
+        const RingChannel *channel_;
+    };
+
+    /**
+     * @brief 创建通道级批量写入器
+     * @return ChannelBatchWriter 实例
+     */
+    [[nodiscard]]
+    ChannelBatchWriter StartBatch()
+    {
+        return ChannelBatchWriter(
+            typename Ring::BatchWriter(write_region_.Get()), this);
+    }
+
+    // ---- 状态查询 ----
+
     /** @brief 返回读环中已使用字节数 */
     uint64_t Readable() const { return Ring::Available(read_region_.Get()); }
 

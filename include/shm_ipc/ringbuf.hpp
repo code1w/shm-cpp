@@ -241,6 +241,136 @@ class RingBuf
         }
     }
 
+    // ---- 批量写入 ----
+
+    /**
+     * @brief RAII 批量写入器，减少原子操作次数
+     *
+     * 普通 TryWrite 每条消息需要 3 次原子操作（load write_pos、load read_pos、
+     * store write_pos）。BatchWriter 在构造时快照一次 read_pos，写入过程中
+     * 仅本地追踪 write_pos，Flush 时一次性 store，将 N 条消息的原子操作
+     * 从 3N 降至 2（1 acquire load + 1 release store）。
+     *
+     * 使用示例：
+     * @code
+     * {
+     *     auto batch = RingBuf<>::BatchWriter(shm);
+     *     batch.TryWrite(data1, len1, seq1);
+     *     batch.TryWrite(data2, len2, seq2);
+     *     batch.Flush();  // 或依赖析构自动 flush
+     * }
+     * @endcode
+     *
+     * @note read_pos 快照是保守估计：读方可能已消费更多数据，
+     *       但绝不会消费得更少，因此空间检查不会产生错误。
+     *       代价是在读方已消费数据的场景下，可能误判为空间不足。
+     */
+    class BatchWriter
+    {
+     public:
+        /**
+         * @brief 构造批量写入器，快照当前 write_pos 和 read_pos
+         * @param shm 共享内存指针
+         */
+        explicit BatchWriter(void *shm)
+            : hdr_(Header(shm)), base_(DataRegion(shm)),
+              w_(hdr_->write_pos.load(std::memory_order_relaxed)),
+              r_(hdr_->read_pos.load(std::memory_order_acquire)),
+              w_start_(w_) {}
+
+        ~BatchWriter() { Flush(); }
+
+        BatchWriter(BatchWriter &&o) noexcept
+            : hdr_(o.hdr_), base_(o.base_),
+              w_(o.w_), r_(o.r_), w_start_(o.w_start_),
+              count_(o.count_)
+        {
+            o.hdr_ = nullptr;
+        }
+
+        BatchWriter &operator=(BatchWriter &&)      = delete;
+        BatchWriter(const BatchWriter &)            = delete;
+        BatchWriter &operator=(const BatchWriter &) = delete;
+
+        /**
+         * @brief 尝试写入一条消息到批量缓冲区（不触发原子 store）
+         * @param data payload 数据
+         * @param len  payload 长度
+         * @param seq  消息序列号
+         * @return 0 成功，-1 空间不足或消息过大
+         */
+        int TryWrite(const void *data, uint32_t len, uint32_t seq)
+        {
+            if (len > max_msg_size)
+                return -1;
+
+            std::size_t total  = FrameSize(len);
+            std::size_t phys_w = Mask(w_);
+            std::size_t tail   = Capacity - phys_w;
+
+            if (total > tail)
+            {
+                if ((w_ + tail + total) - r_ > Capacity)
+                    return -1;
+
+                auto *sentinel = reinterpret_cast<MsgHeader *>(base_ + phys_w);
+                sentinel->len  = kSentinel;
+                sentinel->seq  = 0;
+                w_ += tail;
+
+                auto *mh = reinterpret_cast<MsgHeader *>(base_);
+                mh->len  = len;
+                mh->seq  = seq;
+                std::memcpy(base_ + msg_header_size, data, len);
+
+                w_ += total;
+            }
+            else
+            {
+                if ((w_ + total) - r_ > Capacity)
+                    return -1;
+
+                auto *mh = reinterpret_cast<MsgHeader *>(base_ + phys_w);
+                mh->len  = len;
+                mh->seq  = seq;
+                std::memcpy(base_ + phys_w + msg_header_size, data, len);
+
+                w_ += total;
+            }
+            ++count_;
+            return 0;
+        }
+
+        /**
+         * @brief 将累积的写入发布到共享内存（一次 release store）
+         * @return 自上次 Flush 以来写入的消息条数
+         */
+        int Flush()
+        {
+            if (!hdr_)
+                return 0;
+            int n = count_;
+            if (w_ != w_start_)
+            {
+                hdr_->write_pos.store(w_, std::memory_order_release);
+                w_start_ = w_;
+            }
+            count_ = 0;
+            return n;
+        }
+
+        /** @brief 自上次 Flush 以来已写入的消息条数 */
+        int Count() const noexcept { return count_; }
+
+     private:
+        RingHeader *hdr_;
+        char *base_;
+        uint64_t w_;        ///< 本地追踪的写位置（不触发原子 store）
+        uint64_t r_;        ///< 快照的读位置（整批只读一次 acquire）
+        uint64_t w_start_;  ///< Flush 前的写位置，用于判断是否有新数据
+        int count_ = 0;     ///< 自上次 Flush 以来已写入消息计数
+    };
+
     // ---- 读取 ----
 
     /**

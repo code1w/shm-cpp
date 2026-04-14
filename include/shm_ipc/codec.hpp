@@ -149,6 +149,25 @@ int SendPod(RingChannel<Cap> &ch, const T &obj, uint32_t seq)
     return rc;
 }
 
+/**
+ * @brief 编码 POD 并写入批量写入器（不触发通知，由 Flush 统一通知）
+ * @tparam T   已注册的 POD 类型
+ * @tparam Cap RingChannel 容量
+ * @param batch 通道批量写入器
+ * @param obj   待发送对象
+ * @param seq   消息序列号
+ * @return 0 成功，-1 缓冲区满
+ */
+template <typename T, std::size_t Cap>
+int SendPod(typename RingChannel<Cap>::ChannelBatchWriter &batch,
+            const T &obj, uint32_t seq)
+{
+    constexpr uint32_t frame_size = kTagSize + sizeof(T);
+    char buf[frame_size];
+    Encode(obj, buf, frame_size);
+    return batch.TryWrite(buf, frame_size, seq);
+}
+
 // ---------------------------------------------------------------------------
 // 上层：PodReader —— 零拷贝流式读取器
 // ---------------------------------------------------------------------------

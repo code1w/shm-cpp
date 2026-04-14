@@ -22,5 +22,8 @@ target_link_libraries(bench_socket PRIVATE shm_ipc)
 add_executable(bench_shm bench/bench_shm.cpp)
 target_link_libraries(bench_shm PRIVATE shm_ipc)
 
+add_executable(bench_batch bench/bench_batch.cpp)
+target_link_libraries(bench_batch PRIVATE shm_ipc)
+
 add_executable(test_codec test/test_codec.cpp)
 target_link_libraries(test_codec PRIVATE shm_ipc)
