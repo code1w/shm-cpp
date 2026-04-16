@@ -1,0 +1,841 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SHM-IPC 数据包流动演示</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Share+Tech+Mono&display=swap');
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+    background: #050a12;
+    color: #c0d8f0;
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    overflow-x: hidden;
+    min-height: 100vh;
+    position: relative;
+}
+
+/* 网格背景 */
+body::before {
+    content: '';
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background-image:
+        linear-gradient(rgba(0,255,255,0.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(0,255,255,0.03) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+    z-index: 0;
+}
+
+/* 扫描线 */
+body::after {
+    content: '';
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: repeating-linear-gradient(
+        0deg,
+        transparent,
+        transparent 2px,
+        rgba(0,255,255,0.008) 2px,
+        rgba(0,255,255,0.008) 4px
+    );
+    pointer-events: none;
+    z-index: 9999;
+}
+
+h1 {
+    position: relative; z-index: 1;
+    text-align: center;
+    padding: 32px 0 10px;
+    font-family: 'Orbitron', sans-serif;
+    font-size: 2.2rem;
+    font-weight: 900;
+    letter-spacing: 3px;
+    color: #00ffff;
+    text-shadow: 0 0 10px #00ffff80, 0 0 40px #00ffff30, 0 0 80px #00ffff15;
+}
+
+.subtitle {
+    position: relative; z-index: 1;
+    text-align: center;
+    color: #4a7090;
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 1.05rem;
+    margin-bottom: 24px;
+    letter-spacing: 2px;
+}
+
+/* ---- 主布局 ---- */
+.main {
+    position: relative; z-index: 1;
+    display: flex;
+    justify-content: center;
+    align-items: flex-end;
+    gap: 0;
+    padding: 0 32px 32px;
+    max-width: 1700px;
+    margin: 0 auto;
+}
+
+.side {
+    flex: 1;
+    max-width: 520px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.side-label {
+    text-align: center;
+    font-family: 'Orbitron', sans-serif;
+    font-size: 1.2rem;
+    font-weight: 700;
+    padding: 12px 0;
+    border-radius: 10px 10px 0 0;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+}
+
+.client-label {
+    background: linear-gradient(135deg, #0a1828, #0d2040);
+    color: #00e5ff;
+    border: 1px solid #00e5ff30;
+    border-bottom: none;
+    text-shadow: 0 0 8px #00e5ff60;
+}
+.server-label {
+    background: linear-gradient(135deg, #0d2040, #0a1828);
+    color: #00e5ff;
+    border: 1px solid #00e5ff30;
+    border-bottom: none;
+    text-shadow: 0 0 8px #00e5ff60;
+}
+
+/* ---- 层级卡片 ---- */
+.layer {
+    position: relative;
+    border-radius: 6px;
+    padding: 16px 20px;
+    min-height: 90px;
+    border: 1px solid;
+    transition: border-color 0.3s, box-shadow 0.3s, transform 0.15s;
+    overflow: hidden;
+}
+
+.layer::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 3px;
+    border-radius: 6px 6px 0 0;
+}
+
+/* 扫描线叠加 */
+.layer::after {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: repeating-linear-gradient(
+        0deg,
+        transparent,
+        transparent 3px,
+        rgba(255,255,255,0.01) 3px,
+        rgba(255,255,255,0.01) 6px
+    );
+    pointer-events: none;
+}
+
+.layer.active {
+    transform: scale(1.03);
+    z-index: 2;
+}
+
+.layer-name {
+    font-family: 'Orbitron', sans-serif;
+    font-weight: 700;
+    font-size: 0.92rem;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    margin-bottom: 4px;
+}
+
+.layer-func {
+    font-size: 0.88rem;
+    font-family: 'Share Tech Mono', 'Fira Code', monospace;
+    opacity: 0.7;
+}
+
+.layer-desc {
+    font-size: 0.85rem;
+    opacity: 0.4;
+    margin-top: 3px;
+}
+
+/* --- 科幻配色 --- */
+/* Application: 青色 neon */
+.layer-app       { background: #06141f; border-color: #00e5ff20; }
+.layer-app::before       { background: #00e5ff; box-shadow: 0 0 8px #00e5ff; }
+.layer-app.active        { border-color: #00e5ff; box-shadow: 0 0 25px #00e5ff40, inset 0 0 40px #00e5ff08; }
+.layer-app .layer-name   { color: #00e5ff; text-shadow: 0 0 6px #00e5ff80; }
+
+/* Codec: 绿色 neon */
+.layer-codec     { background: #061f14; border-color: #00ff8820; }
+.layer-codec::before     { background: #00ff88; box-shadow: 0 0 8px #00ff88; }
+.layer-codec.active      { border-color: #00ff88; box-shadow: 0 0 25px #00ff8840, inset 0 0 40px #00ff8808; }
+.layer-codec .layer-name { color: #00ff88; text-shadow: 0 0 6px #00ff8880; }
+
+/* RingChannel: 橙色 neon */
+.layer-chan      { background: #1f1406; border-color: #ff8c0020; }
+.layer-chan::before      { background: #ff8c00; box-shadow: 0 0 8px #ff8c00; }
+.layer-chan.active       { border-color: #ff8c00; box-shadow: 0 0 25px #ff8c0040, inset 0 0 40px #ff8c0008; }
+.layer-chan .layer-name  { color: #ff8c00; text-shadow: 0 0 6px #ff8c0080; }
+
+/* RingBuf: 品红 neon */
+.layer-ring      { background: #1f0620; border-color: #ff00ff20; }
+.layer-ring::before      { background: #ff00ff; box-shadow: 0 0 8px #ff00ff; }
+.layer-ring.active       { border-color: #ff00ff; box-shadow: 0 0 25px #ff00ff40, inset 0 0 40px #ff00ff08; }
+.layer-ring .layer-name  { color: #ff00ff; text-shadow: 0 0 6px #ff00ff80; }
+
+/* EventLoop: 黄色 neon */
+.layer-evt       { background: #1a1a06; border-color: #ffff0020; }
+.layer-evt::before       { background: #ffe600; box-shadow: 0 0 8px #ffe600; }
+.layer-evt.active        { border-color: #ffe600; box-shadow: 0 0 25px #ffe60040, inset 0 0 40px #ffe60008; }
+.layer-evt .layer-name   { color: #ffe600; text-shadow: 0 0 6px #ffe60080; }
+
+/* ---- 中间共享内存区域 ---- */
+.middle {
+    width: 340px;
+    min-width: 340px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 16px;
+    padding: 0 16px;
+    position: relative; z-index: 1;
+}
+
+.shm-box {
+    width: 100%;
+    background: #0a0520;
+    border: 1px solid #a855f740;
+    border-radius: 14px;
+    padding: 20px;
+    text-align: center;
+    position: relative;
+    box-shadow: 0 0 20px #a855f710;
+}
+
+.shm-box.active {
+    border-color: #a855f7;
+    box-shadow: 0 0 40px #a855f750, inset 0 0 40px #a855f710;
+}
+
+.shm-title {
+    font-family: 'Orbitron', sans-serif;
+    color: #a855f7;
+    font-weight: 700;
+    font-size: 1.0rem;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    margin-bottom: 14px;
+    text-shadow: 0 0 8px #a855f780;
+}
+
+/* Ring buffer 可视化 */
+.ring-visual {
+    position: relative;
+    width: 200px;
+    height: 200px;
+    margin: 0 auto 14px;
+}
+
+.ring-visual svg { width: 100%; height: 100%; }
+
+.ring-track {
+    fill: none;
+    stroke: #1a1030;
+    stroke-width: 20;
+}
+
+.ring-data {
+    fill: none;
+    stroke: #a855f7;
+    stroke-width: 20;
+    stroke-linecap: round;
+    transition: stroke-dashoffset 0.6s ease;
+    filter: drop-shadow(0 0 10px #a855f7a0);
+}
+
+.ring-write-dot, .ring-read-dot { transition: all 0.6s ease; }
+
+.ring-center-text {
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    text-align: center;
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.85rem;
+    line-height: 1.5;
+    color: #7c3aed;
+}
+
+.ring-center-text .val {
+    font-size: 1.0rem;
+    font-weight: 700;
+    color: #c084fc;
+    text-shadow: 0 0 6px #a855f760;
+}
+
+/* eventfd 通知箭头 */
+.eventfd-arrow {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.9rem;
+    color: #2a2040;
+    opacity: 0;
+    transition: opacity 0.4s;
+}
+
+.eventfd-arrow.active {
+    opacity: 1;
+    color: #ffe600;
+    text-shadow: 0 0 6px #ffe60060;
+}
+
+.eventfd-arrow .arrow-line {
+    width: 50px;
+    height: 2px;
+    background: #ffe600;
+    position: relative;
+    box-shadow: 0 0 6px #ffe600;
+}
+
+.eventfd-arrow .arrow-line::after {
+    content: '';
+    position: absolute;
+    right: -1px;
+    top: -5px;
+    border: 6px solid transparent;
+    border-left-color: #ffe600;
+}
+
+/* ---- 数据包 ---- */
+.packet {
+    position: fixed;
+    pointer-events: none;
+    z-index: 100;
+    display: flex;
+    gap: 0;
+    border-radius: 6px;
+    overflow: hidden;
+    box-shadow: 0 0 20px rgba(0,255,255,0.3), 0 4px 20px rgba(0,0,0,0.5);
+    opacity: 0;
+    transition: opacity 0.3s;
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.8rem;
+}
+
+.packet.visible { opacity: 1; }
+
+.packet-seg {
+    padding: 6px 10px;
+    white-space: nowrap;
+    display: flex;
+    align-items: center;
+    font-weight: 600;
+}
+
+.seg-header   { background: #00ff88; color: #031a0e; }
+.seg-tag      { background: #00cc6a; color: #031a0e; }
+.seg-payload  { background: #00e5ff; color: #041820; }
+.seg-raw      { background: #00e5ff; color: #041820; border-radius: 6px; }
+
+/* ---- 操作日志 ---- */
+.log-box {
+    width: 100%;
+    background: #080e18;
+    border: 1px solid #00e5ff20;
+    border-radius: 8px;
+    padding: 14px;
+    font-family: 'Share Tech Mono', 'Fira Code', monospace;
+    font-size: 0.82rem;
+    line-height: 1.7;
+    max-height: 160px;
+    overflow-y: auto;
+    color: #5090b0;
+}
+
+.log-box::-webkit-scrollbar { width: 4px; }
+.log-box::-webkit-scrollbar-track { background: transparent; }
+.log-box::-webkit-scrollbar-thumb { background: #00e5ff30; border-radius: 4px; }
+
+.log-box .log-line {
+    opacity: 0;
+    animation: fadeIn 0.3s forwards;
+}
+
+@keyframes fadeIn { to { opacity: 1; } }
+
+.log-line .fn   { color: #00ff88; text-shadow: 0 0 4px #00ff8840; }
+.log-line .val  { color: #ff00ff; text-shadow: 0 0 4px #ff00ff40; }
+.log-line .op   { color: #a855f7; text-shadow: 0 0 4px #a855f740; }
+.log-line .note { color: #304050; }
+
+/* ---- 控制按钮 ---- */
+.controls {
+    position: relative; z-index: 1;
+    display: flex;
+    justify-content: center;
+    gap: 14px;
+    margin: 20px 0;
+}
+
+.btn {
+    padding: 12px 36px;
+    border: none;
+    border-radius: 6px;
+    font-family: 'Orbitron', sans-serif;
+    font-size: 0.95rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.2s;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+}
+
+.btn-play {
+    background: linear-gradient(135deg, #00e5ff, #00ff88);
+    color: #041820;
+    box-shadow: 0 0 15px #00e5ff30;
+}
+.btn-play:hover { transform: translateY(-2px); box-shadow: 0 0 30px #00e5ff60; }
+.btn-play:disabled { opacity: 0.3; cursor: default; transform: none; box-shadow: none; }
+
+.btn-speed {
+    background: #0a1828;
+    color: #4a7090;
+    border: 1px solid #00e5ff20;
+}
+.btn-speed:hover { border-color: #00e5ff50; color: #80c0e0; }
+.btn-speed.active { border-color: #00e5ff; color: #00e5ff; box-shadow: 0 0 10px #00e5ff30; text-shadow: 0 0 4px #00e5ff60; }
+
+/* ---- 步骤说明横幅 ---- */
+.step-banner {
+    position: relative; z-index: 1;
+    text-align: center;
+    min-height: 56px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.1rem;
+    color: #4a7090;
+    padding: 0 24px;
+    transition: opacity 0.3s;
+}
+
+.step-banner .step-num {
+    display: inline-block;
+    background: linear-gradient(135deg, #00e5ff, #a855f7);
+    color: #041820;
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    line-height: 30px;
+    font-family: 'Orbitron', sans-serif;
+    font-size: 0.85rem;
+    font-weight: 700;
+    margin-right: 12px;
+    box-shadow: 0 0 10px #00e5ff40;
+}
+
+.step-banner .step-text {
+    color: #a0c8e0;
+    font-family: 'Share Tech Mono', monospace;
+    letter-spacing: 0.5px;
+}
+
+/* ---- 流动箭头 ---- */
+.flow-arrow-down, .flow-arrow-up {
+    text-align: center;
+    color: #152030;
+    font-size: 1.4rem;
+    line-height: 1;
+    padding: 2px 0;
+    transition: color 0.3s, text-shadow 0.3s;
+}
+
+.flow-arrow-down.active, .flow-arrow-up.active {
+    color: #00e5ff;
+    text-shadow: 0 0 8px #00e5ff80;
+}
+</style>
+</head>
+<body>
+
+<h1>SHM-IPC 数据包流动演示</h1>
+<p class="subtitle">CLIENT &#8594; SHARED MEMORY RING BUFFER &#8594; SERVER</p>
+
+<div class="controls">
+    <button class="btn btn-play" id="btnPlay" onclick="startAnimation()">&#9654; TRANSMIT</button>
+    <button class="btn btn-speed" id="btnSlow" onclick="setSpeed(1.8)">SLOW</button>
+    <button class="btn btn-speed active" id="btnNormal" onclick="setSpeed(1)">NORMAL</button>
+    <button class="btn btn-speed" id="btnFast" onclick="setSpeed(0.5)">FAST</button>
+</div>
+
+<div class="step-banner" id="stepBanner">
+    <span>点击 TRANSMIT 开始数据包传输演示</span>
+</div>
+
+<div class="main">
+    <!-- Client -->
+    <div class="side">
+        <div class="side-label client-label">&#9670; CLIENT (进程 A)</div>
+        <div class="layer layer-app" id="c-app">
+            <div class="layer-name">&#9312; Application</div>
+            <div class="layer-func">构造 ClientMsg{seq, tick, ts, payload}</div>
+            <div class="layer-desc">应用层组装 POD 消息结构体</div>
+        </div>
+        <div class="flow-arrow-down" id="c-arrow-1">&#9660;</div>
+        <div class="layer layer-codec" id="c-codec">
+            <div class="layer-name">&#9313; Codec — SendPod / Send</div>
+            <div class="layer-func">Encode &#8594; [MsgHeader 8B][tag 4B][payload]</div>
+            <div class="layer-desc">添加帧头 + 类型标签，序列化为字节帧</div>
+        </div>
+        <div class="flow-arrow-down" id="c-arrow-2">&#9660;</div>
+        <div class="layer layer-chan" id="c-chan">
+            <div class="layer-name">&#9314; RingChannel — BatchWriter</div>
+            <div class="layer-func">StartBatch &#8594; TryWrite &#215; 3 &#8594; Flush</div>
+            <div class="layer-desc">分段写入 header/tag/payload，一次性发布</div>
+        </div>
+        <div class="flow-arrow-down" id="c-arrow-3">&#9660;</div>
+        <div class="layer layer-ring" id="c-ring">
+            <div class="layer-name">&#9315; RingBuf — TryWrite</div>
+            <div class="layer-func">memcpy &#8594; atomic store write_pos (release)</div>
+            <div class="layer-desc">写入 mmap 共享内存，原子更新写位置</div>
+        </div>
+    </div>
+
+    <!-- Middle -->
+    <div class="middle">
+        <div class="shm-box" id="shmBox">
+            <div class="shm-title">&#9670; Shared Memory</div>
+            <div class="ring-visual">
+                <svg viewBox="0 0 200 200">
+                    <circle class="ring-track" cx="100" cy="100" r="72" />
+                    <circle class="ring-data" id="ringData" cx="100" cy="100" r="72"
+                            stroke-dasharray="452.4" stroke-dashoffset="452.4"
+                            transform="rotate(-90 100 100)" />
+                    <circle class="ring-write-dot" id="writeDot" cx="100" cy="28" r="7"
+                            fill="#00e5ff" opacity="0.9" />
+                    <circle class="ring-read-dot" id="readDot" cx="100" cy="28" r="6"
+                            fill="#ffe600" opacity="0.9" />
+                    <text x="178" y="24" fill="#00e5ff" font-size="10" font-weight="700" font-family="monospace">W</text>
+                    <text x="178" y="38" fill="#ffe600" font-size="10" font-weight="700" font-family="monospace">R</text>
+                </svg>
+                <div class="ring-center-text">
+                    <div>write_pos</div>
+                    <div class="val" id="writePos">0</div>
+                    <div>read_pos</div>
+                    <div class="val" id="readPos">0</div>
+                </div>
+            </div>
+            <div class="eventfd-arrow" id="evtArrow" style="justify-content:center">
+                <span>eventfd</span>
+                <div class="arrow-line"></div>
+                <span>NotifyPeer()</span>
+            </div>
+        </div>
+        <div class="log-box" id="logBox"></div>
+    </div>
+
+    <!-- Server -->
+    <div class="side">
+        <div class="side-label server-label">&#9670; SERVER (进程 B)</div>
+        <div class="layer layer-app" id="s-app">
+            <div class="layer-name">&#9319; Application</div>
+            <div class="layer-func">DecodePod&lt;ClientMsg&gt;(payload) &#8594; msg</div>
+            <div class="layer-desc">从 payload 还原应用层消息结构体</div>
+        </div>
+        <div class="flow-arrow-up" id="s-arrow-4">&#9650;</div>
+        <div class="layer layer-codec" id="s-codec">
+            <div class="layer-name">&#9318; Codec — FrameReader.TryRecv</div>
+            <div class="layer-func">解析 MsgHeader &#8594; tag &#8594; payload 指针</div>
+            <div class="layer-desc">零拷贝帧解析 + CommitRead 推进 read_pos</div>
+        </div>
+        <div class="flow-arrow-up" id="s-arrow-3">&#9650;</div>
+        <div class="layer layer-ring" id="s-ring">
+            <div class="layer-name">&#9317; RingBuf — Peek</div>
+            <div class="layer-func">零拷贝返回 seg1/seg2 指针</div>
+            <div class="layer-desc">直接返回共享内存指针，无数据拷贝</div>
+        </div>
+        <div class="flow-arrow-up" id="s-arrow-2">&#9650;</div>
+        <div class="layer layer-evt" id="s-evt">
+            <div class="layer-name">&#9316; EventLoop — poll</div>
+            <div class="layer-func">POLLIN on eventfd &#8594; DrainNotify</div>
+            <div class="layer-desc">检测到 eventfd 可读，触发回调</div>
+        </div>
+    </div>
+</div>
+
+<div class="packet" id="packet"></div>
+
+<script>
+var speed = 1, animating = false, writePos = 0, readPos = 0;
+var FRAME_SIZE = 4112, CIRC = 2 * Math.PI * 72;
+
+function sleep(ms) { return new Promise(function(r) { setTimeout(r, ms * speed); }); }
+
+function log(html) {
+    var box = document.getElementById('logBox');
+    var line = document.createElement('div');
+    line.className = 'log-line';
+    line.innerHTML = html;
+    box.appendChild(line);
+    box.scrollTop = box.scrollHeight;
+}
+
+function clearLog() { document.getElementById('logBox').innerHTML = ''; }
+
+function setStep(num, text) {
+    document.getElementById('stepBanner').innerHTML =
+        '<span class="step-num">' + num + '</span><span class="step-text">' + text + '</span>';
+}
+
+function activateLayer(id) { document.getElementById(id).classList.add('active'); }
+function deactivateLayer(id) { document.getElementById(id).classList.remove('active'); }
+function activateArrow(id) { document.getElementById(id).classList.add('active'); }
+function deactivateArrow(id) { document.getElementById(id).classList.remove('active'); }
+
+function deactivateAll() {
+    document.querySelectorAll('.layer, .shm-box').forEach(function(el) { el.classList.remove('active'); });
+    document.querySelectorAll('.flow-arrow-down, .flow-arrow-up').forEach(function(el) { el.classList.remove('active'); });
+    document.getElementById('evtArrow').classList.remove('active');
+}
+
+function showPacket(mode) {
+    var pkt = document.getElementById('packet');
+    pkt.innerHTML = '';
+    if (mode === 'raw') {
+        pkt.innerHTML = '<div class="packet-seg seg-raw">ClientMsg { seq:42, tick:42, ts:1713200000, payload[256B] }</div>';
+    } else if (mode === 'framed') {
+        pkt.innerHTML =
+            '<div class="packet-seg seg-header">MsgHeader 8B</div>' +
+            '<div class="packet-seg seg-tag">tag 4B</div>' +
+            '<div class="packet-seg seg-payload">ClientMsg 4100B</div>';
+    } else if (mode === 'batch') {
+        pkt.innerHTML =
+            '<div class="packet-seg seg-header" style="opacity:0.8">HDR</div>' +
+            '<div class="packet-seg seg-tag" style="opacity:0.8">TAG</div>' +
+            '<div class="packet-seg seg-payload" style="opacity:0.8">PAYLOAD</div>' +
+            '<div class="packet-seg" style="background:#ff8c00;color:#000;font-size:0.7rem">&#8594; BATCH</div>';
+    } else if (mode === 'ring') {
+        pkt.innerHTML =
+            '<div class="packet-seg" style="background:#ff00ff;color:#fff;font-size:0.8rem;text-shadow:0 0 6px #ff00ff80">BYTES IN RING</div>';
+    } else if (mode === 'peek') {
+        pkt.innerHTML =
+            '<div class="packet-seg" style="background:#a855f7;color:#fff;font-size:0.8rem;text-shadow:0 0 6px #a855f780">seg1* &#8594; ZERO-COPY</div>';
+    } else if (mode === 'decoded') {
+        pkt.innerHTML =
+            '<div class="packet-seg seg-header" style="opacity:0.5">HDR &#10003;</div>' +
+            '<div class="packet-seg seg-tag" style="opacity:0.5">tag &#10003;</div>' +
+            '<div class="packet-seg seg-payload">payload*</div>';
+    } else if (mode === 'result') {
+        pkt.innerHTML = '<div class="packet-seg seg-raw">ClientMsg { seq:42, tick:42, ts:1713200000, payload[256B] } &#10003;</div>';
+    }
+    pkt.classList.add('visible');
+}
+
+function hidePacket() { document.getElementById('packet').classList.remove('visible'); }
+
+function movePacketTo(id) {
+    var r = document.getElementById(id).getBoundingClientRect();
+    var p = document.getElementById('packet');
+    p.style.transition = 'left 0.5s ease, top 0.5s ease';
+    p.style.left = (r.left + r.width/2 - p.offsetWidth/2) + 'px';
+    p.style.top = (r.top + r.height/2 - p.offsetHeight/2) + 'px';
+}
+
+function teleportPacketTo(id) {
+    var r = document.getElementById(id).getBoundingClientRect();
+    var p = document.getElementById('packet');
+    p.style.transition = 'none';
+    p.style.left = (r.left + r.width/2 - p.offsetWidth/2) + 'px';
+    p.style.top = (r.top + r.height/2 - p.offsetHeight/2) + 'px';
+}
+
+function updateRing() {
+    var cap = 8*1024*1024;
+    var used = (writePos - readPos) / cap;
+    var wf = (writePos % cap) / cap;
+    var rf = (readPos % cap) / cap;
+    document.getElementById('ringData').setAttribute('stroke-dashoffset', CIRC - used * CIRC);
+    function dp(f) { var a=f*2*Math.PI-Math.PI/2; return {x:100+72*Math.cos(a), y:100+72*Math.sin(a)}; }
+    var wp=dp(wf), rp=dp(rf);
+    document.getElementById('writeDot').setAttribute('cx',wp.x);
+    document.getElementById('writeDot').setAttribute('cy',wp.y);
+    document.getElementById('readDot').setAttribute('cx',rp.x);
+    document.getElementById('readDot').setAttribute('cy',rp.y);
+    document.getElementById('writePos').textContent = writePos;
+    document.getElementById('readPos').textContent = readPos;
+}
+
+async function startAnimation() {
+    if (animating) return;
+    animating = true;
+    document.getElementById('btnPlay').disabled = true;
+    deactivateAll(); clearLog();
+    writePos = 0; readPos = 0; updateRing();
+
+    setStep(1, 'Application 层：构造 ClientMsg 结构体');
+    activateLayer('c-app'); showPacket('raw'); teleportPacketTo('c-app');
+    log('<span class="fn">ClientMsg</span> msg{};');
+    await sleep(400);
+    log('msg.<span class="val">seq</span> = 42; msg.<span class="val">tick</span> = 42;');
+    await sleep(400);
+    log('msg.<span class="val">timestamp</span> = time(nullptr);');
+    await sleep(400);
+    log('msg.<span class="val">payload_len</span> = 256;');
+    await sleep(400);
+    log('memset(msg.payload, <span class="val">\'C\'</span>, 256);');
+    await sleep(800);
+
+    deactivateLayer('c-app'); activateArrow('c-arrow-1');
+    setStep(2, 'Codec 层：SendPod &#8594; Send &#8594; 编码为帧');
+    activateLayer('c-codec'); showPacket('framed'); movePacketTo('c-codec');
+    await sleep(600); deactivateArrow('c-arrow-1');
+    log('<span class="fn">SendPod</span>(ch, msg, seq=42)');
+    await sleep(400);
+    log('  &#8594; <span class="fn">Send</span>(ch, tag=<span class="val">0x434C4D47</span>, &msg, 4100, 42)');
+    await sleep(400);
+    log('  &#8594; frame = [<span class="op">MsgHeader{len=4104, seq=42}</span>]');
+    await sleep(300);
+    log('           + [<span class="op">tag=CLMG</span>]');
+    await sleep(300);
+    log('           + [<span class="op">ClientMsg 4100B</span>]');
+    await sleep(300);
+    log('  &#8594; frame_size = <span class="val">4112</span> bytes');
+    await sleep(800);
+
+    deactivateLayer('c-codec'); activateArrow('c-arrow-2');
+    setStep(3, 'RingChannel 层：BatchWriter 分段写入环形缓冲区');
+    activateLayer('c-chan'); showPacket('batch'); movePacketTo('c-chan');
+    await sleep(600); deactivateArrow('c-arrow-2');
+    log('<span class="fn">ch.StartBatch</span>() <span class="note">// snapshot write_pos, read_pos</span>');
+    await sleep(400);
+    log('  batch.<span class="fn">TryWrite</span>(&hdr, <span class="val">8</span>) <span class="note">// MsgHeader</span>');
+    await sleep(300);
+    log('  batch.<span class="fn">TryWrite</span>(&tag, <span class="val">4</span>) <span class="note">// type tag</span>');
+    await sleep(300);
+    log('  batch.<span class="fn">TryWrite</span>(&msg, <span class="val">4100</span>) <span class="note">// payload</span>');
+    await sleep(400);
+    log('  batch.<span class="fn">Flush</span>() <span class="note">// atomic store + NotifyPeer</span>');
+    await sleep(800);
+
+    deactivateLayer('c-chan'); activateArrow('c-arrow-3');
+    setStep(4, 'RingBuf 层：memcpy 到共享内存，原子更新 write_pos');
+    activateLayer('c-ring'); showPacket('ring'); movePacketTo('c-ring');
+    await sleep(600); deactivateArrow('c-arrow-3');
+    log('<span class="fn">memcpy</span>(base + phys_w, data, <span class="val">4112</span>)');
+    await sleep(400);
+    log('write_pos.<span class="fn">store</span>(<span class="val">4112</span>, <span class="op">memory_order_release</span>)');
+    writePos = FRAME_SIZE; updateRing();
+    await sleep(800);
+
+    deactivateLayer('c-ring');
+    setStep(5, '共享内存中数据就绪，eventfd 通知 Server');
+    document.getElementById('shmBox').classList.add('active');
+    hidePacket();
+    await sleep(400);
+    log('<span class="fn">NotifyPeer</span>() &#8594; write(eventfd, 1)');
+    document.getElementById('evtArrow').classList.add('active');
+    await sleep(400);
+    var re = document.getElementById('ringData');
+    re.style.stroke = '#c084fc'; await sleep(300);
+    re.style.stroke = '#a855f7'; await sleep(300);
+    re.style.stroke = '#c084fc'; await sleep(300);
+    re.style.stroke = '#a855f7'; await sleep(600);
+
+    document.getElementById('shmBox').classList.remove('active');
+    setStep(6, 'EventLoop：poll 检测到 eventfd POLLIN，触发回调');
+    activateLayer('s-evt');
+    await sleep(500);
+    log('<span class="fn">poll</span>() &#8594; eventfd <span class="val">POLLIN</span>');
+    await sleep(400);
+    log('<span class="fn">DrainNotify</span>(efd) <span class="note">// read eventfd counter</span>');
+    document.getElementById('evtArrow').classList.remove('active');
+    await sleep(400);
+    log('&#8594; callback: <span class="fn">OnClientNotify</span>()');
+    await sleep(800);
+
+    deactivateLayer('s-evt'); activateArrow('s-arrow-2');
+    setStep(7, 'RingBuf 层：Peek 返回共享内存指针（零拷贝）');
+    activateLayer('s-ring');
+    document.getElementById('shmBox').classList.add('active');
+    showPacket('peek'); teleportPacketTo('shmBox');
+    await sleep(300); movePacketTo('s-ring');
+    await sleep(600); deactivateArrow('s-arrow-2');
+    log('<span class="fn">Ring::Peek</span>(shm, &seg1, &seg1_len, &seg2, &seg2_len)');
+    await sleep(400);
+    log('  seg1 = base + <span class="val">0</span>, seg1_len = <span class="val">4112</span>');
+    await sleep(300);
+    log('  seg2 = nullptr <span class="note">// 无回绕</span>');
+    await sleep(300);
+    log('  <span class="note">// 零拷贝：直接返回 mmap 区域指针</span>');
+    document.getElementById('shmBox').classList.remove('active');
+    await sleep(800);
+
+    deactivateLayer('s-ring'); activateArrow('s-arrow-3');
+    setStep(8, 'Codec 层：FrameReader.TryRecv 解析帧头 + payload');
+    activateLayer('s-codec'); showPacket('decoded'); movePacketTo('s-codec');
+    await sleep(600); deactivateArrow('s-arrow-3');
+    log('<span class="fn">FrameReader::TryRecv</span>(ch, &tag, &payload, &len)');
+    await sleep(400);
+    log('  &#8594; MsgHeader{len=<span class="val">4104</span>, seq=<span class="val">42</span>}');
+    await sleep(300);
+    log('  &#8594; tag = <span class="val">0x434C4D47</span> (CLMG)');
+    await sleep(300);
+    log('  &#8594; payload* = seg1 + 12, len = <span class="val">4100</span>');
+    await sleep(400);
+    log('<span class="fn">CommitRead</span>(<span class="val">4112</span>) <span class="note">// 推进 read_pos</span>');
+    readPos = FRAME_SIZE; updateRing();
+    await sleep(800);
+
+    deactivateLayer('s-codec'); activateArrow('s-arrow-4');
+    setStep(9, 'Application 层：DecodePod 还原 ClientMsg');
+    activateLayer('s-app'); showPacket('result'); movePacketTo('s-app');
+    await sleep(600); deactivateArrow('s-arrow-4');
+    log('<span class="fn">DecodePod</span>&lt;ClientMsg&gt;(payload, 4100, &msg)');
+    await sleep(400);
+    log('  msg.seq = <span class="val">42</span> &#10003;');
+    await sleep(300);
+    log('  msg.payload_len = <span class="val">256</span> &#10003;');
+    await sleep(300);
+    log('<span class="op">&#10003; TRANSMISSION COMPLETE</span>');
+    await sleep(1200);
+
+    deactivateAll(); hidePacket();
+    setStep('&#10003;', 'TRANSMISSION COMPLETE — 数据包已成功从 Client 传输到 Server');
+    await sleep(1500);
+    animating = false;
+    document.getElementById('btnPlay').disabled = false;
+}
+
+function setSpeed(s) {
+    speed = s;
+    document.querySelectorAll('.btn-speed').forEach(function(b) { b.classList.remove('active'); });
+    if (s === 1.8) document.getElementById('btnSlow').classList.add('active');
+    else if (s === 1) document.getElementById('btnNormal').classList.add('active');
+    else document.getElementById('btnFast').classList.add('active');
+}
+
+updateRing();
+</script>
+</body>
+</html>
