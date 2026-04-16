@@ -2,16 +2,16 @@
  * @file bench_batch.cpp
  * @brief 批量写入 vs 逐条写入 对比基准测试
  *
- * 使用 fork() + socketpair()：子进程为读端（忙轮询零拷贝消费），
+ * 使用 fork() + socketpair()：子进程为读端（忙轮询消费），
  * 父进程为写端（测量写入吞吐量）。
  *
  * 对于每组 (msg_size, batch_size)，先跑逐条写入基线，再跑批量写入，
  * 最后输出对比表格。
  *
  * 原子操作分析：
- * - 逐条 TryWrite：每条消息 3 次（load write_pos + load read_pos + store write_pos）
+ * - 逐条 TryWrite：每次写入 3 次（load write_pos + load read_pos + store write_pos）
  * - 批量 BatchWriter：每批仅 2 次（构造时 load write_pos + load read_pos，
- *   Flush 时 store write_pos），不论批内多少条消息
+ *   Flush 时 store write_pos），不论批内多少次写入
  */
 
 #include <shm_ipc/ring_channel.hpp>
@@ -89,6 +89,13 @@ struct Result
     double batch_ns;    ///< 批量写入：每条消息平均耗时 (ns)
 };
 
+/// 读端控制命令（通过 ctrl pipe 传送）
+struct ReadCmd
+{
+    int32_t count;    ///< 待消费的消息数（0 表示退出）
+    uint32_t msg_len; ///< 每条消息的字节长度
+};
+
 // ---------------------------------------------------------------------------
 // 写入函数
 // ---------------------------------------------------------------------------
@@ -98,7 +105,7 @@ void WriteSingle(Channel &ch, const char *buf, uint32_t msg_len, int total)
 {
     for (int i = 0; i < total; ++i)
     {
-        while (ch.TryWrite(buf, msg_len, static_cast<uint32_t>(i)) != 0)
+        while (ch.TryWrite(buf, msg_len) != 0)
             ;
     }
 }
@@ -114,7 +121,7 @@ void WriteBatch(Channel &ch, const char *buf, uint32_t msg_len, int total,
             auto batch = ch.StartBatch();
             for (int n = 0; n < batch_size && sent < total; ++n)
             {
-                if (batch.TryWrite(buf, msg_len, static_cast<uint32_t>(sent)) != 0)
+                if (batch.TryWrite(buf, msg_len) != 0)
                     break;
                 ++sent;
             }
@@ -129,28 +136,25 @@ void WriteBatch(Channel &ch, const char *buf, uint32_t msg_len, int total,
 /**
  * @brief 读端：忙轮询消费 count 条消息
  *
- * 每组测试由写端通过管道发来待消费的消息总数，0 表示退出。
+ * 每组测试由写端通过管道发来 ReadCmd，count=0 表示退出。
  */
 void RunReader(int socket_fd, int ctrl_fd)
 {
-    auto ch = Channel::Accept(socket_fd);
+    auto ch  = Channel::Accept(socket_fd);
+    auto buf = std::make_unique<char[]>(Channel::max_write_size);
 
     for (;;)
     {
-        int32_t count = 0;
-        if (::read(ctrl_fd, &count, sizeof(count)) != sizeof(count))
+        ReadCmd cmd{};
+        if (::read(ctrl_fd, &cmd, sizeof(cmd)) != sizeof(cmd))
             break;
-        if (count <= 0)
+        if (cmd.count <= 0)
             break;
 
-        for (int32_t i = 0; i < count; ++i)
+        for (int32_t i = 0; i < cmd.count; ++i)
         {
-            const void *data = nullptr;
-            uint32_t len     = 0;
-            uint32_t seq     = 0;
-            while (ch.PeekRead(&data, &len, &seq) != 0)
+            while (ch.ReadExact(buf.get(), cmd.msg_len) != 0)
                 ;
-            ch.CommitRead(len);
         }
 
         // 告知写端本轮读取完成
@@ -167,9 +171,10 @@ void RunReader(int socket_fd, int ctrl_fd)
 // 写端辅助：请求读端消费 count 条消息，并等待确认
 // ---------------------------------------------------------------------------
 
-void RequestRead(int ctrl_fd, int32_t count)
+void RequestRead(int ctrl_fd, int32_t count, uint32_t msg_len)
 {
-    (void)::write(ctrl_fd, &count, sizeof(count));
+    ReadCmd cmd{count, msg_len};
+    (void)::write(ctrl_fd, &cmd, sizeof(cmd));
 }
 
 void WaitReadDone(int ctrl_fd)
@@ -199,12 +204,12 @@ BenchOne(Channel &ch, int ctrl_fd, const TestParam &p, const char *buf)
     for (int rep = 0; rep < kRepeat; ++rep)
     {
         // 预热
-        RequestRead(ctrl_fd, warmup);
+        RequestRead(ctrl_fd, warmup, msg_len);
         WriteSingle(ch, buf, msg_len, warmup);
         WaitReadDone(ctrl_fd);
 
         // 正式
-        RequestRead(ctrl_fd, total);
+        RequestRead(ctrl_fd, total, msg_len);
         uint64_t t0 = NowNs();
         WriteSingle(ch, buf, msg_len, total);
         uint64_t elapsed = NowNs() - t0;
@@ -219,12 +224,12 @@ BenchOne(Channel &ch, int ctrl_fd, const TestParam &p, const char *buf)
     for (int rep = 0; rep < kRepeat; ++rep)
     {
         // 预热
-        RequestRead(ctrl_fd, warmup);
+        RequestRead(ctrl_fd, warmup, msg_len);
         WriteBatch(ch, buf, msg_len, warmup, p.batch_size);
         WaitReadDone(ctrl_fd);
 
         // 正式
-        RequestRead(ctrl_fd, total);
+        RequestRead(ctrl_fd, total, msg_len);
         uint64_t t0 = NowNs();
         WriteBatch(ch, buf, msg_len, total, p.batch_size);
         uint64_t elapsed = NowNs() - t0;
@@ -240,8 +245,8 @@ BenchOne(Channel &ch, int ctrl_fd, const TestParam &p, const char *buf)
 void RunWriter(int socket_fd, int ctrl_fd)
 {
     auto ch  = Channel::Connect(socket_fd);
-    auto buf = std::make_unique<char[]>(Channel::max_msg_size);
-    std::memset(buf.get(), 'B', Channel::max_msg_size);
+    auto buf = std::make_unique<char[]>(Channel::max_write_size);
+    std::memset(buf.get(), 'B', Channel::max_write_size);
 
     std::vector<Result> results;
     results.reserve(kParams.size());
@@ -259,8 +264,8 @@ void RunWriter(int socket_fd, int ctrl_fd)
     }
 
     // 通知读端退出
-    int32_t zero = 0;
-    (void)::write(ctrl_fd, &zero, sizeof(zero));
+    ReadCmd quit{0, 0};
+    (void)::write(ctrl_fd, &quit, sizeof(quit));
 
     // ---- 输出 Markdown 报告到 stdout ----
 
@@ -269,7 +274,7 @@ void RunWriter(int socket_fd, int ctrl_fd)
     std::printf("## 测试环境\n\n");
     std::printf("- Linux, GCC, `-O2`\n");
     std::printf("- `fork()` + `socketpair()` 进程隔离\n");
-    std::printf("- 单向写入：写端尽速写入，读端忙轮询零拷贝消费（`PeekRead`/`CommitRead`）\n");
+    std::printf("- 单向写入：写端尽速写入，读端忙轮询消费（`ReadExact`）\n");
     std::printf("- 每组重复 %d 次取最小值，每次预热 %d 条\n", kRepeat, kWarmup);
     std::printf("- Ring 容量：%zuMB\n\n",
                 Channel::Ring::capacity / (1024 * 1024));
@@ -301,13 +306,13 @@ void RunWriter(int socket_fd, int ctrl_fd)
     // ---- 分析 ----
 
     std::printf("\n## 原子操作开销模型\n\n");
-    std::printf("| 写入方式 | 每条消息原子操作数 | N 条消息总计 |\n");
+    std::printf("| 写入方式 | 每次写入原子操作数 | N 次写入总计 |\n");
     std::printf("|---------|-------------------|-------------|\n");
     std::printf("| 逐条 `TryWrite` | 3（load w + load r + store w） | 3N |\n");
     std::printf("| `BatchWriter`(batch=B) | 2/B（构造 load w+r，Flush store w） | 2 * ceil(N/B) |\n\n");
 
     std::printf("其中 `read_pos` 的 acquire load 开销最高——它可能触发 CPU 缓存行从读端核心迁移到写端核心。\n");
-    std::printf("批量写入将这一跨核操作从每条消息一次降为每批一次，是性能提升的核心来源。\n\n");
+    std::printf("批量写入将这一跨核操作从每次写入一次降为每批一次，是性能提升的核心来源。\n\n");
 
     // 按 msg_size 分组找最佳 batch_size
     std::printf("## 各消息大小最优配置\n\n");
@@ -384,7 +389,7 @@ void RunWriter(int socket_fd, int ctrl_fd)
 
     std::printf("## 结论\n\n");
     std::printf("1. **批量写入在所有消息大小下均优于逐条写入**。"
-                "核心原因是将 `read_pos` 的跨核 acquire load 从每条一次降为每批一次。\n");
+                "核心原因是将 `read_pos` 的跨核 acquire load 从每次一次降为每批一次。\n");
     std::printf("2. **小消息（64B~256B）收益最大**。"
                 "原子操作开销在总耗时中占比最高，批量化后延迟大幅下降。\n");
     std::printf("3. **batch_size 越大越快，但收益递减**。"

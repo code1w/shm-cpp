@@ -2,7 +2,7 @@
  * @file ring_channel.hpp
  * @brief 双向共享内存环形通道（C++17）
  *
- * 封装一对字节环形缓冲区（一写一读），并包含 memfd 创建、
+ * 封装一对字节流环形缓冲区（一写一读），并包含 memfd 创建、
  * eventfd 创建及 fd 交换握手逻辑。
  *
  * 通知机制：每个方向拥有一个共享 eventfd。读方创建后通过
@@ -122,55 +122,55 @@ class RingChannel
     // ---- 数据操作 ----
 
     /**
-     * @brief 尝试写入消息
-     * @param data payload 数据
-     * @param len  payload 长度
-     * @param seq  消息序列号
-     * @return 0 成功，-1 缓冲区满或消息过大
+     * @brief 尝试写入字节数据
+     * @param data 待写入数据
+     * @param len  数据长度（字节）
+     * @return 0 成功，-1 缓冲区满或数据过大
      */
-    int TryWrite(const void *data, uint32_t len, uint32_t seq)
+    int TryWrite(const void *data, uint32_t len)
     {
-        return Ring::TryWrite(write_region_.Get(), data, len, seq);
+        return Ring::TryWrite(write_region_.Get(), data, len);
     }
 
     /**
-     * @brief 强制写入：缓冲区满时丢弃最旧消息
-     * @param data payload 数据
-     * @param len  payload 长度
-     * @param seq  消息序列号
+     * @brief 读取最多 max_len 字节
+     * @param data    输出缓冲区
+     * @param max_len 最大读取字节数
+     * @return 实际读取的字节数（0 表示缓冲区为空）
      */
-    void ForceWrite(const void *data, uint32_t len, uint32_t seq)
+    uint32_t TryRead(void *data, uint32_t max_len)
     {
-        Ring::ForceWrite(write_region_.Get(), data, len, seq);
+        return Ring::TryRead(read_region_.Get(), data, max_len);
     }
 
     /**
-     * @brief 尝试读取一条消息
-     * @param data 输出缓冲区
-     * @param len  输出：payload 长度
-     * @param seq  输出：消息序列号
-     * @return 0 成功，-1 缓冲区为空
+     * @brief 精确读取 len 字节，数据不足时不消费任何字节
+     * @param data 输出缓冲区（至少 len 字节）
+     * @param len  需要读取的精确字节数
+     * @return 0 成功，-1 数据不足
      */
-    int TryRead(void *data, uint32_t *len, uint32_t *seq)
+    int ReadExact(void *data, uint32_t len)
     {
-        return Ring::TryRead(read_region_.Get(), data, len, seq);
+        return Ring::ReadExact(read_region_.Get(), data, len);
     }
 
     /**
-     * @brief 零拷贝读取（不推进 read_pos，需配合 CommitRead 使用）
-     * @param data 输出：指向环内 payload 的指针
-     * @param len  输出：payload 长度
-     * @param seq  输出：消息序列号
-     * @return 0 成功，-1 缓冲区为空
+     * @brief 两段式零拷贝 Peek
+     * @param seg1     输出：第一段数据指针
+     * @param seg1_len 输出：第一段长度
+     * @param seg2     输出：第二段数据指针（回绕部分）
+     * @param seg2_len 输出：第二段长度
+     * @return 0 有数据，-1 缓冲区为空
      */
-    int PeekRead(const void **data, uint32_t *len, uint32_t *seq)
+    int Peek(const void **seg1, uint32_t *seg1_len,
+             const void **seg2, uint32_t *seg2_len)
     {
-        return Ring::PeekRead(read_region_.Get(), data, len, seq);
+        return Ring::Peek(read_region_.Get(), seg1, seg1_len, seg2, seg2_len);
     }
 
     /**
-     * @brief 提交 PeekRead，推进 read_pos
-     * @param len PeekRead 返回的 payload 长度
+     * @brief 提交读取，推进 read_pos
+     * @param len 要推进的字节数
      */
     void CommitRead(uint32_t len) { Ring::CommitRead(read_region_.Get(), len); }
 
@@ -180,13 +180,13 @@ class RingChannel
      * @brief RAII 通道级批量写入器
      *
      * 封装 RingBuf::BatchWriter，Flush 时自动调用 NotifyPeer()。
-     * 将 N 条消息的原子操作从 3N 降至 2，eventfd 通知从 N 降至 1。
+     * 将 N 次写入的原子操作从 3N 降至 2，eventfd 通知从 N 降至 1。
      *
      * @code
      * {
      *     auto batch = channel.StartBatch();
-     *     batch.TryWrite(data1, len1, seq1);
-     *     batch.TryWrite(data2, len2, seq2);
+     *     batch.TryWrite(data1, len1);
+     *     batch.TryWrite(data2, len2);
      *     batch.Flush();  // store write_pos + NotifyPeer()
      * }
      * @endcode
@@ -211,20 +211,19 @@ class RingChannel
         ChannelBatchWriter &operator=(const ChannelBatchWriter &) = delete;
 
         /**
-         * @brief 尝试写入一条消息（不触发原子 store 和通知）
-         * @param data payload 数据
-         * @param len  payload 长度
-         * @param seq  消息序列号
-         * @return 0 成功，-1 空间不足或消息过大
+         * @brief 尝试写入一段数据（不触发原子 store 和通知）
+         * @param data 待写入数据
+         * @param len  数据长度（字节）
+         * @return 0 成功，-1 空间不足或数据过大
          */
-        int TryWrite(const void *data, uint32_t len, uint32_t seq)
+        int TryWrite(const void *data, uint32_t len)
         {
-            return batch_.TryWrite(data, len, seq);
+            return batch_.TryWrite(data, len);
         }
 
         /**
          * @brief 发布所有累积写入并通知对端
-         * @return 自上次 Flush 以来写入的消息条数
+         * @return 自上次 Flush 以来的 TryWrite 成功调用次数
          */
         int Flush()
         {
@@ -234,8 +233,11 @@ class RingChannel
             return n;
         }
 
-        /** @brief 自上次 Flush 以来已写入的消息条数 */
+        /** @brief 自上次 Flush 以来已成功 TryWrite 的次数 */
         int Count() const noexcept { return batch_.Count(); }
+
+        /** @brief 当前可写入的剩余字节数 */
+        uint64_t FreeBytes() const noexcept { return batch_.FreeBytes(); }
 
      private:
         typename Ring::BatchWriter batch_;
@@ -255,14 +257,11 @@ class RingChannel
 
     // ---- 状态查询 ----
 
-    /** @brief 返回读环中已使用字节数 */
+    /** @brief 返回读环中可读字节数 */
     uint64_t Readable() const { return Ring::Available(read_region_.Get()); }
 
     /** @brief 返回写环中剩余可写字节数 */
-    uint64_t WritableBytes() const
-    {
-        return Capacity - Ring::Available(write_region_.Get());
-    }
+    uint64_t WritableBytes() const { return Ring::FreeSpace(write_region_.Get()); }
 
     // ---- 通知 ----
 
@@ -303,8 +302,8 @@ class RingChannel
         return v;
     }
 
-    /// @brief 单条消息 payload 最大长度
-    static constexpr std::size_t max_msg_size = Ring::max_msg_size;
+    /// @brief 单次写入最大字节数
+    static constexpr std::size_t max_write_size = Ring::max_write_size;
 
  private:
     /// @brief 设置握手阶段 socket 收发超时（5秒），防止半连接阻塞
@@ -326,7 +325,7 @@ class RingChannel
     UniqueFd notify_read_efd_;   ///< 对端写入此 eventfd 以唤醒自身
 };
 
-/// @brief 默认配置别名（8MB 环，~4MB 最大消息）
+/// @brief 默认配置别名（8MB 环）
 using DefaultRingChannel = RingChannel<>;
 
 }  // namespace shm_ipc

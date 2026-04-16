@@ -6,8 +6,6 @@
 #ifndef SHM_IPC_CLIENT_STATE_HPP_
 #define SHM_IPC_CLIENT_STATE_HPP_
 
-#include <memory>
-
 #include "ring_channel.hpp"
 
 namespace shm_ipc {
@@ -30,7 +28,6 @@ struct ClientState
     int notify_efd = -1;               ///< 对端写入通知的 eventfd（缓存自 channel）
     int tick       = 0;                ///< 定时器 tick 计数（server 端使用）
     int total_read = 0;                ///< 累计读取消息数
-    std::unique_ptr<char[]> read_buf;  ///< 消息读取缓冲区
 };
 
 }  // namespace shm_ipc

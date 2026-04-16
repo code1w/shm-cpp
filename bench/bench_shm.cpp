@@ -52,27 +52,26 @@ constexpr std::array<TestCase, 6> kTests = {{
 constexpr int kWarmup = 1000; ///< 预热轮次
 
 /**
- * @brief 服务端运行逻辑：零拷贝读后立即回写
+ * @brief 服务端运行逻辑：读取消息后立即回写
  * @param socket_fd 与客户端共享的 socket fd
  */
 void RunServer(int socket_fd)
 {
     auto channel = Channel::Accept(socket_fd);
+    auto buf     = std::make_unique<char[]>(Channel::max_write_size);
 
     for (auto& tc : kTests)
     {
+        auto msg_len = static_cast<uint32_t>(tc.msg_size);
         int total = kWarmup + tc.rounds;
         for (int i = 0; i < total; ++i)
         {
-            // 零拷贝读：直接获取环形缓冲区内的指针
-            const void* data = nullptr;
-            uint32_t    len  = 0;
-            uint32_t    seq  = 0;
-            while (channel.PeekRead(&data, &len, &seq) != 0)
+            // 等待完整消息到达
+            while (channel.ReadExact(buf.get(), msg_len) != 0)
                 ;
-            // 直接从读环写到写环（仅 1 次 memcpy）
-            channel.TryWrite(data, len, seq);
-            channel.CommitRead(len);
+            // 回写
+            while (channel.TryWrite(buf.get(), msg_len) != 0)
+                ;
         }
     }
 
@@ -90,9 +89,9 @@ void RunServer(int socket_fd)
 void RunClient(int socket_fd)
 {
     auto channel  = Channel::Connect(socket_fd);
-    auto send_buf = std::make_unique<char[]>(Channel::max_msg_size);
-    auto recv_buf = std::make_unique<char[]>(Channel::max_msg_size);
-    std::memset(send_buf.get(), 'B', Channel::max_msg_size);
+    auto send_buf = std::make_unique<char[]>(Channel::max_write_size);
+    auto recv_buf = std::make_unique<char[]>(Channel::max_write_size);
+    std::memset(send_buf.get(), 'B', Channel::max_write_size);
 
     std::printf("=== Shared Memory Echo Benchmark ===\n");
     std::printf("%10s %10s %12s %14s %16s\n",
@@ -105,10 +104,8 @@ void RunClient(int socket_fd)
         // 预热
         for (int i = 0; i < kWarmup; ++i)
         {
-            channel.TryWrite(send_buf.get(), msg_len, static_cast<uint32_t>(i));
-            uint32_t len = 0;
-            uint32_t seq = 0;
-            while (channel.TryRead(recv_buf.get(), &len, &seq) != 0)
+            channel.TryWrite(send_buf.get(), msg_len);
+            while (channel.ReadExact(recv_buf.get(), msg_len) != 0)
                 ;
         }
 
@@ -116,10 +113,8 @@ void RunClient(int socket_fd)
         uint64_t t0 = NowNs();
         for (int i = 0; i < tc.rounds; ++i)
         {
-            channel.TryWrite(send_buf.get(), msg_len, static_cast<uint32_t>(i));
-            uint32_t len = 0;
-            uint32_t seq = 0;
-            while (channel.TryRead(recv_buf.get(), &len, &seq) != 0)
+            channel.TryWrite(send_buf.get(), msg_len);
+            while (channel.ReadExact(recv_buf.get(), msg_len) != 0)
                 ;
         }
         uint64_t elapsed_ns = NowNs() - t0;

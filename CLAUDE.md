@@ -1,5 +1,7 @@
 # CLAUDE.md
 
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
 ## Project Overview
 
 shm-cpp is a high-performance Linux IPC library using lock-free SPSC byte ring buffers over shared memory. It provides zero-copy message passing for variable-length messages (1B to ~4MB). Header-only, C++17, Linux-only.
@@ -12,21 +14,23 @@ cmake .. -DCMAKE_BUILD_TYPE=Release
 make -j$(nproc)
 ```
 
-Produces: `server`, `client`, `bench_shm`, `bench_socket`, `test_codec`.
+Produces: `server`, `client`, `bench_shm`, `bench_socket`, `bench_batch`, `test_codec`, `test_ringbuf_wrap`.
 
 ## Run Tests
 
 ```bash
 ./build/test_codec
+./build/test_ringbuf_wrap
 ```
 
-No test framework — tests use `assert()` and print `=== TEST PASSED ===` on success. The test forks a child process (sender) and uses socketpair for IPC.
+No test framework — tests use `assert()` and print `=== TEST PASSED ===` on success. `test_codec` forks a child process (sender) and uses socketpair for IPC.
 
 ## Run Benchmarks
 
 ```bash
 ./build/bench_shm      # shared memory echo ping-pong
 ./build/bench_socket    # unix socket echo ping-pong (baseline)
+./build/bench_batch     # batch write throughput
 ```
 
 ## Architecture
@@ -55,7 +59,7 @@ Namespace: `shm_ipc`. Default ring capacity: 8MB (template parameter).
   - Allman brace style (braces on new lines)
   - PascalCase for classes, structs, and functions (e.g. `TryWrite`, `CreateMemfd`)
   - snake_case for variables; class members have trailing `_` (e.g. `fd_`, `write_pos`)
-  - Constants: `k` + PascalCase (e.g. `kSentinel`, `kMaxClients`)
+  - Constants: `k` + PascalCase (e.g. `kMaxClients`)
   - Globals: `g` + PascalCase (e.g. `gLoop`, `gReaders`)
   - Namespaces: lowercase (e.g. `shm_ipc`)
 - **Include guards**: `#ifndef SHM_IPC_<FILE>_HPP_` / `#define` / `#endif`
@@ -75,5 +79,5 @@ None beyond Linux system headers. No third-party libraries.
 - `poll` (not `epoll`) — max 16 clients, poll is simpler and sufficient
 - `timerfd` (not SIGALRM) — per-client independent timers, works with poll
 - Ring capacity must be power of 2 (bitmask for physical offset)
-- Max single message = Capacity/2 - 8 bytes (guarantees write always succeeds after sentinel)
-- 8-byte aligned message frames with sentinel-based wrap-around
+- Max single message = Capacity/2 (guarantees contiguous free space always available)
+- Pure byte-stream ring buffer — no framing at ringbuf layer; codec layer adds type-tagged frames on top
