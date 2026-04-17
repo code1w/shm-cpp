@@ -10,7 +10,10 @@
 #define SHM_IPC_CODEC_INTERFACE_HPP_
 
 #include <cstdint>
+#include <memory>
 #include <string>
+
+#include "ring_channel.hpp"
 
 namespace shm {
 
@@ -74,6 +77,30 @@ class ICodec
      */
     virtual bool DecodePayload(const void *payload, uint32_t payload_len,
                                const void **data, uint32_t *data_len) = 0;
+
+    /**
+     * @brief 从 RingChannel 中读取一帧并反序列化到 out
+     *
+     * @param ch   双向环形通道（DefaultRingChannel）
+     * @param out  输出对象指针（由实现类解释具体类型）
+     * @return 0 成功，非 0 无数据或错误
+     */
+    virtual int Recv(DefaultRingChannel &ch, void *out) = 0;
+
+    /**
+     * @brief 编码消息并写入 RingChannel，成功后通知对端
+     *
+     * @param ch   双向环形通道（DefaultRingChannel）
+     * @param msg  消息指针（由实现类解释具体类型）
+     * @param seq  消息序列号
+     * @return 0 成功，-1 空间不足
+     */
+    virtual int Send(DefaultRingChannel &ch, const void *msg, uint32_t seq) = 0;
+
+    /**
+     * @brief 提交上一帧的读取，推进 read_pos
+     */
+    virtual void Commit(DefaultRingChannel &ch) = 0;
 };
 
 }  // namespace shm

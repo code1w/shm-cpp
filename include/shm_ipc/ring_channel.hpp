@@ -239,6 +239,12 @@ class RingChannel
         /** @brief 当前可写入的剩余字节数 */
         uint64_t FreeBytes() const noexcept { return batch_.FreeBytes(); }
 
+        /** @brief 预留连续写入区域，不跨环尾时返回直写指针 */
+        char *Reserve(uint32_t len) { return batch_.Reserve(len); }
+
+        /** @brief 提交 Reserve 预留的写入 */
+        void CommitReserve(uint32_t len) { batch_.CommitReserve(len); }
+
      private:
         typename Ring::BatchWriter batch_;
         const RingChannel *channel_;

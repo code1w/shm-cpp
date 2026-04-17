@@ -231,6 +231,39 @@ class RingBuf
         /** @brief 当前可写入的剩余字节数 */
         uint64_t FreeBytes() const noexcept { return Capacity - (w_ - r_); }
 
+        /**
+         * @brief 预留 len 字节连续写入区域，返回直写指针
+         *
+         * 仅当写入区域不跨越环尾时成功，返回指向 ring 数据区的指针。
+         * 调用者必须在返回非空指针后自行填充数据，然后调用 CommitReserve(len)。
+         * 空间不足或跨环尾时返回 nullptr，调用者应回退到 TryWrite。
+         *
+         * @param len 请求字节数
+         * @return 非空 = 可直接写入的指针；nullptr = 不可用（跨环尾或空间不足）
+         */
+        char *Reserve(uint32_t len)
+        {
+            if (len == 0 || len > max_write_size)
+                return nullptr;
+            if ((w_ + len) - r_ > Capacity)
+                return nullptr;
+            std::size_t phys_w = Mask(w_);
+            std::size_t tail   = Capacity - phys_w;
+            if (len > tail)
+                return nullptr;  // 跨环尾，调用者应回退
+            return base_ + phys_w;
+        }
+
+        /**
+         * @brief 提交 Reserve 预留的写入
+         * @param len 与 Reserve 调用时相同的长度
+         */
+        void CommitReserve(uint32_t len)
+        {
+            w_ += len;
+            ++count_;
+        }
+
      private:
         RingHeader *hdr_;
         char *base_;

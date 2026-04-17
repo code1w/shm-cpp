@@ -35,7 +35,7 @@ void TestEncodeDecodeBuffer()
     hb.set_timestamp(1234567890);
 
     char buf[1024]{};
-    uint32_t frame_size = shm::EncodeProto(hb, buf, sizeof(buf), 7);
+    uint32_t frame_size = shm::ProtoCodec<shm_ipc::HeartbeatProto>::EncodeTo(hb, buf, sizeof(buf), 7);
     assert(frame_size > 0);
 
     // 解码帧头
@@ -44,7 +44,7 @@ void TestEncodeDecodeBuffer()
     const void *payload = nullptr;
     uint32_t payload_len = 0;
     uint32_t seq = 0;
-    bool ok = shm::DecodeProtoHeader(buf, frame_size,
+    bool ok = shm::ProtoCodec<shm_ipc::HeartbeatProto>::DecodeHeader(buf, frame_size,
                                      &type_name, &type_name_len,
                                      &payload, &payload_len, &seq);
     assert(ok);
@@ -55,7 +55,7 @@ void TestEncodeDecodeBuffer()
 
     // 反序列化
     shm_ipc::HeartbeatProto out;
-    ok = shm::DecodeProto(payload, payload_len, &out);
+    ok = shm::ProtoCodec<shm_ipc::HeartbeatProto>::DecodeFrom(payload, payload_len, &out);
     assert(ok);
     assert(out.client_id() == 42);
     assert(out.seq() == 100);
@@ -137,7 +137,7 @@ void TestSendRecvViaRing()
         hb.set_client_id(1);
         hb.set_seq(42);
         hb.set_timestamp(12345);
-        rc = shm::SendProto(ch, hb, 10);
+        rc = shm::ProtoCodec<shm_ipc::HeartbeatProto>::Send(ch, hb, 10);
         assert(rc == 0);
 
         shm_ipc::ClientMsgProto cm;
@@ -145,7 +145,7 @@ void TestSendRecvViaRing()
         cm.set_tick(3);
         cm.set_timestamp(99999);
         cm.set_payload(std::string(128, 'X'));
-        rc = shm::SendProto(ch, cm, 11);
+        rc = shm::ProtoCodec<shm_ipc::ClientMsgProto>::Send(ch, cm, 11);
         assert(rc == 0);
 
         // 等 parent 读完

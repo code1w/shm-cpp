@@ -536,7 +536,7 @@ void TestCodecWrap()
 
         char enc[frame_size];
         uint32_t seq_in = tail * 100;
-        if (shm::EncodePod(hb, enc, frame_size, seq_in) != frame_size)
+        if (shm::PodCodec<Heartbeat>::EncodeTo(hb, enc, frame_size, seq_in) != frame_size)
         {
             std::fprintf(stderr, "FAIL: Encode tail=%u\n", tail);
             std::abort();
@@ -570,7 +570,7 @@ void TestCodecWrap()
         // payload = [tag u32][Heartbeat bytes], 跳过 tag
         const void *pod_data = static_cast<const char *>(dec_payload) + shm::kTagSize;
         uint32_t pod_len = dec_payload_len - shm::kTagSize;
-        if (!shm::DecodePod<Heartbeat>(pod_data, pod_len, &out))
+        if (!shm::PodCodec<Heartbeat>::DecodeFrom(pod_data, pod_len, &out))
         {
             std::fprintf(stderr, "FAIL: Decode tail=%u\n", tail);
             std::abort();

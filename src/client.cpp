@@ -46,14 +46,12 @@ shm::EventLoop *gLoop = nullptr;
 /// 是否使用 protobuf 编解码
 bool gUseProto = false;
 
-/// 全局 PodCodec 实例
+/// 全局 PodCodec 实例（写方向）
 shm::PodCodec<ClientMsg>  gClientMsgCodec;
-shm::PodCodec<Heartbeat>  gHeartbeatCodec;
 
 #ifdef SHM_IPC_HAS_PROTOBUF
-/// 全局 ProtoCodec 实例
+/// 全局 ProtoCodec 实例（写方向）
 shm::ProtoCodec<shm_ipc::ClientMsgProto>  gProtoClientMsgCodec;
-shm::ProtoCodec<shm_ipc::HeartbeatProto>  gProtoHeartbeatCodec;
 #endif
 
 void SignalHandler(int /*signo*/)
@@ -68,6 +66,25 @@ struct WriteStats
     int ok   = 0;
     int full = 0;
 };
+
+// ---------------------------------------------------------------------------
+// 打印重载
+// ---------------------------------------------------------------------------
+
+void PrintHeartbeat(const Heartbeat &hb)
+{
+    std::printf("client: heartbeat [client_id=%d seq=%d ts=%ld]\n",
+                hb.client_id, hb.seq, static_cast<long>(hb.timestamp));
+}
+
+#ifdef SHM_IPC_HAS_PROTOBUF
+void PrintHeartbeat(const shm_ipc::HeartbeatProto &hb)
+{
+    std::printf("client: heartbeat [client_id=%d seq=%d ts=%ld] (proto)\n",
+                hb.client_id(), hb.seq(),
+                static_cast<long>(hb.timestamp()));
+}
+#endif
 
 // ---------------------------------------------------------------------------
 // 辅助函数
@@ -155,43 +172,31 @@ void OnWriteTimer(int tfd, shm::ClientState &cs, shm::EventLoop &loop,
 }
 
 /**
- * @brief Eventfd 回调：服务端向读环写入新数据，流式拆包 Heartbeat
+ * @brief Eventfd 回调：服务端向读环写入新数据，读取心跳
  */
-void OnServerNotify(int efd, shm::ClientState &cs,
-                    shm::CodecReader<> &reader)
+void OnServerNotify(int efd, shm::ClientState &cs)
 {
     Channel::DrainNotify(efd);
 
 #ifdef SHM_IPC_HAS_PROTOBUF
     if (gUseProto)
     {
-        const void *data = nullptr;
-        uint32_t data_len = 0;
-        while (reader.TryRecv(cs.channel, &data, &data_len) == 0)
+        shm_ipc::HeartbeatProto hb{};
+        while (cs.codec->Recv(cs.channel, &hb) == 0)
         {
-            shm_ipc::HeartbeatProto hb;
-            if (hb.ParseFromArray(data, static_cast<int>(data_len)))
-            {
-                std::printf("client: heartbeat [client_id=%d seq=%d ts=%ld] (proto)\n",
-                            hb.client_id(), hb.seq(),
-                            static_cast<long>(hb.timestamp()));
-            }
+            PrintHeartbeat(hb);
             ++cs.total_read;
+            hb = shm_ipc::HeartbeatProto{};
         }
         return;
     }
 #endif
-
-    const void *data = nullptr;
-    uint32_t data_len = 0;
-    while (reader.TryRecv(cs.channel, &data, &data_len) == 0)
+    Heartbeat hb{};
+    while (cs.codec->Recv(cs.channel, &hb) == 0)
     {
-        Heartbeat hb{};
-        if (data_len == sizeof(Heartbeat))
-            std::memcpy(&hb, data, sizeof(Heartbeat));
-        std::printf("client: heartbeat [client_id=%d seq=%d ts=%ld]\n",
-                    hb.client_id, hb.seq, static_cast<long>(hb.timestamp));
+        PrintHeartbeat(hb);
         ++cs.total_read;
+        hb = Heartbeat{};
     }
 }
 
@@ -326,6 +331,14 @@ int main(int argc, char *argv[])
 
         cs.channel    = Channel::Connect(cs.socket_fd.Get());
         cs.notify_efd = cs.channel.NotifyReadFd();
+
+#ifdef SHM_IPC_HAS_PROTOBUF
+        if (gUseProto)
+            cs.codec = std::make_unique<shm::ProtoCodec<shm_ipc::HeartbeatProto>>();
+        else
+#endif
+            cs.codec = std::make_unique<shm::PodCodec<Heartbeat>>();
+
         std::printf("client: ring channel established (capacity=%zuMB, "
                     "eventfd notify)\n\n",
                     Channel::Ring::capacity / (1024 * 1024));
@@ -334,13 +347,6 @@ int main(int argc, char *argv[])
         gLoop = &loop;
 
         WriteStats stats;
-#ifdef SHM_IPC_HAS_PROTOBUF
-        shm::CodecReader<> hb_reader{gUseProto
-            ? static_cast<shm::ICodec *>(&gProtoHeartbeatCodec)
-            : static_cast<shm::ICodec *>(&gHeartbeatCodec)};
-#else
-        shm::CodecReader<> hb_reader{&gHeartbeatCodec};
-#endif
 
         std::mt19937 rng{std::random_device{}()};
         std::uniform_int_distribution<uint32_t> len_dist(
@@ -355,7 +361,7 @@ int main(int argc, char *argv[])
         // 注册 eventfd 读取心跳
         loop.AddFd(cs.notify_efd,
             std::bind(OnServerNotify, std::placeholders::_1,
-                      std::ref(cs), std::ref(hb_reader)));
+                      std::ref(cs)));
 
         // 注册 socket 断连检测
         loop.AddFd(cs.socket_fd.Get(),

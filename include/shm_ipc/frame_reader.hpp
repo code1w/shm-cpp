@@ -10,7 +10,6 @@
 #include <cstring>
 
 #include "codec.hpp"
-#include "codec_interface.hpp"
 #include "ring_channel.hpp"
 
 namespace shm {
@@ -167,54 +166,6 @@ class FrameReader
             std::memcpy(dst + copied, s2 + s2_offset, len - copied);
         }
     }
-};
-
-// ===========================================================================
-// CodecReader — FrameReader + ICodec 组合读取器
-// ===========================================================================
-
-/**
- * @brief 组合 FrameReader 与 ICodec 的读取器
- *
- * FrameReader 提取 raw payload 后，通过 ICodec::DecodePayload 跳过类型前缀，
- * 返回纯数据部分。
- *
- * @tparam BufSize 回绕时的回退缓冲区大小，默认 64KB
- */
-template <uint32_t BufSize = 64 * 1024>
-class CodecReader : public FrameReader<BufSize>
-{
- public:
-    explicit CodecReader(ICodec *codec = nullptr) : codec_(codec) {}
-
-    /** @brief 设置/替换关联的编解码器 */
-    void SetCodec(ICodec *codec) { codec_ = codec; }
-
-    /**
-     * @brief 从 RingChannel 读取一帧并通过 ICodec 解码
-     *
-     * @tparam Cap RingChannel 容量
-     * @param ch               双向环形通道
-     * @param[out] data        解码后的数据指针（跳过类型前缀）
-     * @param[out] data_len    数据字节数
-     * @return 0 成功，-1 数据不足或解码失败，-2 帧过大
-     */
-    template <std::size_t Cap>
-    int TryRecv(RingChannel<Cap> &ch,
-                const void **data, uint32_t *data_len)
-    {
-        const void *payload = nullptr;
-        uint32_t payload_len = 0;
-        int rc = FrameReader<BufSize>::TryRecv(ch, &payload, &payload_len);
-        if (rc != 0)
-            return rc;
-        if (!codec_ || !codec_->DecodePayload(payload, payload_len, data, data_len))
-            return -1;
-        return 0;
-    }
-
- private:
-    ICodec *codec_;
 };
 
 }  // namespace shm

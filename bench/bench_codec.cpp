@@ -172,7 +172,7 @@ void BenchMemory()
                 for (int i = 0; i < tc.rounds; ++i)
                 {
                     msg.seq = i;
-                    auto n = shm::EncodePod(msg, pod_buf.get(), pod_frame_size,
+                    auto n = shm::PodCodec<ClientMsg>::EncodeTo(msg, pod_buf.get(), pod_frame_size,
                                        static_cast<uint32_t>(i));
                     DoNotOptimize(n);
                 }
@@ -181,7 +181,7 @@ void BenchMemory()
             }
 
             // --- DecodePod ---
-            shm::EncodePod(msg, pod_buf.get(), pod_frame_size, 0);
+            shm::PodCodec<ClientMsg>::EncodeTo(msg, pod_buf.get(), pod_frame_size, 0);
             const void *out_payload = nullptr;
             uint32_t out_len = 0;
             shm::Decode(pod_buf.get(), pod_frame_size,
@@ -197,7 +197,7 @@ void BenchMemory()
                 uint64_t t0 = NowNs();
                 for (int i = 0; i < tc.rounds; ++i)
                 {
-                    bool ok = shm::DecodePod<ClientMsg>(pod_data, pod_len, &out);
+                    bool ok = shm::PodCodec<ClientMsg>::DecodeFrom(pod_data, pod_len, &out);
                     DoNotOptimize(ok);
                     DoNotOptimize(out.seq);
                 }
@@ -388,7 +388,7 @@ void RunWriter(int socket_fd, int ctrl_fd)
                 for (int i = 0; i < kWarmup; ++i)
                 {
                     msg.seq = i;
-                    while (shm::SendPod(ch, msg, static_cast<uint32_t>(i)) != 0)
+                    while (shm::PodCodec<ClientMsg>::Send(ch, msg, static_cast<uint32_t>(i)) != 0)
                         ;
                 }
                 WaitReadDone(ctrl_fd);
@@ -398,7 +398,7 @@ void RunWriter(int socket_fd, int ctrl_fd)
                 for (int i = 0; i < tc.rounds; ++i)
                 {
                     msg.seq = i;
-                    while (shm::SendPod(ch, msg, static_cast<uint32_t>(i)) != 0)
+                    while (shm::PodCodec<ClientMsg>::Send(ch, msg, static_cast<uint32_t>(i)) != 0)
                         ;
                 }
                 uint64_t elapsed = NowNs() - t0;

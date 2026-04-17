@@ -45,18 +45,13 @@ using Channel     = shm::DefaultRingChannel;
 using ClientState = shm::ClientState;
 using Clients     = std::unordered_map<int, std::unique_ptr<ClientState>>;
 
-/// 全局 PodCodec 实例
-shm::PodCodec<ClientMsg>  gClientMsgCodec;
+/// 全局 PodCodec 实例（写方向）
 shm::PodCodec<Heartbeat>  gHeartbeatCodec;
 
 #ifdef SHM_IPC_HAS_PROTOBUF
-/// 全局 ProtoCodec 实例
-shm::ProtoCodec<shm_ipc::ClientMsgProto>  gProtoClientMsgCodec;
+/// 全局 ProtoCodec 实例（写方向）
 shm::ProtoCodec<shm_ipc::HeartbeatProto>  gProtoHeartbeatCodec;
 #endif
-
-/// 每客户端的 CodecReader（组合 FrameReader + ICodec）
-std::unordered_map<int, shm::CodecReader<>> gReaders;
 
 /// 全局事件循环指针，供信号处理器使用
 shm::EventLoop *gLoop = nullptr;
@@ -69,6 +64,24 @@ void SignalHandler(int /*signo*/)
     if (gLoop)
         gLoop->Stop();
 }
+
+// ---------------------------------------------------------------------------
+// 打印重载
+// ---------------------------------------------------------------------------
+
+void PrintMsg(int client_id, const ClientMsg &m)
+{
+    std::printf("server: client #%d [tick=%d payload_len=%u]\n",
+                client_id, m.tick, m.payload_len);
+}
+
+#ifdef SHM_IPC_HAS_PROTOBUF
+void PrintMsg(int client_id, const shm_ipc::ClientMsgProto &m)
+{
+    std::printf("server: client #%d [tick=%d payload_len=%zu] (proto)\n",
+                client_id, m.tick(), m.payload().size());
+}
+#endif
 
 // ---------------------------------------------------------------------------
 // 辅助函数
@@ -106,47 +119,36 @@ void RemoveClient(shm::EventLoop &loop, Clients &clients,
     loop.RemoveTimer(csp->timer_fd);
     loop.RemoveFd(csp->notify_efd);
     loop.RemoveFd(client_fd);
-    gReaders.erase(client_fd);
     clients.erase(client_fd);
 }
 
 /**
- * @brief 从客户端环形缓冲区中流式拆包所有待处理的 ClientMsg
+ * @brief 从客户端环形缓冲区中读取并反序列化所有待处理消息
  */
-int DrainClientRing(int client_fd, ClientState *csp)
+int DrainClientRing(ClientState *csp)
 {
-    auto &reader = gReaders.at(client_fd);
     int count = 0;
-    const void *data = nullptr;
-    uint32_t data_len = 0;
-
 #ifdef SHM_IPC_HAS_PROTOBUF
     if (gUseProto)
     {
-        while (reader.TryRecv(csp->channel, &data, &data_len) == 0)
+        shm_ipc::ClientMsgProto msg{};
+        while (csp->codec->Recv(csp->channel, &msg) == 0)
         {
-            shm_ipc::ClientMsgProto cm;
-            if (cm.ParseFromArray(data, static_cast<int>(data_len)))
-            {
-                std::printf("server: client #%d [tick=%d payload_len=%zu] (proto)\n",
-                            csp->id, cm.tick(), cm.payload().size());
-            }
+            PrintMsg(csp->id, msg);
             ++csp->total_read;
             ++count;
+            msg = shm_ipc::ClientMsgProto{};
         }
         return count;
     }
 #endif
-
-    while (reader.TryRecv(csp->channel, &data, &data_len) == 0)
+    ClientMsg msg{};
+    while (csp->codec->Recv(csp->channel, &msg) == 0)
     {
-        ClientMsg msg{};
-        if (data_len == sizeof(ClientMsg))
-            std::memcpy(&msg, data, sizeof(ClientMsg));
-        std::printf("server: client #%d [tick=%d payload_len=%u]\n", csp->id,
-                    msg.tick, msg.payload_len);
+        PrintMsg(csp->id, msg);
         ++csp->total_read;
         ++count;
+        msg = ClientMsg{};
     }
     return count;
 }
@@ -216,7 +218,7 @@ void OnClientNotify(int efd, Clients &clients, int client_fd)
     if (it == clients.end())
         return;
     ClientState *csp = it->second.get();
-    int count = DrainClientRing(client_fd, csp);
+    int count = DrainClientRing(csp);
     if (count > 0)
     {
         std::printf("server: client #%d realtime read count=%d total=%d\n",
@@ -247,7 +249,7 @@ void OnClientSocket(int fd, short revents, shm::EventLoop &loop,
         auto n = ::read(fd, &buf, 1);
         if (n <= 0 || buf == 0)
         {
-            int remaining = DrainClientRing(client_fd, csp);
+            int remaining = DrainClientRing(csp);
             std::printf("server: client #%d disconnected, "
                         "drained %d remaining, total read=%d\n",
                         csp->id, remaining, csp->total_read);
@@ -282,6 +284,13 @@ void OnAccept(int lfd, shm::EventLoop &loop,
     cs->channel  = Channel::Accept(cfd.Get());
     std::printf("server: client #%d ring channel established\n", cid);
 
+#ifdef SHM_IPC_HAS_PROTOBUF
+    if (gUseProto)
+        cs->codec = std::make_unique<shm::ProtoCodec<shm_ipc::ClientMsgProto>>();
+    else
+#endif
+        cs->codec = std::make_unique<shm::PodCodec<ClientMsg>>();
+
     int client_fd  = cfd.Get();
     cs->socket_fd  = std::move(cfd);
     cs->notify_efd = cs->channel.NotifyReadFd();
@@ -303,12 +312,6 @@ void OnAccept(int lfd, shm::EventLoop &loop,
                   std::ref(loop), std::ref(clients), client_fd));
 
     clients[client_fd] = std::move(cs);
-#ifdef SHM_IPC_HAS_PROTOBUF
-    if (gUseProto)
-        gReaders.emplace(client_fd, shm::CodecReader<>{&gProtoClientMsgCodec});
-    else
-#endif
-        gReaders.emplace(client_fd, shm::CodecReader<>{&gClientMsgCodec});
 }
 
 // ---------------------------------------------------------------------------

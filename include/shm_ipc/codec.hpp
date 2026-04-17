@@ -89,6 +89,97 @@ struct TypeTag
 namespace shm {
 
 // ===========================================================================
+// 帧层工具函数
+// ===========================================================================
+
+/**
+ * @brief 在缓冲区写入 MsgHeader，返回 payload 起始指针
+ *
+ * 调用者在返回指针处填充 payload 数据。
+ *
+ * @param buf          输出缓冲区
+ * @param buf_size     缓冲区大小（字节）
+ * @param payload_len  payload 字节数
+ * @param seq          消息序列号
+ * @return payload 起始指针（buf + kMsgHeaderSize），空间不足返回 nullptr
+ */
+inline char *EncodeFrame(void *buf, uint32_t buf_size,
+                         uint32_t payload_len, uint32_t seq)
+{
+    uint32_t frame_size = kMsgHeaderSize + payload_len;
+    if (buf_size < frame_size)
+        return nullptr;
+
+    auto *p = static_cast<char *>(buf);
+    MsgHeader hdr{};
+    hdr.len = payload_len;
+    hdr.seq = seq;
+    std::memcpy(p, &hdr, kMsgHeaderSize);
+    return p + kMsgHeaderSize;
+}
+
+/**
+ * @brief 写入 MsgHeader + 由回调写 payload，自动 Flush + notify
+ *
+ * @tparam Cap      RingChannel 容量
+ * @tparam WriteFn  回调类型，签名 void(ChannelBatchWriter &)
+ * @param ch            双向环形通道
+ * @param payload_len   payload 字节数
+ * @param seq           消息序列号
+ * @param write_payload 回调，负责向 batch 写入 payload
+ * @return 0 成功，-1 缓冲区满或消息过大
+ */
+template <std::size_t Cap, typename WriteFn>
+int SendFrame(RingChannel<Cap> &ch, uint32_t payload_len, uint32_t seq,
+              WriteFn &&write_payload)
+{
+    uint32_t frame_size = kMsgHeaderSize + payload_len;
+    if (ch.WritableBytes() < frame_size)
+        return -1;
+
+    auto batch = ch.StartBatch();
+
+    MsgHeader hdr{};
+    hdr.len = payload_len;
+    hdr.seq = seq;
+    batch.TryWrite(&hdr, kMsgHeaderSize);
+
+    write_payload(batch);
+
+    batch.Flush();
+    return 0;
+}
+
+/**
+ * @brief 写入 MsgHeader + 由回调写 payload 到批量写入器（不 Flush）
+ *
+ * @tparam Cap      RingChannel 容量
+ * @tparam WriteFn  回调类型，签名 void(ChannelBatchWriter &)
+ * @param batch         通道批量写入器
+ * @param payload_len   payload 字节数
+ * @param seq           消息序列号
+ * @param write_payload 回调，负责向 batch 写入 payload
+ * @return 0 成功，-1 缓冲区满或消息过大
+ */
+template <std::size_t Cap, typename WriteFn>
+int SendFrameBatch(typename RingChannel<Cap>::ChannelBatchWriter &batch,
+                   uint32_t payload_len, uint32_t seq,
+                   WriteFn &&write_payload)
+{
+    uint32_t frame_size = kMsgHeaderSize + payload_len;
+    if (batch.FreeBytes() < frame_size)
+        return -1;
+
+    MsgHeader hdr{};
+    hdr.len = payload_len;
+    hdr.seq = seq;
+    batch.TryWrite(&hdr, kMsgHeaderSize);
+
+    write_payload(batch);
+    return 0;
+}
+
+// ===========================================================================
 // 通用编解码（自由函数）
 // ===========================================================================
 
@@ -105,19 +196,12 @@ namespace shm {
 inline uint32_t Encode(const void *payload, uint32_t payload_len,
                        void *buf, uint32_t buf_size, uint32_t seq)
 {
-    uint32_t frame_size = kMsgHeaderSize + payload_len;
-    if (buf_size < frame_size)
+    char *p = EncodeFrame(buf, buf_size, payload_len, seq);
+    if (!p)
         return 0;
-
-    auto *p = static_cast<char *>(buf);
-
-    MsgHeader hdr{};
-    hdr.len = payload_len;
-    hdr.seq = seq;
-    std::memcpy(p, &hdr, kMsgHeaderSize);
     if (payload_len > 0)
-        std::memcpy(p + kMsgHeaderSize, payload, payload_len);
-    return frame_size;
+        std::memcpy(p, payload, payload_len);
+    return kMsgHeaderSize + payload_len;
 }
 
 /**
@@ -160,61 +244,28 @@ inline bool Decode(const void *buf, uint32_t buf_len,
 
 /**
  * @brief 编码消息并写入 RingChannel，成功后通知对端
- *
- * @tparam Cap RingChannel 容量
- * @param ch          双向环形通道
- * @param payload     序列化后的数据指针
- * @param payload_len 数据字节数
- * @param seq         消息序列号
- * @return 0 成功，-1 缓冲区满或消息过大
  */
 template <std::size_t Cap>
 int Send(RingChannel<Cap> &ch,
          const void *payload, uint32_t payload_len, uint32_t seq)
 {
-    uint32_t frame_size = kMsgHeaderSize + payload_len;
-    if (ch.WritableBytes() < frame_size)
-        return -1;
-
-    auto batch = ch.StartBatch();
-
-    MsgHeader hdr{};
-    hdr.len = payload_len;
-    hdr.seq = seq;
-    batch.TryWrite(&hdr, kMsgHeaderSize);
-
-    if (payload_len > 0)
-        batch.TryWrite(payload, payload_len);
-
-    batch.Flush();
-    return 0;
+    return SendFrame(ch, payload_len, seq, [&](auto &batch) {
+        if (payload_len > 0)
+            batch.TryWrite(payload, payload_len);
+    });
 }
 
 /**
  * @brief 编码消息并写入批量写入器（不触发通知，由 Flush 统一通知）
- *
- * @tparam Cap RingChannel 容量
- * @param batch       通道批量写入器
- * @param payload     序列化后的数据指针
- * @param payload_len 数据字节数
- * @param seq         消息序列号
- * @return 0 成功，-1 缓冲区满或消息过大
  */
 template <std::size_t Cap>
 int Send(typename RingChannel<Cap>::ChannelBatchWriter &batch,
          const void *payload, uint32_t payload_len, uint32_t seq)
 {
-    uint32_t frame_size = kMsgHeaderSize + payload_len;
-    if (batch.FreeBytes() < frame_size)
-        return -1;
-
-    MsgHeader hdr{};
-    hdr.len = payload_len;
-    hdr.seq = seq;
-    batch.TryWrite(&hdr, kMsgHeaderSize);
-    if (payload_len > 0)
-        batch.TryWrite(payload, payload_len);
-    return 0;
+    return SendFrameBatch<Cap>(batch, payload_len, seq, [&](auto &b) {
+        if (payload_len > 0)
+            b.TryWrite(payload, payload_len);
+    });
 }
 
 

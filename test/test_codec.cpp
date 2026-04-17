@@ -125,7 +125,7 @@ void TestEncodePodDecodePod()
     char buf[frame_size];
 
     uint32_t send_seq = 12345;
-    if (shm::EncodePod(hb, buf, frame_size, send_seq) != frame_size)
+    if (shm::PodCodec<Heartbeat>::EncodeTo(hb, buf, frame_size, send_seq) != frame_size)
     {
         std::fprintf(stderr, "FAIL: EncodePod\n");
         std::abort();
@@ -152,7 +152,7 @@ void TestEncodePodDecodePod()
 
     // DecodePod
     Heartbeat out{};
-    if (!shm::DecodePod<Heartbeat>(pod_data, pod_len, &out))
+    if (!shm::PodCodec<Heartbeat>::DecodeFrom(pod_data, pod_len, &out))
     {
         std::fprintf(stderr, "FAIL: DecodePod\n");
         std::abort();
@@ -176,13 +176,13 @@ void RunSenderBasic(int socket_fd)
     auto ch = Channel::Accept(socket_fd);
 
     ClientMsg msg = MakeTestMsg();
-    if (shm::SendPod(ch, msg, kMsgSeq) != 0)
+    if (shm::PodCodec<ClientMsg>::Send(ch, msg, kMsgSeq) != 0)
     {
-        std::fprintf(stderr, "FAIL: SendPod\n");
+        std::fprintf(stderr, "FAIL: Send\n");
         std::abort();
     }
 
-    std::printf("sender(basic): sent 1 ClientMsg via SendPod\n");
+    std::printf("sender(basic): sent 1 ClientMsg via Send\n");
 
     char ack = 0;
     ::read(socket_fd, &ack, 1);
@@ -224,7 +224,7 @@ void RunReceiverBasic(int socket_fd)
     uint32_t pod_len = payload_len - shm::kTagSize;
 
     ClientMsg out{};
-    if (!shm::DecodePod<ClientMsg>(pod_data, pod_len, &out))
+    if (!shm::PodCodec<ClientMsg>::DecodeFrom(pod_data, pod_len, &out))
     {
         std::fprintf(stderr, "FAIL: DecodePod\n");
         std::abort();
@@ -250,7 +250,7 @@ void RunSenderByteByByte(int socket_fd)
 
     constexpr uint32_t frame_size = shm::kMsgHeaderSize + shm::kTagSize + sizeof(ClientMsg);
     char frame[frame_size];
-    if (shm::EncodePod(msg, frame, frame_size, kMsgSeq) != frame_size)
+    if (shm::PodCodec<ClientMsg>::EncodeTo(msg, frame, frame_size, kMsgSeq) != frame_size)
     {
         std::fprintf(stderr, "FAIL: EncodePod\n");
         std::abort();
@@ -315,7 +315,7 @@ void RunReceiverByteByByte(int socket_fd)
     uint32_t pod_len = payload_len - shm::kTagSize;
 
     ClientMsg out{};
-    if (!shm::DecodePod<ClientMsg>(pod_data, pod_len, &out))
+    if (!shm::PodCodec<ClientMsg>::DecodeFrom(pod_data, pod_len, &out))
     {
         std::fprintf(stderr, "FAIL: DecodePod\n");
         std::abort();
