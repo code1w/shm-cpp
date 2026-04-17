@@ -8,7 +8,7 @@
 
 #include "ring_channel.hpp"
 
-namespace shm_ipc {
+namespace shm {
 
 /**
  * @brief 单条连接的运行状态
@@ -30,6 +30,6 @@ struct ClientState
     int total_read = 0;                ///< 累计读取消息数
 };
 
-}  // namespace shm_ipc
+}  // namespace shm
 
 #endif  // SHM_IPC_CLIENT_STATE_HPP_

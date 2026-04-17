@@ -26,7 +26,7 @@
 #include <cstdint>
 #include <cstring>
 
-namespace shm_ipc {
+namespace shm {
 
 // ---------------------------------------------------------------------------
 // 共享内存结构（POD，无指针）
@@ -426,6 +426,6 @@ class RingBuf
 /// @brief 默认配置别名（8MB 环）
 using DefaultRingBuf = RingBuf<>;
 
-}  // namespace shm_ipc
+}  // namespace shm
 
 #endif  // SHM_IPC_RINGBUF_HPP_

@@ -23,7 +23,7 @@
 
 #include "common.hpp"
 
-namespace shm_ipc {
+namespace shm {
 
 /** @brief 基于 poll + timerfd 的单线程事件循环 */
 class EventLoop
@@ -200,6 +200,6 @@ class EventLoop
     bool dispatching_ = false;              ///< 正在分发回调标志
 };
 
-}  // namespace shm_ipc
+}  // namespace shm
 
 #endif  // SHM_IPC_EVENT_LOOP_HPP_

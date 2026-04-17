@@ -19,7 +19,7 @@
 #include "common.hpp"
 #include "ringbuf.hpp"
 
-namespace shm_ipc {
+namespace shm {
 
 /**
  * @brief 双向共享内存环形通道
@@ -328,6 +328,6 @@ class RingChannel
 /// @brief 默认配置别名（8MB 环）
 using DefaultRingChannel = RingChannel<>;
 
-}  // namespace shm_ipc
+}  // namespace shm
 
 #endif  // SHM_IPC_RING_CHANNEL_HPP_

@@ -17,6 +17,7 @@
 
 #include <shm_ipc/bench_common.hpp>
 #include <shm_ipc/codec.hpp>
+#include <shm_ipc/pod_codec.hpp>
 
 namespace {
 
@@ -38,9 +39,9 @@ void ReadAll(int fd, void *buf, std::size_t len)
     }
 }
 
-shm_ipc::UniqueFd CreateListenSocket(const char *path)
+shm::UniqueFd CreateListenSocket(const char *path)
 {
-    shm_ipc::UniqueFd sfd{::socket(AF_UNIX, SOCK_STREAM, 0)};
+    shm::UniqueFd sfd{::socket(AF_UNIX, SOCK_STREAM, 0)};
     if (!sfd)
         throw std::runtime_error(std::string("socket: ") + std::strerror(errno));
 
@@ -63,7 +64,7 @@ void RunBench()
     auto listen_fd = CreateListenSocket(kSocketPath);
     std::printf("socket_server(bench): waiting for client on %s ...\n", kSocketPath);
 
-    shm_ipc::UniqueFd cfd{::accept(listen_fd.Get(), nullptr, nullptr)};
+    shm::UniqueFd cfd{::accept(listen_fd.Get(), nullptr, nullptr)};
     if (!cfd)
     {
         std::perror("accept");
@@ -76,29 +77,29 @@ void RunBench()
 
     std::printf("socket_server(bench): client connected\n\n");
 
-    shm_ipc::PrintBenchHeader();
+    shm::PrintBenchHeader();
 
     for (;;)
     {
-        shm_ipc::BenchCmd cmd{};
+        shm::BenchCmd cmd{};
         ReadAll(cfd.Get(), &cmd, sizeof(cmd));
         if (cmd.rounds == 0)
             break;
 
         // 接收缓冲区（MsgHeader 之后的 body 部分）
-        uint32_t max_body = shm_ipc::kTagSize
-                          + static_cast<uint32_t>(sizeof(shm_ipc::BenchPayloadHeader))
+        uint32_t max_body = shm::kTagSize
+                          + static_cast<uint32_t>(sizeof(shm::BenchPayloadHeader))
                           + cmd.payload_size;
         std::vector<char> body_buf(max_body);
 
         int32_t received = 0;
-        uint64_t t0 = shm_ipc::NowNs();
+        uint64_t t0 = shm::NowNs();
 
         bool got_end = false;
         while (!got_end)
         {
             // 先读 MsgHeader
-            shm_ipc::MsgHeader hdr{};
+            shm::MsgHeader hdr{};
             ReadAll(cfd.Get(), &hdr, sizeof(hdr));
 
             // 再读 body（tag + payload）
@@ -106,13 +107,13 @@ void RunBench()
 
             // 解析 tag
             uint32_t tag = 0;
-            std::memcpy(&tag, body_buf.data(), shm_ipc::kTagSize);
+            std::memcpy(&tag, body_buf.data(), shm::kTagSize);
 
             // 解析 BenchPayloadHeader
-            if (hdr.len >= shm_ipc::kTagSize + sizeof(shm_ipc::BenchPayloadHeader))
+            if (hdr.len >= shm::kTagSize + sizeof(shm::BenchPayloadHeader))
             {
-                shm_ipc::BenchPayloadHeader ph{};
-                std::memcpy(&ph, body_buf.data() + shm_ipc::kTagSize, sizeof(ph));
+                shm::BenchPayloadHeader ph{};
+                std::memcpy(&ph, body_buf.data() + shm::kTagSize, sizeof(ph));
                 if (ph.seq == -1)
                 {
                     got_end = true;
@@ -121,13 +122,13 @@ void RunBench()
             }
             ++received;
         }
-        uint64_t elapsed = shm_ipc::NowNs() - t0;
+        uint64_t elapsed = shm::NowNs() - t0;
 
         // 发 ack
         char ack = 1;
         (void)::write(cfd.Get(), &ack, 1);
 
-        shm_ipc::PrintBenchRow(cmd.payload_size, received, elapsed);
+        shm::PrintBenchRow(cmd.payload_size, received, elapsed);
     }
 
     std::printf("\nsocket_server(bench): done\n");

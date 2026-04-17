@@ -1,0 +1,17 @@
+syntax = "proto3";
+package shm_ipc;
+
+/// 服务端心跳消息（对应 POD Heartbeat）
+message HeartbeatProto {
+    int32 client_id = 1;
+    int32 seq = 2;
+    int64 timestamp = 3;
+}
+
+/// 客户端消息（对应 POD ClientMsg）
+message ClientMsgProto {
+    int32 seq = 1;
+    int32 tick = 2;
+    int64 timestamp = 3;
+    bytes payload = 4;
+}

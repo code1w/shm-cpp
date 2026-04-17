@@ -20,7 +20,7 @@
 #include <string>
 #include <utility>
 
-namespace shm_ipc {
+namespace shm {
 
 inline constexpr const char *kDefaultSocketPath = "/tmp/fd-pass.socket";
 
@@ -269,6 +269,6 @@ inline UniqueFd CreateEventfd()
     return UniqueFd{fd};
 }
 
-}  // namespace shm_ipc
+}  // namespace shm
 
 #endif  // SHM_IPC_COMMON_HPP_

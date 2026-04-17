@@ -133,7 +133,7 @@ shm-cpp/
 #include <shm_ipc/ring_channel.hpp>
 
 // 16MB 容量（单条消息最大 ~8MB）
-using LargeChannel = shm_ipc::RingChannel<16 * 1024 * 1024>;
+using LargeChannel = shm::RingChannel<16 * 1024 * 1024>;
 
 auto ch = LargeChannel::connect(socket_fd);
 
@@ -157,11 +157,11 @@ ch.max_msg_size;      // 编译期常量：单条消息最大载荷
 ```cpp
 #include <shm_ipc/event_loop.hpp>
 
-shm_ipc::EventLoop loop;
+shm::EventLoop loop;
 
 // 添加定时器（200ms 间隔）
 loop.add_timer(200, [](int tfd, short) {
-    shm_ipc::EventLoop::drain_timerfd(tfd);
+    shm::EventLoop::drain_timerfd(tfd);
     // 定时逻辑 ...
 });
 
@@ -179,7 +179,7 @@ loop.run();
 #include <shm_ipc/ringbuf.hpp>
 
 // 默认 8MB 容量
-using Ring = shm_ipc::RingBuf<>;
+using Ring = shm::RingBuf<>;
 
 void *shm = /* mmap 得到的共享内存指针，大小 >= Ring::shm_size */;
 Ring::init(shm);

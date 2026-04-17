@@ -11,8 +11,9 @@
 #include <time.h>
 
 #include "codec.hpp"
+#include "pod_codec.hpp"
 
-namespace shm_ipc {
+namespace shm {
 
 /// Bench 专用类型标签 "BENC"
 inline constexpr uint32_t kBenchTag = 0x42454E43;
@@ -88,6 +89,6 @@ inline void PrintBenchRow(uint32_t payload_size, int32_t received,
                 payload_size, received, ms, msg_s, mb_s, lat);
 }
 
-}  // namespace shm_ipc
+}  // namespace shm
 
 #endif  // SHM_IPC_BENCH_COMMON_HPP_

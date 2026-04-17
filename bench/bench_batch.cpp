@@ -32,7 +32,7 @@
 
 namespace {
 
-using Channel = shm_ipc::DefaultRingChannel;
+using Channel = shm::DefaultRingChannel;
 
 /** @brief 返回单调时钟的纳秒时间戳 */
 uint64_t NowNs()

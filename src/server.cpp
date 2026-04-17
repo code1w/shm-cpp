@@ -26,7 +26,14 @@
 #include <shm_ipc/client_state.hpp>
 #include <shm_ipc/codec.hpp>
 #include <shm_ipc/event_loop.hpp>
+#include <shm_ipc/frame_reader.hpp>
 #include <shm_ipc/messages.hpp>
+#include <shm_ipc/pod_codec.hpp>
+
+#ifdef SHM_IPC_HAS_PROTOBUF
+#include <shm_ipc/proto_codec.hpp>
+#include "shm_messages.pb.h"
+#endif
 
 namespace {
 
@@ -34,15 +41,28 @@ constexpr int kHeartbeatMs = 300;  ///< 心跳定时器间隔（毫秒）
 constexpr int kMaxTicks    = 40;   ///< 每客户端最大心跳次数
 constexpr int kMaxClients  = 16;   ///< 最大并发客户端数
 
-using Channel     = shm_ipc::DefaultRingChannel;
-using ClientState = shm_ipc::ClientState;
+using Channel     = shm::DefaultRingChannel;
+using ClientState = shm::ClientState;
 using Clients     = std::unordered_map<int, std::unique_ptr<ClientState>>;
 
-/// 每客户端的帧读取器
-std::unordered_map<int, shm_ipc::FrameReader<>> gReaders;
+/// 全局 PodCodec 实例
+shm::PodCodec<ClientMsg>  gClientMsgCodec;
+shm::PodCodec<Heartbeat>  gHeartbeatCodec;
+
+#ifdef SHM_IPC_HAS_PROTOBUF
+/// 全局 ProtoCodec 实例
+shm::ProtoCodec<shm_ipc::ClientMsgProto>  gProtoClientMsgCodec;
+shm::ProtoCodec<shm_ipc::HeartbeatProto>  gProtoHeartbeatCodec;
+#endif
+
+/// 每客户端的 CodecReader（组合 FrameReader + ICodec）
+std::unordered_map<int, shm::CodecReader<>> gReaders;
 
 /// 全局事件循环指针，供信号处理器使用
-shm_ipc::EventLoop *gLoop = nullptr;
+shm::EventLoop *gLoop = nullptr;
+
+/// 是否使用 protobuf 编解码
+bool gUseProto = false;
 
 void SignalHandler(int /*signo*/)
 {
@@ -57,9 +77,9 @@ void SignalHandler(int /*signo*/)
 /**
  * @brief 创建并绑定 Unix domain socket 监听端
  */
-shm_ipc::UniqueFd CreateListenSocket(const char *path)
+shm::UniqueFd CreateListenSocket(const char *path)
 {
-    shm_ipc::UniqueFd sfd{::socket(AF_UNIX, SOCK_STREAM, 0)};
+    shm::UniqueFd sfd{::socket(AF_UNIX, SOCK_STREAM, 0)};
     if (!sfd)
         throw std::runtime_error(std::string("socket: ") + std::strerror(errno));
 
@@ -80,7 +100,7 @@ shm_ipc::UniqueFd CreateListenSocket(const char *path)
 /**
  * @brief 从事件循环中移除客户端的所有关联 fd 并销毁状态
  */
-void RemoveClient(shm_ipc::EventLoop &loop, Clients &clients,
+void RemoveClient(shm::EventLoop &loop, Clients &clients,
                   int client_fd, ClientState *csp)
 {
     loop.RemoveTimer(csp->timer_fd);
@@ -95,20 +115,36 @@ void RemoveClient(shm_ipc::EventLoop &loop, Clients &clients,
  */
 int DrainClientRing(int client_fd, ClientState *csp)
 {
-    auto &reader = gReaders[client_fd];
+    auto &reader = gReaders.at(client_fd);
     int count = 0;
+    const void *data = nullptr;
+    uint32_t data_len = 0;
 
-    uint32_t tag = 0;
-    const void *payload = nullptr;
-    uint32_t payload_len = 0;
-    while (reader.TryRecv(csp->channel, &tag, &payload, &payload_len) == 0)
+#ifdef SHM_IPC_HAS_PROTOBUF
+    if (gUseProto)
+    {
+        while (reader.TryRecv(csp->channel, &data, &data_len) == 0)
+        {
+            shm_ipc::ClientMsgProto cm;
+            if (cm.ParseFromArray(data, static_cast<int>(data_len)))
+            {
+                std::printf("server: client #%d [tick=%d payload_len=%zu] (proto)\n",
+                            csp->id, cm.tick(), cm.payload().size());
+            }
+            ++csp->total_read;
+            ++count;
+        }
+        return count;
+    }
+#endif
+
+    while (reader.TryRecv(csp->channel, &data, &data_len) == 0)
     {
         ClientMsg msg{};
-        if (shm_ipc::DecodePod<ClientMsg>(payload, payload_len, &msg))
-        {
-            std::printf("server: client #%d [tick=%d payload_len=%u]\n", csp->id,
-                        msg.tick, msg.payload_len);
-        }
+        if (data_len == sizeof(ClientMsg))
+            std::memcpy(&msg, data, sizeof(ClientMsg));
+        std::printf("server: client #%d [tick=%d payload_len=%u]\n", csp->id,
+                    msg.tick, msg.payload_len);
         ++csp->total_read;
         ++count;
     }
@@ -122,10 +158,10 @@ int DrainClientRing(int client_fd, ClientState *csp)
 /**
  * @brief 心跳定时器回调：向客户端发送 Heartbeat POD
  */
-void OnHeartbeatTimer(int timer_fd, shm_ipc::EventLoop &loop,
+void OnHeartbeatTimer(int timer_fd, shm::EventLoop &loop,
                       Clients &clients, int client_fd)
 {
-    shm_ipc::EventLoop::DrainTimerfd(timer_fd);
+    shm::EventLoop::DrainTimerfd(timer_fd);
 
     auto it = clients.find(client_fd);
     if (it == clients.end())
@@ -145,8 +181,25 @@ void OnHeartbeatTimer(int timer_fd, shm_ipc::EventLoop &loop,
     hb.seq       = csp->tick;
     hb.timestamp = std::time(nullptr);
 
-    if (shm_ipc::SendPod(csp->channel, hb,
-                         static_cast<uint32_t>(csp->tick)) != 0)
+#ifdef SHM_IPC_HAS_PROTOBUF
+    if (gUseProto)
+    {
+        shm_ipc::HeartbeatProto pb_hb;
+        pb_hb.set_client_id(csp->id);
+        pb_hb.set_seq(csp->tick);
+        pb_hb.set_timestamp(std::time(nullptr));
+        if (gProtoHeartbeatCodec.Send(csp->channel, pb_hb,
+                                      static_cast<uint32_t>(csp->tick)) != 0)
+        {
+            std::fprintf(stderr, "server: client #%d heartbeat write full (proto)\n",
+                         csp->id);
+        }
+        return;
+    }
+#endif
+
+    if (gHeartbeatCodec.Send(csp->channel, hb,
+                             static_cast<uint32_t>(csp->tick)) != 0)
     {
         std::fprintf(stderr, "server: client #%d heartbeat write full\n",
                      csp->id);
@@ -174,7 +227,7 @@ void OnClientNotify(int efd, Clients &clients, int client_fd)
 /**
  * @brief Socket 回调：仅用于断连检测
  */
-void OnClientSocket(int fd, short revents, shm_ipc::EventLoop &loop,
+void OnClientSocket(int fd, short revents, shm::EventLoop &loop,
                     Clients &clients, int client_fd)
 {
     auto it = clients.find(client_fd);
@@ -207,17 +260,17 @@ void OnClientSocket(int fd, short revents, shm_ipc::EventLoop &loop,
 /**
  * @brief Accept 回调：接受新客户端连接并注册所有回调
  */
-void OnAccept(int lfd, shm_ipc::EventLoop &loop,
+void OnAccept(int lfd, shm::EventLoop &loop,
               Clients &clients, int &next_client_id)
 {
     if (static_cast<int>(clients.size()) >= kMaxClients)
     {
         std::fprintf(stderr, "server: max clients reached, rejecting\n");
-        shm_ipc::UniqueFd rejected{::accept(lfd, nullptr, nullptr)};
+        shm::UniqueFd rejected{::accept(lfd, nullptr, nullptr)};
         return;
     }
 
-    shm_ipc::UniqueFd cfd{::accept(lfd, nullptr, nullptr)};
+    shm::UniqueFd cfd{::accept(lfd, nullptr, nullptr)};
     if (!cfd)
         return;
 
@@ -250,6 +303,12 @@ void OnAccept(int lfd, shm_ipc::EventLoop &loop,
                   std::ref(loop), std::ref(clients), client_fd));
 
     clients[client_fd] = std::move(cs);
+#ifdef SHM_IPC_HAS_PROTOBUF
+    if (gUseProto)
+        gReaders.emplace(client_fd, shm::CodecReader<>{&gProtoClientMsgCodec});
+    else
+#endif
+        gReaders.emplace(client_fd, shm::CodecReader<>{&gClientMsgCodec});
 }
 
 // ---------------------------------------------------------------------------
@@ -258,11 +317,11 @@ void OnAccept(int lfd, shm_ipc::EventLoop &loop,
 
 void RunBench()
 {
-    auto listen_fd = CreateListenSocket(shm_ipc::kDefaultSocketPath);
+    auto listen_fd = CreateListenSocket(shm::kDefaultSocketPath);
     std::printf("server(bench): waiting for client on %s ...\n",
-                shm_ipc::kDefaultSocketPath);
+                shm::kDefaultSocketPath);
 
-    shm_ipc::UniqueFd cfd{::accept(listen_fd.Get(), nullptr, nullptr)};
+    shm::UniqueFd cfd{::accept(listen_fd.Get(), nullptr, nullptr)};
     if (!cfd)
     {
         std::perror("accept");
@@ -272,33 +331,35 @@ void RunBench()
     auto ch = Channel::Accept(cfd.Get());
     std::printf("server(bench): client connected, ring established\n\n");
 
-    shm_ipc::FrameReader<3 * 1024 * 1024> reader;
-    shm_ipc::PrintBenchHeader();
+    shm::FrameReader<3 * 1024 * 1024> reader;
+    shm::PrintBenchHeader();
 
     for (;;)
     {
-        shm_ipc::BenchCmd cmd{};
+        shm::BenchCmd cmd{};
         ssize_t n = ::read(cfd.Get(), &cmd, sizeof(cmd));
         if (n != sizeof(cmd) || cmd.rounds == 0)
             break;
 
-        // 忙循环接收
         int32_t received = 0;
-        uint32_t tag = 0;
         const void *payload = nullptr;
         uint32_t payload_len = 0;
 
-        uint64_t t0 = shm_ipc::NowNs();
+        uint64_t t0 = shm::NowNs();
         bool got_end = false;
         while (!got_end)
         {
-            if (reader.TryRecv(ch, &tag, &payload, &payload_len) == 0)
+            if (reader.TryRecv(ch, &payload, &payload_len) == 0)
             {
-                if (payload_len >= sizeof(shm_ipc::BenchPayloadHeader))
+                // payload = [tag u32][BenchPayloadHeader][fill]
+                // 跳过 tag 后检查 BenchPayloadHeader
+                if (payload_len >= shm::kTagSize + sizeof(shm::BenchPayloadHeader))
                 {
-                    shm_ipc::BenchPayloadHeader hdr{};
-                    std::memcpy(&hdr, payload, sizeof(hdr));
-                    if (hdr.seq == -1)
+                    shm::BenchPayloadHeader ph{};
+                    std::memcpy(&ph,
+                                static_cast<const char *>(payload) + shm::kTagSize,
+                                sizeof(ph));
+                    if (ph.seq == -1)
                     {
                         got_end = true;
                         break;
@@ -308,17 +369,17 @@ void RunBench()
             }
         }
         reader.Commit(ch);
-        uint64_t elapsed = shm_ipc::NowNs() - t0;
+        uint64_t elapsed = shm::NowNs() - t0;
 
         // 发 ack
         char ack = 1;
         (void)::write(cfd.Get(), &ack, 1);
 
-        shm_ipc::PrintBenchRow(cmd.payload_size, received, elapsed);
+        shm::PrintBenchRow(cmd.payload_size, received, elapsed);
     }
 
     std::printf("\nserver(bench): done\n");
-    ::unlink(shm_ipc::kDefaultSocketPath);
+    ::unlink(shm::kDefaultSocketPath);
 }
 
 }  // anonymous namespace
@@ -334,6 +395,12 @@ int main(int argc, char *argv[])
                 RunBench();
                 return 0;
             }
+            if (std::strcmp(argv[i], "--cmd") == 0 && i + 1 < argc)
+            {
+                if (std::strcmp(argv[i + 1], "proto") == 0)
+                    gUseProto = true;
+                ++i;
+            }
         }
 
         struct sigaction sa
@@ -343,17 +410,18 @@ int main(int argc, char *argv[])
         ::sigaction(SIGINT, &sa, nullptr);
         ::sigaction(SIGTERM, &sa, nullptr);
 
-        shm_ipc::EventLoop loop;
+        shm::EventLoop loop;
         gLoop = &loop;
 
         Clients clients;
         int next_client_id = 1;
 
-        auto listen_fd = CreateListenSocket(shm_ipc::kDefaultSocketPath);
+        auto listen_fd = CreateListenSocket(shm::kDefaultSocketPath);
         std::printf("server: listening on %s (max %d clients, ring=%zuMB, realtime "
-                    "eventfd read)\n",
-                    shm_ipc::kDefaultSocketPath, kMaxClients,
-                    Channel::Ring::capacity / (1024 * 1024));
+                    "eventfd read, codec=%s)\n",
+                    shm::kDefaultSocketPath, kMaxClients,
+                    Channel::Ring::capacity / (1024 * 1024),
+                    gUseProto ? "proto" : "pod");
 
         loop.AddFd(listen_fd.Get(),
             std::bind(OnAccept, std::placeholders::_1,
@@ -364,7 +432,7 @@ int main(int argc, char *argv[])
         std::printf("\nserver: shutting down (%zu clients remaining)\n",
                     clients.size());
         clients.clear();
-        ::unlink(shm_ipc::kDefaultSocketPath);
+        ::unlink(shm::kDefaultSocketPath);
     }
     catch (const std::exception &e)
     {

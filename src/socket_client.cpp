@@ -17,6 +17,7 @@
 
 #include <shm_ipc/bench_common.hpp>
 #include <shm_ipc/codec.hpp>
+#include <shm_ipc/pod_codec.hpp>
 
 namespace {
 
@@ -38,9 +39,9 @@ void WriteAll(int fd, const void *buf, std::size_t len)
     }
 }
 
-shm_ipc::UniqueFd ConnectToServer(const char *path)
+shm::UniqueFd ConnectToServer(const char *path)
 {
-    shm_ipc::UniqueFd sfd{::socket(AF_UNIX, SOCK_STREAM, 0)};
+    shm::UniqueFd sfd{::socket(AF_UNIX, SOCK_STREAM, 0)};
     if (!sfd)
         throw std::runtime_error(std::string("socket: ") + std::strerror(errno));
 
@@ -63,55 +64,59 @@ void RunBench()
     int buf_size = 4 * 1024 * 1024;
     ::setsockopt(sfd.Get(), SOL_SOCKET, SO_SNDBUF, &buf_size, sizeof(buf_size));
 
-    shm_ipc::PrintBenchHeader();
+    shm::PrintBenchHeader();
 
-    for (auto &tc : shm_ipc::kBenchCases)
+    for (auto &tc : shm::kBenchCases)
     {
         // 通知 server 本轮参数
-        shm_ipc::BenchCmd cmd{tc.payload_size, tc.rounds};
+        shm::BenchCmd cmd{tc.payload_size, tc.rounds};
         WriteAll(sfd.Get(), &cmd, sizeof(cmd));
 
-        // 构造 payload = BenchPayloadHeader + 填充字节
-        uint32_t body_len = static_cast<uint32_t>(sizeof(shm_ipc::BenchPayloadHeader))
+        // 构造 payload = [tag u32] + BenchPayloadHeader + 填充字节
+        uint32_t body_len = shm::kTagSize
+                          + static_cast<uint32_t>(sizeof(shm::BenchPayloadHeader))
                           + tc.payload_size;
         std::vector<char> body(body_len);
-        std::memset(body.data() + sizeof(shm_ipc::BenchPayloadHeader), 'B',
-                    tc.payload_size);
+        uint32_t bench_tag = shm::kBenchTag;
+        std::memcpy(body.data(), &bench_tag, shm::kTagSize);
+        std::memset(body.data() + shm::kTagSize + sizeof(shm::BenchPayloadHeader),
+                    'B', tc.payload_size);
 
         // 编码缓冲区
-        uint32_t frame_size = shm_ipc::BenchFrameSize(tc.payload_size);
+        uint32_t frame_size = shm::BenchFrameSize(tc.payload_size);
         std::vector<char> frame_buf(frame_size);
 
-        uint64_t t0 = shm_ipc::NowNs();
+        uint64_t t0 = shm::NowNs();
         for (int32_t i = 0; i < tc.rounds; ++i)
         {
-            shm_ipc::BenchPayloadHeader hdr{i};
-            std::memcpy(body.data(), &hdr, sizeof(hdr));
-            uint32_t n = shm_ipc::Encode(shm_ipc::kBenchTag,
-                                          body.data(), body_len,
+            shm::BenchPayloadHeader hdr{i};
+            std::memcpy(body.data() + shm::kTagSize, &hdr, sizeof(hdr));
+            uint32_t n = shm::Encode(body.data(), body_len,
                                           frame_buf.data(), frame_size,
                                           static_cast<uint32_t>(i));
             WriteAll(sfd.Get(), frame_buf.data(), n);
         }
 
         // 发结束标记
-        shm_ipc::BenchPayloadHeader end_hdr{-1};
+        char end_body[shm::kTagSize + sizeof(shm::BenchPayloadHeader)];
+        std::memcpy(end_body, &bench_tag, shm::kTagSize);
+        shm::BenchPayloadHeader end_hdr{-1};
+        std::memcpy(end_body + shm::kTagSize, &end_hdr, sizeof(end_hdr));
         char end_frame[64];
-        uint32_t n = shm_ipc::Encode(shm_ipc::kBenchTag,
-                                      &end_hdr, sizeof(end_hdr),
+        uint32_t n = shm::Encode(end_body, sizeof(end_body),
                                       end_frame, sizeof(end_frame), 0);
         WriteAll(sfd.Get(), end_frame, n);
 
         // 等 server ack
         char ack = 0;
         (void)::read(sfd.Get(), &ack, 1);
-        uint64_t elapsed = shm_ipc::NowNs() - t0;
+        uint64_t elapsed = shm::NowNs() - t0;
 
-        shm_ipc::PrintBenchRow(tc.payload_size, tc.rounds, elapsed);
+        shm::PrintBenchRow(tc.payload_size, tc.rounds, elapsed);
     }
 
     // 通知 server 结束
-    shm_ipc::BenchCmd end{0, 0};
+    shm::BenchCmd end{0, 0};
     WriteAll(sfd.Get(), &end, sizeof(end));
 
     std::printf("\nsocket_client(bench): done\n");

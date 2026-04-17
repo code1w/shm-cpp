@@ -19,6 +19,7 @@
 
 #include <shm_ipc/ringbuf.hpp>
 #include <shm_ipc/codec.hpp>
+#include <shm_ipc/pod_codec.hpp>
 #include <shm_ipc/messages.hpp>
 
 #include <cstdint>
@@ -31,7 +32,7 @@ namespace {
 
 // 使用小容量环以低成本覆盖各种回绕位置
 constexpr std::size_t kSmallCap = 4096;
-using SmallRing = shm_ipc::RingBuf<kSmallCap>;
+using SmallRing = shm::RingBuf<kSmallCap>;
 
 /// 分配并初始化一块 shm
 void *AllocShm()
@@ -514,7 +515,7 @@ void TestCodecWrap()
     std::printf("--- Test 9: Codec Encode/Decode through ring wrap ---\n");
 
     constexpr uint32_t frame_size =
-        shm_ipc::kMsgHeaderSize + shm_ipc::kTagSize + sizeof(Heartbeat);
+        shm::kMsgHeaderSize + shm::kTagSize + sizeof(Heartbeat);
 
     // 遍历多种 tail
     std::vector<uint32_t> tails = {1, 2, 4, 7, 8, frame_size / 2,
@@ -535,7 +536,7 @@ void TestCodecWrap()
 
         char enc[frame_size];
         uint32_t seq_in = tail * 100;
-        if (shm_ipc::EncodePod(hb, enc, frame_size, seq_in) != frame_size)
+        if (shm::EncodePod(hb, enc, frame_size, seq_in) != frame_size)
         {
             std::fprintf(stderr, "FAIL: Encode tail=%u\n", tail);
             std::abort();
@@ -559,15 +560,17 @@ void TestCodecWrap()
         // Decode
         Heartbeat out{};
         uint32_t seq_out = 0;
-        uint32_t dec_tag = 0;
         const void *dec_payload = nullptr;
         uint32_t dec_payload_len = 0;
-        if (!shm_ipc::Decode(dec, frame_size, &dec_tag, &dec_payload, &dec_payload_len, &seq_out))
+        if (!shm::Decode(dec, frame_size, &dec_payload, &dec_payload_len, &seq_out))
         {
             std::fprintf(stderr, "FAIL: Decode tail=%u\n", tail);
             std::abort();
         }
-        if (!shm_ipc::DecodePod<Heartbeat>(dec_payload, dec_payload_len, &out))
+        // payload = [tag u32][Heartbeat bytes], 跳过 tag
+        const void *pod_data = static_cast<const char *>(dec_payload) + shm::kTagSize;
+        uint32_t pod_len = dec_payload_len - shm::kTagSize;
+        if (!shm::DecodePod<Heartbeat>(pod_data, pod_len, &out))
         {
             std::fprintf(stderr, "FAIL: Decode tail=%u\n", tail);
             std::abort();

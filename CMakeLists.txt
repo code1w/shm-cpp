@@ -39,3 +39,30 @@ target_link_libraries(socket_server PRIVATE shm_ipc)
 
 add_executable(socket_client src/socket_client.cpp)
 target_link_libraries(socket_client PRIVATE shm_ipc)
+
+# --- Protobuf（本地安装到 3rd/protobuf） ---
+set(PROTOBUF_ROOT ${CMAKE_SOURCE_DIR}/3rd/protobuf)
+list(APPEND CMAKE_PREFIX_PATH ${PROTOBUF_ROOT})
+# protobuf 3.21 在 CentOS 上安装到 lib64
+list(APPEND CMAKE_PREFIX_PATH ${PROTOBUF_ROOT}/lib64/cmake/protobuf)
+find_package(Protobuf QUIET)
+
+if(Protobuf_FOUND)
+    message(STATUS "Protobuf found: ${Protobuf_VERSION}")
+
+    add_library(shm_proto proto/shm_messages.pb.cc)
+    target_include_directories(shm_proto PUBLIC
+        ${CMAKE_SOURCE_DIR}/proto
+        ${Protobuf_INCLUDE_DIRS})
+    target_link_libraries(shm_proto PUBLIC protobuf::libprotobuf)
+
+    add_executable(test_proto_codec test/test_proto_codec.cpp)
+    target_link_libraries(test_proto_codec PRIVATE shm_ipc shm_proto)
+
+    target_link_libraries(client PRIVATE shm_proto)
+    target_compile_definitions(client PRIVATE SHM_IPC_HAS_PROTOBUF)
+    target_link_libraries(server PRIVATE shm_proto)
+    target_compile_definitions(server PRIVATE SHM_IPC_HAS_PROTOBUF)
+else()
+    message(STATUS "Protobuf not found, skipping proto targets")
+endif()

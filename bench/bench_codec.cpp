@@ -14,6 +14,7 @@
 
 #include <shm_ipc/codec.hpp>
 #include <shm_ipc/messages.hpp>
+#include <shm_ipc/pod_codec.hpp>
 #include <shm_ipc/ring_channel.hpp>
 
 #include <algorithm>
@@ -38,7 +39,7 @@ inline void DoNotOptimize(T const &val)
     asm volatile("" : : "r,m"(val) : "memory");
 }
 
-using Channel = shm_ipc::DefaultRingChannel;
+using Channel = shm::DefaultRingChannel;
 
 // ---------------------------------------------------------------------------
 // 工具
@@ -104,16 +105,19 @@ void BenchMemory()
                 "payload", "rounds", "Encode(ns)", "Decode(ns)",
                 "EncodePod(ns)", "DecodePod(ns)");
 
-    // EncodePod/DecodePod 用 ClientMsg
     constexpr uint32_t pod_frame_size =
-        shm_ipc::kMsgHeaderSize + shm_ipc::kTagSize + sizeof(ClientMsg);
+        shm::kMsgHeaderSize + shm::kTagSize + sizeof(ClientMsg);
 
     for (auto &tc : kMemTests)
     {
-        uint32_t frame_size = shm_ipc::kMsgHeaderSize + shm_ipc::kTagSize + tc.payload_size;
+        uint32_t frame_size = shm::kMsgHeaderSize + shm::kTagSize + tc.payload_size;
         auto buf = std::make_unique<char[]>(frame_size);
-        auto payload = std::make_unique<char[]>(tc.payload_size);
-        std::memset(payload.get(), 'P', tc.payload_size);
+        // payload = [tag u32][data]
+        uint32_t payload_with_tag_len = shm::kTagSize + tc.payload_size;
+        auto payload_with_tag = std::make_unique<char[]>(payload_with_tag_len);
+        uint32_t tag = kTag;
+        std::memcpy(payload_with_tag.get(), &tag, shm::kTagSize);
+        std::memset(payload_with_tag.get() + shm::kTagSize, 'P', tc.payload_size);
 
         // --- Encode ---
         double best_enc = 1e18;
@@ -122,7 +126,7 @@ void BenchMemory()
             uint64_t t0 = NowNs();
             for (int i = 0; i < tc.rounds; ++i)
             {
-                auto n = shm_ipc::Encode(kTag, payload.get(), tc.payload_size,
+                auto n = shm::Encode(payload_with_tag.get(), payload_with_tag_len,
                                 buf.get(), frame_size, static_cast<uint32_t>(i));
                 DoNotOptimize(n);
             }
@@ -131,14 +135,12 @@ void BenchMemory()
         }
 
         // --- Decode ---
-        // 先编码一帧用于解码
-        shm_ipc::Encode(kTag, payload.get(), tc.payload_size,
+        shm::Encode(payload_with_tag.get(), payload_with_tag_len,
                         buf.get(), frame_size, 0);
 
         double best_dec = 1e18;
         for (int rep = 0; rep < kRepeat; ++rep)
         {
-            uint32_t out_tag = 0;
             const void *out_payload = nullptr;
             uint32_t out_len = 0;
             uint32_t out_seq = 0;
@@ -146,8 +148,8 @@ void BenchMemory()
             uint64_t t0 = NowNs();
             for (int i = 0; i < tc.rounds; ++i)
             {
-                bool ok = shm_ipc::Decode(buf.get(), frame_size,
-                                &out_tag, &out_payload, &out_len, &out_seq);
+                bool ok = shm::Decode(buf.get(), frame_size,
+                                &out_payload, &out_len, &out_seq);
                 DoNotOptimize(ok);
                 DoNotOptimize(out_len);
             }
@@ -170,7 +172,7 @@ void BenchMemory()
                 for (int i = 0; i < tc.rounds; ++i)
                 {
                     msg.seq = i;
-                    auto n = shm_ipc::EncodePod(msg, pod_buf.get(), pod_frame_size,
+                    auto n = shm::EncodePod(msg, pod_buf.get(), pod_frame_size,
                                        static_cast<uint32_t>(i));
                     DoNotOptimize(n);
                 }
@@ -179,12 +181,14 @@ void BenchMemory()
             }
 
             // --- DecodePod ---
-            shm_ipc::EncodePod(msg, pod_buf.get(), pod_frame_size, 0);
-            uint32_t out_tag = 0;
+            shm::EncodePod(msg, pod_buf.get(), pod_frame_size, 0);
             const void *out_payload = nullptr;
             uint32_t out_len = 0;
-            shm_ipc::Decode(pod_buf.get(), pod_frame_size,
-                            &out_tag, &out_payload, &out_len);
+            shm::Decode(pod_buf.get(), pod_frame_size,
+                            &out_payload, &out_len);
+            // skip tag in payload
+            const void *pod_data = static_cast<const char *>(out_payload) + shm::kTagSize;
+            uint32_t pod_len = out_len - shm::kTagSize;
 
             double best_dpod = 1e18;
             for (int rep = 0; rep < kRepeat; ++rep)
@@ -193,7 +197,7 @@ void BenchMemory()
                 uint64_t t0 = NowNs();
                 for (int i = 0; i < tc.rounds; ++i)
                 {
-                    bool ok = shm_ipc::DecodePod<ClientMsg>(out_payload, out_len, &out);
+                    bool ok = shm::DecodePod<ClientMsg>(pod_data, pod_len, &out);
                     DoNotOptimize(ok);
                     DoNotOptimize(out.seq);
                 }
@@ -233,7 +237,7 @@ void RunReader(int socket_fd, int ctrl_fd)
     auto ch  = Channel::Accept(socket_fd);
     auto raw_buf = std::make_unique<char[]>(Channel::max_write_size);
 
-    shm_ipc::FrameReader<> reader;
+    shm::FrameReader<> reader;
 
     for (;;)
     {
@@ -256,12 +260,11 @@ void RunReader(int socket_fd, int ctrl_fd)
         {
             // FrameReader 拆帧模式
             int32_t received = 0;
-            uint32_t tag = 0;
             const void *payload = nullptr;
             uint32_t payload_len = 0;
             while (received < cmd.count)
             {
-                if (reader.TryRecv(ch, &tag, &payload, &payload_len) == 0)
+                if (reader.TryRecv(ch, &payload, &payload_len) == 0)
                     ++received;
             }
         }
@@ -303,8 +306,15 @@ struct RingResult
 void RunWriter(int socket_fd, int ctrl_fd)
 {
     auto ch = Channel::Connect(socket_fd);
-    auto payload = std::make_unique<char[]>(Channel::max_write_size);
-    std::memset(payload.get(), 'W', Channel::max_write_size);
+    // payload_with_tag = [tag u32][payload data...]
+    uint32_t max_payload_with_tag = shm::kTagSize + Channel::max_write_size;
+    auto payload_with_tag = std::make_unique<char[]>(max_payload_with_tag);
+    uint32_t bench_tag = kTag;
+    std::memcpy(payload_with_tag.get(), &bench_tag, shm::kTagSize);
+    std::memset(payload_with_tag.get() + shm::kTagSize, 'W', Channel::max_write_size);
+    // raw payload for TryWrite baseline (same total size as frame)
+    auto raw_payload = std::make_unique<char[]>(Channel::max_write_size);
+    std::memset(raw_payload.get(), 'W', Channel::max_write_size);
 
     std::vector<RingResult> results;
 
@@ -313,7 +323,7 @@ void RunWriter(int socket_fd, int ctrl_fd)
 
     for (auto &tc : kTests)
     {
-        uint32_t frame_size = shm_ipc::kMsgHeaderSize + shm_ipc::kTagSize + tc.payload_size;
+        uint32_t frame_size = shm::kMsgHeaderSize + shm::kTagSize + tc.payload_size;
 
         // ---- 裸 TryWrite 基线 ----
         double best_raw = 1e18;
@@ -322,7 +332,7 @@ void RunWriter(int socket_fd, int ctrl_fd)
             // 预热
             RequestRead(ctrl_fd, kWarmup, frame_size);
             for (int i = 0; i < kWarmup; ++i)
-                while (ch.TryWrite(payload.get(), frame_size) != 0)
+                while (ch.TryWrite(raw_payload.get(), frame_size) != 0)
                     ;
             WaitReadDone(ctrl_fd);
 
@@ -330,7 +340,7 @@ void RunWriter(int socket_fd, int ctrl_fd)
             RequestRead(ctrl_fd, tc.rounds, frame_size);
             uint64_t t0 = NowNs();
             for (int i = 0; i < tc.rounds; ++i)
-                while (ch.TryWrite(payload.get(), frame_size) != 0)
+                while (ch.TryWrite(raw_payload.get(), frame_size) != 0)
                     ;
             uint64_t elapsed = NowNs() - t0;
             WaitReadDone(ctrl_fd);
@@ -344,7 +354,8 @@ void RunWriter(int socket_fd, int ctrl_fd)
             // 预热
             RequestRead(ctrl_fd, kWarmup, 0);
             for (int i = 0; i < kWarmup; ++i)
-                while (shm_ipc::Send(ch, kTag, payload.get(), tc.payload_size,
+                while (shm::Send(ch, payload_with_tag.get(),
+                                     shm::kTagSize + tc.payload_size,
                                      static_cast<uint32_t>(i)) != 0)
                     ;
             WaitReadDone(ctrl_fd);
@@ -353,7 +364,8 @@ void RunWriter(int socket_fd, int ctrl_fd)
             RequestRead(ctrl_fd, tc.rounds, 0);
             uint64_t t0 = NowNs();
             for (int i = 0; i < tc.rounds; ++i)
-                while (shm_ipc::Send(ch, kTag, payload.get(), tc.payload_size,
+                while (shm::Send(ch, payload_with_tag.get(),
+                                     shm::kTagSize + tc.payload_size,
                                      static_cast<uint32_t>(i)) != 0)
                     ;
             uint64_t elapsed = NowNs() - t0;
@@ -376,7 +388,7 @@ void RunWriter(int socket_fd, int ctrl_fd)
                 for (int i = 0; i < kWarmup; ++i)
                 {
                     msg.seq = i;
-                    while (shm_ipc::SendPod(ch, msg, static_cast<uint32_t>(i)) != 0)
+                    while (shm::SendPod(ch, msg, static_cast<uint32_t>(i)) != 0)
                         ;
                 }
                 WaitReadDone(ctrl_fd);
@@ -386,7 +398,7 @@ void RunWriter(int socket_fd, int ctrl_fd)
                 for (int i = 0; i < tc.rounds; ++i)
                 {
                     msg.seq = i;
-                    while (shm_ipc::SendPod(ch, msg, static_cast<uint32_t>(i)) != 0)
+                    while (shm::SendPod(ch, msg, static_cast<uint32_t>(i)) != 0)
                         ;
                 }
                 uint64_t elapsed = NowNs() - t0;
@@ -440,13 +452,13 @@ void RunWriter(int socket_fd, int ctrl_fd)
 
     for (auto &r : results)
     {
-        uint32_t total_bytes = shm_ipc::kMsgHeaderSize + shm_ipc::kTagSize + r.payload_size;
+        uint32_t total_bytes = shm::kMsgHeaderSize + shm::kTagSize + r.payload_size;
         double raw_mbs  = static_cast<double>(total_bytes) / r.raw_ns * 1e9 / (1024.0 * 1024.0);
         double send_mbs = static_cast<double>(total_bytes) / r.send_ns * 1e9 / (1024.0 * 1024.0);
 
         if (r.send_pod_ns > 0)
         {
-            uint32_t pod_bytes = shm_ipc::kMsgHeaderSize + shm_ipc::kTagSize + sizeof(ClientMsg);
+            uint32_t pod_bytes = shm::kMsgHeaderSize + shm::kTagSize + sizeof(ClientMsg);
             double pod_mbs = static_cast<double>(pod_bytes) / r.send_pod_ns * 1e9 / (1024.0 * 1024.0);
             std::printf("%12u %14.0f %14.0f %14.0f\n",
                         r.payload_size, raw_mbs, send_mbs, pod_mbs);

@@ -14,6 +14,7 @@
 
 #include <shm_ipc/codec.hpp>
 #include <shm_ipc/messages.hpp>
+#include <shm_ipc/pod_codec.hpp>
 #include <shm_ipc/ring_channel.hpp>
 
 #include <cstdint>
@@ -26,7 +27,7 @@
 
 namespace {
 
-using Channel = shm_ipc::DefaultRingChannel;
+using Channel = shm::DefaultRingChannel;
 
 constexpr uint32_t kMagicPayloadLen = 2048;
 constexpr char     kFillByte        = 'X';
@@ -71,28 +72,26 @@ void TestEncodeDecode()
 
     const char data[] = "hello codec";
     uint32_t data_len = static_cast<uint32_t>(std::strlen(data));
-    constexpr uint32_t tag = 0x1234;
     constexpr uint32_t seq = 777;
 
     char buf[256];
-    uint32_t frame_size = shm_ipc::Encode(tag, data, data_len, buf, sizeof(buf), seq);
+    uint32_t frame_size = shm::Encode(data, data_len, buf, sizeof(buf), seq);
     if (frame_size == 0 ||
-        frame_size != shm_ipc::kMsgHeaderSize + shm_ipc::kTagSize + data_len)
+        frame_size != shm::kMsgHeaderSize + data_len)
     {
         std::fprintf(stderr, "FAIL: Encode\n");
         std::abort();
     }
 
-    uint32_t out_tag = 0;
     const void *out_payload = nullptr;
     uint32_t out_len = 0;
     uint32_t out_seq = 0;
-    if (!shm_ipc::Decode(buf, frame_size, &out_tag, &out_payload, &out_len, &out_seq))
+    if (!shm::Decode(buf, frame_size, &out_payload, &out_len, &out_seq))
     {
         std::fprintf(stderr, "FAIL: Decode\n");
         std::abort();
     }
-    if (out_tag != tag || out_len != data_len || out_seq != seq ||
+    if (out_len != data_len || out_seq != seq ||
         std::memcmp(out_payload, data, data_len) != 0)
     {
         std::fprintf(stderr, "FAIL: field mismatch\n");
@@ -100,7 +99,7 @@ void TestEncodeDecode()
     }
 
     // 缓冲区太小应返回 0
-    if (shm_ipc::Encode(tag, data, data_len, buf, 4, seq) != 0)
+    if (shm::Encode(data, data_len, buf, 4, seq) != 0)
     {
         std::fprintf(stderr, "FAIL: small buf should return 0\n");
         std::abort();
@@ -122,30 +121,38 @@ void TestEncodePodDecodePod()
     hb.seq       = 77;
     hb.timestamp = 555;
 
-    constexpr uint32_t frame_size = shm_ipc::kMsgHeaderSize + shm_ipc::kTagSize + sizeof(Heartbeat);
+    constexpr uint32_t frame_size = shm::kMsgHeaderSize + shm::kTagSize + sizeof(Heartbeat);
     char buf[frame_size];
 
     uint32_t send_seq = 12345;
-    if (shm_ipc::EncodePod(hb, buf, frame_size, send_seq) != frame_size)
+    if (shm::EncodePod(hb, buf, frame_size, send_seq) != frame_size)
     {
         std::fprintf(stderr, "FAIL: EncodePod\n");
         std::abort();
     }
 
     // Decode 帧头
-    uint32_t tag = 0;
     const void *payload = nullptr;
     uint32_t payload_len = 0;
     uint32_t recv_seq = 0;
-    if (!shm_ipc::Decode(buf, frame_size, &tag, &payload, &payload_len, &recv_seq))
+    if (!shm::Decode(buf, frame_size, &payload, &payload_len, &recv_seq))
     {
         std::fprintf(stderr, "FAIL: Decode\n");
         std::abort();
     }
 
+    // payload = [tag u32][Heartbeat bytes], 跳过 tag
+    if (payload_len < shm::kTagSize)
+    {
+        std::fprintf(stderr, "FAIL: payload too small\n");
+        std::abort();
+    }
+    const void *pod_data = static_cast<const char *>(payload) + shm::kTagSize;
+    uint32_t pod_len = payload_len - shm::kTagSize;
+
     // DecodePod
     Heartbeat out{};
-    if (!shm_ipc::DecodePod<Heartbeat>(payload, payload_len, &out))
+    if (!shm::DecodePod<Heartbeat>(pod_data, pod_len, &out))
     {
         std::fprintf(stderr, "FAIL: DecodePod\n");
         std::abort();
@@ -169,7 +176,7 @@ void RunSenderBasic(int socket_fd)
     auto ch = Channel::Accept(socket_fd);
 
     ClientMsg msg = MakeTestMsg();
-    if (shm_ipc::SendPod(ch, msg, kMsgSeq) != 0)
+    if (shm::SendPod(ch, msg, kMsgSeq) != 0)
     {
         std::fprintf(stderr, "FAIL: SendPod\n");
         std::abort();
@@ -188,7 +195,7 @@ void RunReceiverBasic(int socket_fd)
     auto ch = Channel::Connect(socket_fd);
     int efd = ch.NotifyReadFd();
 
-    shm_ipc::FrameReader<> reader;
+    shm::FrameReader<> reader;
 
     std::printf("receiver(basic): polling for frame...\n");
 
@@ -205,14 +212,19 @@ void RunReceiverBasic(int socket_fd)
     uint32_t tag = 0;
     const void *payload = nullptr;
     uint32_t payload_len = 0;
-    if (reader.TryRecv(ch, &tag, &payload, &payload_len) != 0)
+    if (reader.TryRecv(ch, &payload, &payload_len) != 0)
     {
         std::fprintf(stderr, "FAIL: TryRecv\n");
         std::abort();
     }
 
+    // payload = [tag u32][ClientMsg bytes]
+    std::memcpy(&tag, payload, shm::kTagSize);
+    const void *pod_data = static_cast<const char *>(payload) + shm::kTagSize;
+    uint32_t pod_len = payload_len - shm::kTagSize;
+
     ClientMsg out{};
-    if (!shm_ipc::DecodePod<ClientMsg>(payload, payload_len, &out))
+    if (!shm::DecodePod<ClientMsg>(pod_data, pod_len, &out))
     {
         std::fprintf(stderr, "FAIL: DecodePod\n");
         std::abort();
@@ -236,9 +248,9 @@ void RunSenderByteByByte(int socket_fd)
 
     ClientMsg msg = MakeTestMsg();
 
-    constexpr uint32_t frame_size = shm_ipc::kMsgHeaderSize + shm_ipc::kTagSize + sizeof(ClientMsg);
+    constexpr uint32_t frame_size = shm::kMsgHeaderSize + shm::kTagSize + sizeof(ClientMsg);
     char frame[frame_size];
-    if (shm_ipc::EncodePod(msg, frame, frame_size, kMsgSeq) != frame_size)
+    if (shm::EncodePod(msg, frame, frame_size, kMsgSeq) != frame_size)
     {
         std::fprintf(stderr, "FAIL: EncodePod\n");
         std::abort();
@@ -269,15 +281,14 @@ void RunReceiverByteByByte(int socket_fd)
     auto ch = Channel::Connect(socket_fd);
     int efd = ch.NotifyReadFd();
 
-    shm_ipc::FrameReader<> reader;
+    shm::FrameReader<> reader;
 
     int wakeups  = 0;
     bool decoded = false;
 
-    constexpr uint32_t frame_size = shm_ipc::kMsgHeaderSize + shm_ipc::kTagSize + sizeof(ClientMsg);
+    constexpr uint32_t frame_size = shm::kMsgHeaderSize + shm::kTagSize + sizeof(ClientMsg);
     std::printf("receiver(byte-by-byte): expecting frame_size=%u, polling...\n", frame_size);
 
-    uint32_t tag = 0;
     const void *payload = nullptr;
     uint32_t payload_len = 0;
 
@@ -295,12 +306,16 @@ void RunReceiverByteByByte(int socket_fd)
         Channel::DrainNotify(efd);
         ++wakeups;
 
-        if (reader.TryRecv(ch, &tag, &payload, &payload_len) == 0)
+        if (reader.TryRecv(ch, &payload, &payload_len) == 0)
             decoded = true;
     }
 
+    // payload = [tag u32][ClientMsg bytes]
+    const void *pod_data = static_cast<const char *>(payload) + shm::kTagSize;
+    uint32_t pod_len = payload_len - shm::kTagSize;
+
     ClientMsg out{};
-    if (!shm_ipc::DecodePod<ClientMsg>(payload, payload_len, &out))
+    if (!shm::DecodePod<ClientMsg>(pod_data, pod_len, &out))
     {
         std::fprintf(stderr, "FAIL: DecodePod\n");
         std::abort();
@@ -318,7 +333,6 @@ void RunReceiverByteByByte(int socket_fd)
 // 测试 5：变长消息 Send + FrameReader 跨进程
 // =========================================================================
 
-constexpr uint32_t kVarTag = 200;
 constexpr uint32_t kVarSeq = 555;
 
 void RunSenderVar(int socket_fd)
@@ -330,7 +344,7 @@ void RunSenderVar(int socket_fd)
     for (int i = 0; i < 3; ++i)
     {
         uint32_t len = static_cast<uint32_t>(std::strlen(msgs[i]));
-        if (shm_ipc::Send(ch, kVarTag, msgs[i], len, kVarSeq + i) != 0)
+        if (shm::Send(ch, msgs[i], len, kVarSeq + i) != 0)
         {
             std::fprintf(stderr, "FAIL: Send[%d]\n", i);
             std::abort();
@@ -350,17 +364,16 @@ void RunReceiverVar(int socket_fd)
     auto ch = Channel::Connect(socket_fd);
     int efd = ch.NotifyReadFd();
 
-    shm_ipc::FrameReader<> reader;
+    shm::FrameReader<> reader;
 
     const char *expected[] = {"short", "medium length message for testing",
                               "a]longer]payload]with]various]characters]0123456789"};
 
     for (int i = 0; i < 3; ++i)
     {
-        uint32_t tag = 0;
         const void *payload = nullptr;
         uint32_t payload_len = 0;
-        int rc = reader.TryRecv(ch, &tag, &payload, &payload_len);
+        int rc = reader.TryRecv(ch, &payload, &payload_len);
 
         while (rc != 0)
         {
@@ -373,15 +386,15 @@ void RunReceiverVar(int socket_fd)
                 std::abort();
             }
             Channel::DrainNotify(efd);
-            rc = reader.TryRecv(ch, &tag, &payload, &payload_len);
+            rc = reader.TryRecv(ch, &payload, &payload_len);
         }
 
         uint32_t expected_len = static_cast<uint32_t>(std::strlen(expected[i]));
-        if (tag != kVarTag || payload_len != expected_len ||
+        if (payload_len != expected_len ||
             std::memcmp(payload, expected[i], expected_len) != 0)
         {
-            std::fprintf(stderr, "FAIL: msg[%d] content mismatch (tag=%u, len=%u)\n",
-                         i, tag, payload_len);
+            std::fprintf(stderr, "FAIL: msg[%d] content mismatch (len=%u)\n",
+                         i, payload_len);
             std::abort();
         }
         if (reader.LastSeq() != kVarSeq + static_cast<uint32_t>(i))
