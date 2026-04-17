@@ -59,6 +59,9 @@ if(Protobuf_FOUND)
     add_executable(test_proto_codec test/test_proto_codec.cpp)
     target_link_libraries(test_proto_codec PRIVATE shm_ipc shm_proto)
 
+    add_executable(test_proto_wrap test/test_proto_wrap.cpp)
+    target_link_libraries(test_proto_wrap PRIVATE shm_ipc shm_proto)
+
     target_link_libraries(client PRIVATE shm_proto)
     target_compile_definitions(client PRIVATE SHM_IPC_HAS_PROTOBUF)
     target_link_libraries(server PRIVATE shm_proto)
