@@ -76,6 +76,14 @@ class RingBuf
     /**
      * @brief 初始化共享内存区域（清零）
      * @param shm 指向共享内存起始位置的指针
+     *
+     * @note 清零的可见性约定：Init 本身不做任何原子发布，write_pos/read_pos
+     *       的初值（0）及数据区的清零对**对端进程**可见，依赖 memfd 通过
+     *       SCM_RIGHTS（sendmsg/recvmsg）传递时内核提供的 happens-before：
+     *       fd 传递是一次同步点，发送端在 sendmsg 前对该 mmap 区域的所有写入，
+     *       在接收端 recvmsg 后必然可见。因此调用方必须保证 Init 在 fd 发送
+     *       之前完成（见 RingChannel::Connect/Accept 的调用顺序）。
+     *       对端后续读到的 write_pos=0 即"环为空"，是安全的初态。
      */
     static void Init(void *shm) { std::memset(shm, 0, shm_size); }
 
