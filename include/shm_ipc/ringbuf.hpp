@@ -23,6 +23,7 @@
 #define SHM_IPC_RINGBUF_HPP_
 
 #include <atomic>
+#include <cassert>
 #include <cstdint>
 #include <cstring>
 
@@ -65,6 +66,13 @@ class RingBuf
     static_assert((Capacity & (Capacity - 1)) == 0,
                   "Capacity must be a power of 2");
     static_assert(Capacity >= 1024, "Capacity must be at least 1024 bytes");
+    // len 参数与 Peek/TryRead 返回值均为 uint32_t，超出会静默截断
+    static_assert(Capacity <= UINT32_MAX,
+                  "Capacity must fit in uint32_t (length fields are u32)");
+    // 原子变量位于跨进程共享内存上，必须 lock-free
+    //（否则可能退化为内部互斥锁，跨进程使用即死锁）
+    static_assert(std::atomic<uint64_t>::is_always_lock_free,
+                  "lock-free atomics are required for cross-process shm");
 
  public:
     static constexpr std::size_t capacity       = Capacity;
@@ -102,6 +110,8 @@ class RingBuf
     static int TryWrite(void *shm, const void *data, uint32_t len)
     {
         if (len == 0 || len > max_write_size)
+            return -1;
+        if (data == nullptr)  // memcpy(dst, nullptr, n) 是 UB，防御性拒绝
             return -1;
 
         auto *hdr  = Header(shm);
@@ -154,6 +164,12 @@ class RingBuf
      * @note read_pos 快照是保守估计：读方可能已消费更多数据，
      *       但绝不会消费得更少，因此空间检查不会产生错误。
      *       代价是在读方已消费数据的场景下，可能误判为空间不足。
+     *
+     * @warning 同一时刻同一环上只允许存在一个活跃的 BatchWriter。
+     *       每个 BatchWriter 在构造时从共享内存快照 write_pos，
+     *       两个活跃实例会向同一物理位置写入并互相覆盖，造成静默的
+     *       数据损坏。同理，持有活跃 ChannelBatchWriter 期间不得调用
+     *       独立的 Send/SendFrame（它们内部会新建 BatchWriter）。
      */
     class BatchWriter
     {
@@ -191,6 +207,8 @@ class RingBuf
         int TryWrite(const void *data, uint32_t len)
         {
             if (len == 0 || len > max_write_size)
+                return -1;
+            if (data == nullptr)  // memcpy(dst, nullptr, n) 是 UB，防御性拒绝
                 return -1;
 
             if ((w_ + len) - r_ > Capacity)
@@ -236,6 +254,38 @@ class RingBuf
         /** @brief 自上次 Flush 以来已成功 TryWrite 的次数 */
         int Count() const noexcept { return count_; }
 
+        /** @brief 自上次 Flush 以来已写入但尚未发布的字节数 */
+        uint64_t PendingBytes() const noexcept { return w_ - w_start_; }
+
+        /**
+         * @brief 丢弃自上次 Flush 以来的所有未发布写入
+         *
+         * 未发布的数据对对端不可见（write_pos 未推进），丢弃是安全的。
+         */
+        void Cancel() noexcept
+        {
+            w_     = w_start_;
+            count_ = 0;
+        }
+
+        /**
+         * @brief 回滚到之前的 PendingBytes/Count 状态（撤销最近一次帧写入）
+         * @param pending 之前通过 PendingBytes() 记录的值
+         * @param count   之前通过 Count() 记录的值
+         *
+         * 一帧由多次 TryWrite 组成（header + 分段 payload），回滚必须同时
+         * 恢复字节计数与写入次数计数；只减一次 count 会导致计数虚高。
+         * 数据本身未发布，无需清除。
+         */
+        void RewindTo(uint64_t pending, int count) noexcept
+        {
+            // pending 超过当前未发布字节数会虚增 w_，
+            // Flush 时把未写入的垃圾数据发布给对端
+            assert(pending <= PendingBytes());
+            w_     = w_start_ + pending;
+            count_ = count;
+        }
+
         /** @brief 当前可写入的剩余字节数 */
         uint64_t FreeBytes() const noexcept { return Capacity - (w_ - r_); }
 
@@ -268,6 +318,7 @@ class RingBuf
          */
         void CommitReserve(uint32_t len)
         {
+            assert(len > 0 && len <= max_write_size);
             w_ += len;
             ++count_;
         }
@@ -306,6 +357,9 @@ class RingBuf
             return 0;
 
         uint32_t to_read = (avail < max_len) ? static_cast<uint32_t>(avail) : max_len;
+        // max_len == 0：不拷贝不推进；memcpy(dst, src, 0) 对空指针属 UB
+        if (to_read == 0)
+            return 0;
         CopyOut(base, Mask(r), data, to_read);
 
         hdr->read_pos.store(r + to_read, std::memory_order_release);
@@ -321,6 +375,10 @@ class RingBuf
      */
     static int ReadExact(void *shm, void *data, uint32_t len)
     {
+        // 读 0 字节平凡成功；提前返回避免 memcpy(dst, src, 0) 的 UB 边界
+        if (len == 0)
+            return 0;
+
         auto *hdr        = Header(shm);
         const char *base = DataRegion(shm);
 
@@ -386,12 +444,17 @@ class RingBuf
     /**
      * @brief 提交读取：推进 read_pos
      * @param shm 共享内存指针
-     * @param len 要推进的字节数
+     * @param len 要推进的字节数（不得超过当前可读字节数）
+     *
+     * @note len 超过可读字节数会破坏 r <= w 不变式（debug 构建触发
+     *       assert；release 构建静默损坏，调用方必须保证不超交）。
      */
     static void CommitRead(void *shm, uint32_t len)
     {
         auto *hdr = Header(shm);
         uint64_t r = hdr->read_pos.load(std::memory_order_relaxed);
+        assert(static_cast<uint64_t>(len) <=
+               hdr->write_pos.load(std::memory_order_acquire) - r);
         hdr->read_pos.store(r + len, std::memory_order_release);
     }
 

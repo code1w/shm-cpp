@@ -10,6 +10,7 @@
 #ifndef SHM_IPC_PROTO_CODEC_HPP_
 #define SHM_IPC_PROTO_CODEC_HPP_
 
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -53,9 +54,12 @@ class ProtoCodec : public ICodec
     {
         const char *type_name = nullptr;
         uint32_t type_name_len = 0;
-        return DecodeHeader(buf, buf_len,
-                            &type_name, &type_name_len,
-                            payload, payload_len, seq);
+        if (!DecodeHeader(buf, buf_len,
+                          &type_name, &type_name_len,
+                          payload, payload_len, seq))
+            return false;
+        // 校验 type_name，防止类型混淆
+        return TypeNameMatches(type_name, type_name_len);
     }
 
     std::string TypeName() const override
@@ -65,7 +69,9 @@ class ProtoCodec : public ICodec
     }
 
     /**
-     * @brief 从 raw payload 中跳过 type_name 前缀，返回 pb 数据部分
+     * @brief 从 raw payload 中校验并跳过 type_name 前缀，返回 pb 数据部分
+     *
+     * type_name 与 T 的实际类型名不匹配时返回 false（防止类型混淆）。
      */
     bool DecodePayload(const void *payload, uint32_t payload_len,
                        const void **data, uint32_t *data_len) override
@@ -77,6 +83,8 @@ class ProtoCodec : public ICodec
         std::memcpy(&name_len, p, kTypeNameLenSize);
         uint32_t prefix_len = kTypeNameLenSize + name_len;
         if (payload_len < prefix_len)
+            return false;
+        if (!TypeNameMatches(p + kTypeNameLenSize, name_len))
             return false;
         *data     = p + prefix_len;
         *data_len = payload_len - prefix_len;
@@ -150,7 +158,8 @@ class ProtoCodec : public ICodec
 
         if (hdr.len < kTypeNameLenSize)
             return false;
-        if (kMsgHeaderSize + hdr.len > buf_len)
+        // 减法形式避免 hdr.len 接近 UINT32_MAX 时加法溢出回绕
+        if (hdr.len > buf_len - kMsgHeaderSize)
             return false;
 
         uint16_t name_len = 0;
@@ -182,6 +191,9 @@ class ProtoCodec : public ICodec
 
     /**
      * @brief 编码 protobuf Message 并写入 RingChannel，成功后通知对端
+     *
+     * pb 序列化数据通过单次写入完成，pb_len 不得超过
+     * RingBuf::max_write_size（Capacity/2），否则返回 -1 且不写入任何数据。
      */
     template <std::size_t Cap>
     static int Send(RingChannel<Cap> &ch, const T &msg, uint32_t seq)
@@ -189,6 +201,8 @@ class ProtoCodec : public ICodec
         std::string name = msg.GetTypeName();
         auto name_len = static_cast<uint16_t>(name.size());
         auto pb_len = static_cast<uint32_t>(msg.ByteSizeLong());
+        if (pb_len > RingChannel<Cap>::max_write_size)
+            return -1;
         uint32_t payload_len = kTypeNameLenSize + name_len + pb_len;
 
         return SendFrame(ch, payload_len, seq, [&](auto &batch) {
@@ -201,6 +215,8 @@ class ProtoCodec : public ICodec
 
     /**
      * @brief 编码 protobuf Message 并写入批量写入器（不触发通知）
+     *
+     * pb_len 限制同上单次 Send。
      */
     template <std::size_t Cap>
     static int SendBatch(typename RingChannel<Cap>::ChannelBatchWriter &batch,
@@ -209,6 +225,8 @@ class ProtoCodec : public ICodec
         std::string name = msg.GetTypeName();
         auto name_len = static_cast<uint16_t>(name.size());
         auto pb_len = static_cast<uint32_t>(msg.ByteSizeLong());
+        if (pb_len > RingChannel<Cap>::max_write_size)
+            return -1;
         uint32_t payload_len = kTypeNameLenSize + name_len + pb_len;
 
         return SendFrameBatch<Cap>(batch, payload_len, seq, [&](auto &b) {
@@ -221,23 +239,51 @@ class ProtoCodec : public ICodec
 
     /**
      * @brief 从内部 FrameReader 读取一帧并反序列化为 T
+     *
+     * type_name 不匹配或解析失败的毒帧与 -2 超大帧会被立即提交丢弃
+     * （推进 read_pos 释放环空间）并自动跳过，直到取到一条合法帧或
+     * 环空。每次丢弃都推进 read_pos，循环必然终止。
+     *
+     * @return 0 成功；-1 无数据；-3 帧头长度非法（协议错误，连接应断开）
      */
     template <std::size_t Cap>
     int Recv(RingChannel<Cap> &ch, T *out)
     {
-        const void *payload = nullptr;
-        uint32_t payload_len = 0;
-        int rc = reader_.TryRecv(ch, &payload, &payload_len);
-        if (rc != 0)
-            return rc;
-        const void *data = nullptr;
-        uint32_t data_len = 0;
-        if (!DecodePayload(payload, payload_len, &data, &data_len))
-            return -1;
-        return out->ParseFromArray(data, static_cast<int>(data_len)) ? 0 : -1;
+        for (;;)
+        {
+            const void *payload = nullptr;
+            uint32_t payload_len = 0;
+            int rc = reader_.TryRecv(ch, &payload, &payload_len);
+            if (rc == -1 || rc == -3)
+                return rc;
+            if (rc == -2)
+            {
+                reader_.Commit(ch);  // 超大帧已完整到达，立即丢弃释放环空间
+                continue;
+            }
+            const void *data = nullptr;
+            uint32_t data_len = 0;
+            if (!DecodePayload(payload, payload_len, &data, &data_len) ||
+                !out->ParseFromArray(data, static_cast<int>(data_len)))
+            {
+                reader_.Commit(ch);  // 毒帧立即丢弃，避免驻留环中占用空间
+                continue;
+            }
+            return 0;
+        }
     }
 
  private:
+    /**
+     * @brief 校验帧内 type_name 是否与 T 的实际类型名一致
+     */
+    static bool TypeNameMatches(const char *type_name, uint32_t type_name_len)
+    {
+        static const std::string kExpected = T{}.GetTypeName();
+        return type_name_len == kExpected.size() &&
+               std::memcmp(type_name, kExpected.data(), type_name_len) == 0;
+    }
+
     FrameReader<> reader_;
 
     /**

@@ -41,7 +41,14 @@ class FrameReader
      * @param ch               双向环形通道
      * @param[out] payload     payload 指针（指向 ring 内部或内部缓冲区）
      * @param[out] payload_len payload 字节数
-     * @return 0 成功，-1 数据不足，-2 帧过大（超过 BufSize）
+     * @return 0 成功，-1 数据不足，-2 帧跨环尾且超过回退缓冲区 BufSize，
+     *         -3 帧头长度非法（协议错误，连接应视为损坏并断开）
+     *
+     * @note -2 时帧被标记为待丢弃：下次 TryRecv/Commit 会自动跳过该帧，
+     *       字节流可自行恢复（调用方也可立即调用 Commit 丢弃）。
+     *       零拷贝快速路径不受 BufSize 限制。
+     * @note -3 时帧无法被跳过（其声称的长度永远不可能完整到达），
+     *       read_pos 保持不动，调用方应当断开连接而不是继续重试。
      */
     template <std::size_t Cap>
     int TryRecv(RingChannel<Cap> &ch,
@@ -79,15 +86,22 @@ class FrameReader
                         seg2, kMsgHeaderSize - seg1_len);
         }
 
-        // 校验帧头
-        if (hdr.len > BufSize)
-            return -2;
+        // 合理性上限检查（在完整性校验之前）：
+        // 合法 payload 最大为 max_write_size（codec 层单次发送限制）
+        // + kMaxPayloadSlack（类型前缀余量），且任何帧都不可能超过环容量。
+        // 超过上限的 hdr.len 只可能来自损坏/恶意对端——这种帧永远不可能
+        // 完整到达，若仅当"数据不足"等待会永久卡死字节流，必须立即报错。
+        constexpr uint64_t kMaxPayload =
+            RingChannel<Cap>::max_write_size + kMaxPayloadSlack;
+        if (hdr.len > kMaxPayload || hdr.len > Cap - kMsgHeaderSize)
+            return -3;
 
-        uint32_t frame_size = kMsgHeaderSize + hdr.len;
-        if (total_avail < frame_size)
+        // 完整性校验（减法形式，避免 hdr.len 接近 UINT32_MAX 时
+        // kMsgHeaderSize + hdr.len 溢出回绕绕过检查）
+        if (hdr.len > total_avail - kMsgHeaderSize)
             return -1;
 
-        hdr_ = hdr;
+        uint32_t frame_size = kMsgHeaderSize + hdr.len;
 
         // payload 起始位置在帧头之后
         uint32_t body_offset = kMsgHeaderSize;
@@ -100,13 +114,20 @@ class FrameReader
         }
         else if (body_offset + body_len <= seg1_len)
         {
-            // 快速路径：整帧在 seg1 中，零拷贝
+            // 快速路径：整帧在 seg1 中，零拷贝（不受 BufSize 限制）
             *payload     = s1 + body_offset;
             *payload_len = body_len;
         }
         else
         {
-            // 慢速路径：body 跨段，拷贝到 buf_
+            // 慢速路径：body 跨段，需要拷贝到 buf_
+            if (body_len > BufSize)
+            {
+                // 回退缓冲区放不下：标记整帧为待丢弃，下次 TryRecv/Commit
+                // 自动跳过，避免毒帧永久卡死字节流
+                pending_commit_ = frame_size;
+                return -2;
+            }
             CopyFromSegments(s1, seg1_len,
                              static_cast<const char *>(seg2), seg2_len,
                              body_offset, buf_, body_len);
@@ -114,6 +135,7 @@ class FrameReader
             *payload_len = body_len;
         }
 
+        hdr_            = hdr;  // 仅成功路径更新，-2 丢弃帧不污染 LastSeq()
         pending_commit_ = frame_size;
         return 0;
     }

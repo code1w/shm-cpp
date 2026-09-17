@@ -214,6 +214,53 @@ void TestSendRecvViaRing()
     std::printf("  PASS\n");
 }
 
+/// 测试 4（回归）：type_name 混淆必须被拒绝
+void TestTypeNameMismatch()
+{
+    std::printf("--- TestTypeNameMismatch ---\n");
+
+    // 编码一条 ClientMsgProto 帧
+    shm_ipc::ClientMsgProto cm;
+    cm.set_seq(1);
+    cm.set_tick(2);
+    cm.set_timestamp(100);
+    cm.set_payload("hello");
+
+    char buf[1024]{};
+    uint32_t frame_size =
+        shm::ProtoCodec<shm_ipc::ClientMsgProto>::EncodeTo(cm, buf, sizeof(buf), 5);
+    assert(frame_size > 0);
+
+    // 用错误的 codec（HeartbeatProto）解码：type_name 不匹配，必须拒绝
+    shm::ProtoCodec<shm_ipc::HeartbeatProto> wrong_codec;
+    const void *payload = nullptr;
+    uint32_t payload_len = 0;
+    bool ok = wrong_codec.Decode(buf, frame_size, &payload, &payload_len, nullptr);
+    assert(!ok);
+
+    const void *raw_payload = buf + shm::kMsgHeaderSize;
+    uint32_t raw_len = frame_size - shm::kMsgHeaderSize;
+    const void *data = nullptr;
+    uint32_t data_len = 0;
+    ok = wrong_codec.DecodePayload(raw_payload, raw_len, &data, &data_len);
+    assert(!ok);
+
+    // 正确的 codec：必须通过
+    shm::ProtoCodec<shm_ipc::ClientMsgProto> right_codec;
+    ok = right_codec.Decode(buf, frame_size, &payload, &payload_len, nullptr);
+    assert(ok);
+    ok = right_codec.DecodePayload(raw_payload, raw_len, &data, &data_len);
+    assert(ok);
+
+    shm_ipc::ClientMsgProto out;
+    ok = out.ParseFromArray(data, static_cast<int>(data_len));
+    assert(ok);
+    assert(out.seq() == 1);
+    assert(out.payload() == "hello");
+
+    std::printf("  PASS\n");
+}
+
 }  // anonymous namespace
 
 int main()
@@ -221,6 +268,7 @@ int main()
     TestEncodeDecodeBuffer();
     TestProtoCodecInterface();
     TestSendRecvViaRing();
+    TestTypeNameMismatch();
 
     std::printf("\n=== TEST PASSED ===\n");
     return 0;

@@ -14,16 +14,17 @@ cmake .. -DCMAKE_BUILD_TYPE=Release
 make -j$(nproc)
 ```
 
-Produces: `server`, `client`, `bench_shm`, `bench_socket`, `bench_batch`, `test_codec`, `test_ringbuf_wrap`.
+Produces: `server`, `client`, `socket_server`, `socket_client`, `bench_shm`, `bench_socket`, `bench_batch`, `bench_codec`, `test_codec`, `test_ringbuf_wrap`, `test_eventloop` (plus `test_proto_codec`, `test_proto_wrap` when protobuf is found under `3rd/protobuf`).
 
 ## Run Tests
 
 ```bash
 ./build/test_codec
 ./build/test_ringbuf_wrap
+./build/test_eventloop
 ```
 
-No test framework — tests use `assert()` and print `=== TEST PASSED ===` on success. `test_codec` forks a child process (sender) and uses socketpair for IPC.
+No test framework — tests use `assert()` and print `=== TEST PASSED ===` on success. Test targets are built with `-UNDEBUG` so asserts stay live in Release builds. `test_codec` forks a child process (sender) and uses socketpair for IPC.
 
 ## Run Benchmarks
 
@@ -41,7 +42,11 @@ include/shm_ipc/
   common.hpp          — RAII wrappers (UniqueFd, MmapRegion), fd passing (SCM_RIGHTS), memfd/eventfd creation
   ring_channel.hpp    — Bidirectional channel: two RingBufs + memfd creation + fd exchange handshake + eventfd notify
   event_loop.hpp      — poll + timerfd single-threaded event loop
-  codec.hpp           — POD encode/decode with type tags, SendPod helper, PodReader zero-copy stream reader
+  codec.hpp           — Frame layer: [MsgHeader 8B][payload] encode/decode, Send/SendFrame helpers, SHM_IPC_REGISTER_POD
+  frame_reader.hpp    — FrameReader: zero-copy stateful stream frame extractor (Peek + CommitRead)
+  codec_interface.hpp — ICodec abstract interface (type-erased encode/decode/send/recv)
+  pod_codec.hpp       — PodCodec<T>: POD messages, payload = [tag u32][T bytes], tag verified on receive
+  proto_codec.hpp     — ProtoCodec<T>: protobuf messages, payload = [type_name_len u16][type_name][pb bytes]
   messages.hpp        — Application-layer POD message definitions (Heartbeat, ClientMsg)
   client_state.hpp    — Per-connection state struct (shared by client/server)
 src/
@@ -49,7 +54,7 @@ src/
   client.cpp          — Client using EventLoop + RingChannel
 ```
 
-Namespace: `shm_ipc`. Default ring capacity: 8MB (template parameter).
+Namespace: `shm` (headers live in `include/shm_ipc/`). Default ring capacity: 8MB (template parameter).
 
 ## Code Conventions
 
@@ -61,7 +66,7 @@ Namespace: `shm_ipc`. Default ring capacity: 8MB (template parameter).
   - snake_case for variables; class members have trailing `_` (e.g. `fd_`, `write_pos`)
   - Constants: `k` + PascalCase (e.g. `kMaxClients`)
   - Globals: `g` + PascalCase (e.g. `gLoop`, `gReaders`)
-  - Namespaces: lowercase (e.g. `shm_ipc`)
+  - Namespaces: lowercase (e.g. `shm`)
 - **Include guards**: `#ifndef SHM_IPC_<FILE>_HPP_` / `#define` / `#endif`
 - **Comments**: Chinese Doxygen-style comments (`@brief`, `@param`, `@return`)
 - **Header-only library**: INTERFACE CMake target, no .cpp for the library itself
@@ -69,7 +74,7 @@ Namespace: `shm_ipc`. Default ring capacity: 8MB (template parameter).
 
 ## Dependencies
 
-None beyond Linux system headers. No third-party libraries.
+None beyond Linux system headers for the core library. Optional: protobuf (under `3rd/protobuf`) enables `proto_codec.hpp` targets.
 
 ## Key Design Decisions
 

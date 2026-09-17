@@ -51,6 +51,13 @@ static_assert(sizeof(MsgHeader) == 8, "MsgHeader must be 8 bytes");
 /// @brief MsgHeader 占用的字节数
 inline constexpr uint32_t kMsgHeaderSize = sizeof(MsgHeader);
 
+/// @brief 合法 payload 超出 max_write_size 的最大余量
+///
+/// codec 层单次发送的序列化数据被限制在 max_write_size（Capacity/2）以内，
+/// 但 payload 还包含类型前缀：POD tag 4B，protobuf type_name 前缀最大
+/// 2 + 65535B。取 128KB 作为余量，足以覆盖所有前缀又不会放过异常帧。
+inline constexpr uint32_t kMaxPayloadSlack = 128 * 1024;
+
 // ---------------------------------------------------------------------------
 // TypeTag 特化框架
 // ---------------------------------------------------------------------------
@@ -127,7 +134,12 @@ inline char *EncodeFrame(void *buf, uint32_t buf_size,
  * @param payload_len   payload 字节数
  * @param seq           消息序列号
  * @param write_payload 回调，负责向 batch 写入 payload
- * @return 0 成功，-1 缓冲区满或消息过大
+ * @return 0 成功，-1 缓冲区满、消息过大或回调写入字节数与 payload_len 不符
+ *
+ * @note 回调中每次 TryWrite 的长度不得超过 RingBuf::max_write_size。
+ *       函数返回前会校验回调实际写入的字节数恰好等于 payload_len；
+ *       不匹配时回滚本次写入（未 Flush 的数据对对端不可见），
+ *       保证不会发布残缺帧而损坏字节流。
  */
 template <std::size_t Cap, typename WriteFn>
 int SendFrame(RingChannel<Cap> &ch, uint32_t payload_len, uint32_t seq,
@@ -146,6 +158,14 @@ int SendFrame(RingChannel<Cap> &ch, uint32_t payload_len, uint32_t seq,
 
     write_payload(batch);
 
+    // 防御性校验：回调写入的字节数必须与 payload_len 一致，
+    // 否则回滚（不 Flush，数据未发布），避免帧流损坏
+    if (batch.PendingBytes() != frame_size)
+    {
+        batch.Cancel();
+        return -1;
+    }
+
     batch.Flush();
     return 0;
 }
@@ -159,7 +179,10 @@ int SendFrame(RingChannel<Cap> &ch, uint32_t payload_len, uint32_t seq,
  * @param payload_len   payload 字节数
  * @param seq           消息序列号
  * @param write_payload 回调，负责向 batch 写入 payload
- * @return 0 成功，-1 缓冲区满或消息过大
+ * @return 0 成功，-1 缓冲区满、消息过大或回调写入字节数与 payload_len 不符
+ *
+ * @note 与 SendFrame 一样校验写入字节数，不匹配时回滚本帧，
+ *       不影响 batch 中此前已写入的其他帧。
  */
 template <std::size_t Cap, typename WriteFn>
 int SendFrameBatch(typename RingChannel<Cap>::ChannelBatchWriter &batch,
@@ -170,12 +193,24 @@ int SendFrameBatch(typename RingChannel<Cap>::ChannelBatchWriter &batch,
     if (batch.FreeBytes() < frame_size)
         return -1;
 
+    uint64_t before       = batch.PendingBytes();
+    int      before_count = batch.Count();
+
     MsgHeader hdr{};
     hdr.len = payload_len;
     hdr.seq = seq;
     batch.TryWrite(&hdr, kMsgHeaderSize);
 
     write_payload(batch);
+
+    // 回滚必须同时恢复字节计数与写入次数计数：一帧由多次
+    // TryWrite 组成（header + 分段 payload），只恢复字节数会
+    // 导致 Count() 虚高、Flush() 返回值失真
+    if (batch.PendingBytes() - before != frame_size)
+    {
+        batch.RewindTo(before, before_count);
+        return -1;
+    }
     return 0;
 }
 
@@ -228,7 +263,8 @@ inline bool Decode(const void *buf, uint32_t buf_len,
     MsgHeader hdr{};
     std::memcpy(&hdr, p, kMsgHeaderSize);
 
-    if (kMsgHeaderSize + hdr.len > buf_len)
+    // 减法形式避免 hdr.len 接近 UINT32_MAX 时 kMsgHeaderSize + hdr.len 溢出回绕
+    if (hdr.len > buf_len - kMsgHeaderSize)
         return false;
 
     *payload     = p + kMsgHeaderSize;
@@ -244,11 +280,16 @@ inline bool Decode(const void *buf, uint32_t buf_len,
 
 /**
  * @brief 编码消息并写入 RingChannel，成功后通知对端
+ *
+ * payload 通过单次 TryWrite 写入，payload_len 不得超过
+ * RingBuf::max_write_size（Capacity/2），否则返回 -1 且不写入任何数据。
  */
 template <std::size_t Cap>
 int Send(RingChannel<Cap> &ch,
          const void *payload, uint32_t payload_len, uint32_t seq)
 {
+    if (payload_len > RingChannel<Cap>::max_write_size)
+        return -1;
     return SendFrame(ch, payload_len, seq, [&](auto &batch) {
         if (payload_len > 0)
             batch.TryWrite(payload, payload_len);
@@ -257,11 +298,15 @@ int Send(RingChannel<Cap> &ch,
 
 /**
  * @brief 编码消息并写入批量写入器（不触发通知，由 Flush 统一通知）
+ *
+ * payload_len 限制同上单次 Send。
  */
 template <std::size_t Cap>
 int Send(typename RingChannel<Cap>::ChannelBatchWriter &batch,
          const void *payload, uint32_t payload_len, uint32_t seq)
 {
+    if (payload_len > RingChannel<Cap>::max_write_size)
+        return -1;
     return SendFrameBatch<Cap>(batch, payload_len, seq, [&](auto &b) {
         if (payload_len > 0)
             b.TryWrite(payload, payload_len);

@@ -15,6 +15,7 @@
 
 #include <array>
 #include <cerrno>
+#include <cstdint>
 #include <cstring>
 #include <stdexcept>
 #include <string>
@@ -152,7 +153,8 @@ struct TaggedFd
 [[nodiscard]]
 inline UniqueFd CreateMemfd(const char *name, std::size_t size)
 {
-    int fd = static_cast<int>(::syscall(__NR_memfd_create, name, 0u));
+    int fd = static_cast<int>(
+        ::syscall(__NR_memfd_create, name, static_cast<unsigned>(MFD_CLOEXEC)));
     if (fd < 0)
         throw std::runtime_error(std::string("memfd_create: ") +
                                  std::strerror(errno));
@@ -221,9 +223,21 @@ inline TaggedFd RecvFd(int socket)
     if (received == 0)
         throw std::runtime_error("recvmsg: connection closed during fd transfer");
 
+    // 消息至少应包含 4 字节类型标签，否则说明对端行为异常，
+    // 继续解析会读到未初始化的栈数据
+    if (static_cast<std::size_t>(received) < sizeof(uint32_t))
+        throw std::runtime_error("recvmsg: message too short for fd tag");
+
+    // 控制消息被截断（对端一次发送了多个 fd 或缓冲区不足）时静默继续
+    // 会导致 fd 泄漏或标签错位，必须显式报错
+    if (msg.msg_flags & MSG_CTRUNC)
+        throw std::runtime_error("recvmsg: control message truncated");
+
     auto *cmsg = CMSG_FIRSTHDR(&msg);
     if (!cmsg || cmsg->cmsg_level != SOL_SOCKET || cmsg->cmsg_type != SCM_RIGHTS)
         throw std::runtime_error("RecvFd: no SCM_RIGHTS in control message");
+    if (cmsg->cmsg_len < CMSG_LEN(sizeof(int)))
+        throw std::runtime_error("RecvFd: control message too short for fd");
     int fd = -1;
     std::memcpy(&fd, CMSG_DATA(cmsg), sizeof(int));
 

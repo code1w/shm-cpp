@@ -34,6 +34,18 @@ target_link_libraries(test_codec PRIVATE shm_ipc)
 add_executable(test_ringbuf_wrap test/test_ringbuf_wrap.cpp)
 target_link_libraries(test_ringbuf_wrap PRIVATE shm_ipc)
 
+add_executable(test_eventloop test/test_eventloop.cpp)
+target_link_libraries(test_eventloop PRIVATE shm_ipc)
+
+add_executable(test_ringbuf_boundary test/test_ringbuf_boundary.cpp)
+target_link_libraries(test_ringbuf_boundary PRIVATE shm_ipc)
+
+# 测试使用 assert()，Release 构建的 -DNDEBUG 会将其全部编译掉，
+# 必须显式恢复，否则测试形同虚设
+foreach(t test_codec test_ringbuf_wrap test_eventloop test_ringbuf_boundary)
+    target_compile_options(${t} PRIVATE -UNDEBUG)
+endforeach()
+
 add_executable(socket_server src/socket_server.cpp)
 target_link_libraries(socket_server PRIVATE shm_ipc)
 
@@ -58,9 +70,11 @@ if(Protobuf_FOUND)
 
     add_executable(test_proto_codec test/test_proto_codec.cpp)
     target_link_libraries(test_proto_codec PRIVATE shm_ipc shm_proto)
+    target_compile_options(test_proto_codec PRIVATE -UNDEBUG)
 
     add_executable(test_proto_wrap test/test_proto_wrap.cpp)
     target_link_libraries(test_proto_wrap PRIVATE shm_ipc shm_proto)
+    target_compile_options(test_proto_wrap PRIVATE -UNDEBUG)
 
     target_link_libraries(client PRIVATE shm_proto)
     target_compile_definitions(client PRIVATE SHM_IPC_HAS_PROTOBUF)

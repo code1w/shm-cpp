@@ -10,6 +10,7 @@
 #include <sys/un.h>
 #include <unistd.h>
 
+#include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -126,6 +127,9 @@ void RunBench()
 
 int main()
 {
+    // 对端中途退出时 write 会触发 SIGPIPE，忽略之以走 EPIPE 错误路径
+    ::signal(SIGPIPE, SIG_IGN);
+
     try
     {
         RunBench();

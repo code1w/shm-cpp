@@ -131,16 +131,29 @@ class EventLoop
 
             // 分发事件
             dispatching_ = true;
-            for (std::size_t i = 0; i < pfds.size() && running_.load(std::memory_order_relaxed); ++i)
+            try
             {
-                if (pfds[i].revents != 0 && entries_[i].cb)
-                    entries_[i].cb(pfds[i].fd, pfds[i].revents);
+                for (std::size_t i = 0; i < pfds.size() && running_.load(std::memory_order_relaxed); ++i)
+                {
+                    if (pfds[i].revents != 0 && entries_[i].cb)
+                        entries_[i].cb(pfds[i].fd, pfds[i].revents);
+                }
+            }
+            catch (...)
+            {
+                // 回调抛异常时必须复位 dispatching_，否则此后所有
+                // AddFd 都会进入 pending_additions_ 永不被应用
+                dispatching_ = false;
+                throw;
             }
             dispatching_ = false;
 
-            // 处理延迟添加和移除
-            ApplyPendingAdditions();
+            // 处理延迟移除和添加。
+            // 必须先删后加：回调分发期间若旧连接关闭、新连接复用了同一
+            // fd 号（内核会立即复用最小可用 fd），先加后删会导致
+            // ApplyPendingRemovals 按 fd 号匹配时把新注册的条目一并误删。
             ApplyPendingRemovals();
+            ApplyPendingAdditions();
         }
     }
 

@@ -76,6 +76,7 @@ class RingChannel
                                      PROT_READ | PROT_WRITE, MAP_SHARED};
         ch.notify_write_efd_ = RecvFdExpect(socket_fd, FdTag::kEventfd);
 
+        ClearSocketTimeout(socket_fd);
         return ch;
     }
 
@@ -116,6 +117,7 @@ class RingChannel
         SendFd(socket_fd, ch.write_memfd_.Get(), FdTag::kMemfd);
         SendFd(socket_fd, ch.notify_read_efd_.Get(), FdTag::kEventfd);
 
+        ClearSocketTimeout(socket_fd);
         return ch;
     }
 
@@ -236,6 +238,18 @@ class RingChannel
         /** @brief 自上次 Flush 以来已成功 TryWrite 的次数 */
         int Count() const noexcept { return batch_.Count(); }
 
+        /** @brief 自上次 Flush 以来已写入但尚未发布的字节数 */
+        uint64_t PendingBytes() const noexcept { return batch_.PendingBytes(); }
+
+        /** @brief 丢弃自上次 Flush 以来的所有未发布写入（析构时不再发布） */
+        void Cancel() noexcept { batch_.Cancel(); }
+
+        /** @brief 回滚到之前的 PendingBytes/Count 状态（撤销最近一次帧写入） */
+        void RewindTo(uint64_t pending, int count) noexcept
+        {
+            batch_.RewindTo(pending, count);
+        }
+
         /** @brief 当前可写入的剩余字节数 */
         uint64_t FreeBytes() const noexcept { return batch_.FreeBytes(); }
 
@@ -318,6 +332,14 @@ class RingChannel
         timeval tv{};
         tv.tv_sec  = 5;
         tv.tv_usec = 0;
+        ::setsockopt(socket_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+        ::setsockopt(socket_fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+    }
+
+    /// @brief 握手完成后清除收发超时，恢复为默认的阻塞模式
+    static void ClearSocketTimeout(int socket_fd)
+    {
+        timeval tv{};
         ::setsockopt(socket_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
         ::setsockopt(socket_fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
     }

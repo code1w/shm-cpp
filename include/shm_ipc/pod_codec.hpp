@@ -57,9 +57,10 @@ class PodCodec : public ICodec
     }
 
     /**
-     * @brief 从帧中解码，提取 payload 指针
+     * @brief 从帧中解码，提取 payload 指针（校验类型标签）
      *
      * 返回的 payload 指向 T 的原始字节（跳过 tag），调用方可用 DecodeFrom 或 memcpy 还原。
+     * tag 与 TypeTag<T>::value 不匹配时返回 false。
      */
     bool Decode(const void *buf, uint32_t buf_len,
                 const void **payload, uint32_t *payload_len,
@@ -69,7 +70,8 @@ class PodCodec : public ICodec
         uint32_t raw_len = 0;
         if (!shm::Decode(buf, buf_len, &raw_payload, &raw_len, seq))
             return false;
-        if (raw_len < kTagSize)
+        uint32_t tag = 0;
+        if (!CheckTag(raw_payload, raw_len, &tag))
             return false;
         auto *p = static_cast<const char *>(raw_payload);
         *payload     = p + kTagSize;
@@ -88,12 +90,15 @@ class PodCodec : public ICodec
     }
 
     /**
-     * @brief 从 raw payload 中跳过 tag 前缀，返回 T 的原始字节
+     * @brief 从 raw payload 中校验并跳过 tag 前缀，返回 T 的原始字节
+     *
+     * tag 与 TypeTag<T>::value 不匹配时返回 false（防止类型混淆）。
      */
     bool DecodePayload(const void *payload, uint32_t payload_len,
                        const void **data, uint32_t *data_len) override
     {
-        if (payload_len < kTagSize)
+        uint32_t tag = 0;
+        if (!CheckTag(payload, payload_len, &tag))
             return false;
         *data     = static_cast<const char *>(payload) + kTagSize;
         *data_len = payload_len - kTagSize;
@@ -189,26 +194,55 @@ class PodCodec : public ICodec
 
     /**
      * @brief 从内部 FrameReader 读取一帧并反序列化为 T
+     *
+     * tag/长度不匹配的毒帧与 -2 超大帧会被立即提交丢弃（推进 read_pos
+     * 释放环空间）并自动跳过，直到取到一条合法帧或环空。每次丢弃都
+     * 推进 read_pos，循环必然终止。
+     *
+     * @return 0 成功；-1 无数据；-3 帧头长度非法（协议错误，连接应断开）
      */
     template <std::size_t Cap>
     int Recv(RingChannel<Cap> &ch, T *out)
     {
-        const void *payload = nullptr;
-        uint32_t payload_len = 0;
-        int rc = reader_.TryRecv(ch, &payload, &payload_len);
-        if (rc != 0)
-            return rc;
-        const void *data = nullptr;
-        uint32_t data_len = 0;
-        if (!DecodePayload(payload, payload_len, &data, &data_len))
-            return -1;
-        if (data_len != sizeof(T))
-            return -1;
-        std::memcpy(out, data, sizeof(T));
-        return 0;
+        for (;;)
+        {
+            const void *payload = nullptr;
+            uint32_t payload_len = 0;
+            int rc = reader_.TryRecv(ch, &payload, &payload_len);
+            if (rc == -1 || rc == -3)
+                return rc;
+            if (rc == -2)
+            {
+                reader_.Commit(ch);  // 超大帧已完整到达，立即丢弃释放环空间
+                continue;
+            }
+            const void *data = nullptr;
+            uint32_t data_len = 0;
+            if (!DecodePayload(payload, payload_len, &data, &data_len) ||
+                data_len != sizeof(T))
+            {
+                reader_.Commit(ch);  // 毒帧立即丢弃，避免驻留环中占用空间
+                continue;
+            }
+            std::memcpy(out, data, sizeof(T));
+            return 0;
+        }
     }
 
  private:
+    /**
+     * @brief 校验 payload 中的类型标签
+     * @return true 标签存在且与 T 注册值匹配
+     */
+    static bool CheckTag(const void *payload, uint32_t payload_len,
+                         uint32_t *tag_out)
+    {
+        if (payload_len < kTagSize)
+            return false;
+        std::memcpy(tag_out, payload, kTagSize);
+        return *tag_out == TypeTag<T>::value;
+    }
+
     FrameReader<> reader_;
 };
 

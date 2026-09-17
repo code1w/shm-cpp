@@ -174,7 +174,7 @@ void OnWriteTimer(int tfd, shm::ClientState &cs, shm::EventLoop &loop,
 /**
  * @brief Eventfd 回调：服务端向读环写入新数据，读取心跳
  */
-void OnServerNotify(int efd, shm::ClientState &cs)
+void OnServerNotify(int efd, shm::ClientState &cs, shm::EventLoop &loop)
 {
     Channel::DrainNotify(efd);
 
@@ -182,8 +182,17 @@ void OnServerNotify(int efd, shm::ClientState &cs)
     if (gUseProto)
     {
         shm_ipc::HeartbeatProto hb{};
-        while (cs.codec->Recv(cs.channel, &hb) == 0)
+        for (;;)
         {
+            int rc = cs.codec->Recv(cs.channel, &hb);
+            if (rc == -3)
+            {
+                std::fprintf(stderr, "client: protocol error from server, stopping\n");
+                loop.Stop();
+                return;
+            }
+            if (rc != 0)
+                break;
             PrintHeartbeat(hb);
             ++cs.total_read;
             hb = shm_ipc::HeartbeatProto{};
@@ -192,8 +201,17 @@ void OnServerNotify(int efd, shm::ClientState &cs)
     }
 #endif
     Heartbeat hb{};
-    while (cs.codec->Recv(cs.channel, &hb) == 0)
+    for (;;)
     {
+        int rc = cs.codec->Recv(cs.channel, &hb);
+        if (rc == -3)
+        {
+            std::fprintf(stderr, "client: protocol error from server, stopping\n");
+            loop.Stop();
+            return;
+        }
+        if (rc != 0)
+            break;
         PrintHeartbeat(hb);
         ++cs.total_read;
         hb = Heartbeat{};
@@ -240,9 +258,13 @@ void RunBench()
 
     for (auto &tc : shm::kBenchCases)
     {
-        // 通知 server 本轮参数
+        // 通知 server 本轮参数（循环写满，处理短写）
         shm::BenchCmd cmd{tc.payload_size, tc.rounds};
-        (void)::write(sfd.Get(), &cmd, sizeof(cmd));
+        if (!shm::WriteFull(sfd.Get(), &cmd, sizeof(cmd)))
+        {
+            std::fprintf(stderr, "client(bench): server closed, aborting\n");
+            return;
+        }
 
         // 构造 payload = [tag u32] + BenchPayloadHeader + 填充字节
         uint32_t body_len = shm::kTagSize
@@ -284,7 +306,11 @@ void RunBench()
 
         // 等 server ack
         char ack = 0;
-        (void)::read(sfd.Get(), &ack, 1);
+        if (!shm::ReadFull(sfd.Get(), &ack, 1))
+        {
+            std::fprintf(stderr, "client(bench): server closed, aborting\n");
+            return;
+        }
         uint64_t elapsed = shm::NowNs() - t0;
 
         shm::PrintBenchRow(tc.payload_size, tc.rounds, elapsed);
@@ -292,7 +318,7 @@ void RunBench()
 
     // 通知 server 结束
     shm::BenchCmd end{0, 0};
-    (void)::write(sfd.Get(), &end, sizeof(end));
+    (void)shm::WriteFull(sfd.Get(), &end, sizeof(end));
 
     std::printf("\nclient(bench): done\n");
 }
@@ -301,6 +327,10 @@ void RunBench()
 
 int main(int argc, char *argv[])
 {
+    // 向已断开的 socket 写入（server 先退出）会触发 SIGPIPE 杀死进程，
+    // 忽略之，让 write 返回 EPIPE 由调用方处理
+    ::signal(SIGPIPE, SIG_IGN);
+
     try
     {
         for (int i = 1; i < argc; ++i)
@@ -361,7 +391,7 @@ int main(int argc, char *argv[])
         // 注册 eventfd 读取心跳
         loop.AddFd(cs.notify_efd,
             std::bind(OnServerNotify, std::placeholders::_1,
-                      std::ref(cs)));
+                      std::ref(cs), std::ref(loop)));
 
         // 注册 socket 断连检测
         loop.AddFd(cs.socket_fd.Get(),
@@ -375,8 +405,10 @@ int main(int argc, char *argv[])
 
         std::printf("\nclient: done. ok=%d full=%d total_read=%d\n", stats.ok,
                     stats.full, cs.total_read);
+        // 通知 server 断连；server 可能已先退出（SIGPIPE 已忽略，
+        // 此处仅会得到 EPIPE，不影响退出码）
         char end = 0;
-        ::write(cs.socket_fd.Get(), &end, 1);
+        (void)::write(cs.socket_fd.Get(), &end, 1);
         ::usleep(100000);
     }
     catch (const std::exception &e)

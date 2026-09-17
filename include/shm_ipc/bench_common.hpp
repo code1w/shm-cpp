@@ -6,9 +6,12 @@
 #ifndef SHM_IPC_BENCH_COMMON_HPP_
 #define SHM_IPC_BENCH_COMMON_HPP_
 
+#include <cerrno>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <time.h>
+#include <unistd.h>
 
 #include "codec.hpp"
 #include "pod_codec.hpp"
@@ -57,6 +60,48 @@ inline uint32_t BenchFrameSize(uint32_t payload_size)
 {
     return kMsgHeaderSize + kTagSize
          + static_cast<uint32_t>(sizeof(BenchPayloadHeader)) + payload_size;
+}
+
+/// @brief 循环读满 len 字节（处理 stream socket 短读与 EINTR）
+/// @return true 读满，false 对端关闭或读出错
+inline bool ReadFull(int fd, void *buf, std::size_t len)
+{
+    auto *p = static_cast<char *>(buf);
+    std::size_t got = 0;
+    while (got < len)
+    {
+        ssize_t n = ::read(fd, p + got, len - got);
+        if (n < 0)
+        {
+            if (errno == EINTR)
+                continue;
+            return false;
+        }
+        if (n == 0)
+            return false;  // 对端关闭
+        got += static_cast<std::size_t>(n);
+    }
+    return true;
+}
+
+/// @brief 循环写满 len 字节（处理 stream socket 短写与 EINTR）
+/// @return true 写满，false 写出错（含对端关闭导致的 EPIPE）
+inline bool WriteFull(int fd, const void *buf, std::size_t len)
+{
+    auto *p = static_cast<const char *>(buf);
+    std::size_t sent = 0;
+    while (sent < len)
+    {
+        ssize_t n = ::write(fd, p + sent, len - sent);
+        if (n < 0)
+        {
+            if (errno == EINTR)
+                continue;
+            return false;
+        }
+        sent += static_cast<std::size_t>(n);
+    }
+    return true;
 }
 
 /// 获取单调时钟纳秒时间戳

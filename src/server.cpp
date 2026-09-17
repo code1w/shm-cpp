@@ -124,6 +124,7 @@ void RemoveClient(shm::EventLoop &loop, Clients &clients,
 
 /**
  * @brief 从客户端环形缓冲区中读取并反序列化所有待处理消息
+ * @return 读取到的消息数；-1 表示协议错误（帧头非法），连接应断开
  */
 int DrainClientRing(ClientState *csp)
 {
@@ -132,8 +133,13 @@ int DrainClientRing(ClientState *csp)
     if (gUseProto)
     {
         shm_ipc::ClientMsgProto msg{};
-        while (csp->codec->Recv(csp->channel, &msg) == 0)
+        for (;;)
         {
+            int rc = csp->codec->Recv(csp->channel, &msg);
+            if (rc == -3)
+                return -1;  // 协议错误：非法帧头，连接不可恢复
+            if (rc != 0)
+                break;
             PrintMsg(csp->id, msg);
             ++csp->total_read;
             ++count;
@@ -143,8 +149,13 @@ int DrainClientRing(ClientState *csp)
     }
 #endif
     ClientMsg msg{};
-    while (csp->codec->Recv(csp->channel, &msg) == 0)
+    for (;;)
     {
+        int rc = csp->codec->Recv(csp->channel, &msg);
+        if (rc == -3)
+            return -1;  // 协议错误：非法帧头，连接不可恢复
+        if (rc != 0)
+            break;
         PrintMsg(csp->id, msg);
         ++csp->total_read;
         ++count;
@@ -211,7 +222,8 @@ void OnHeartbeatTimer(int timer_fd, shm::EventLoop &loop,
 /**
  * @brief Eventfd 回调：客户端写入新数据，立即实时读取
  */
-void OnClientNotify(int efd, Clients &clients, int client_fd)
+void OnClientNotify(int efd, shm::EventLoop &loop, Clients &clients,
+                    int client_fd)
 {
     Channel::DrainNotify(efd);
     auto it = clients.find(client_fd);
@@ -219,6 +231,14 @@ void OnClientNotify(int efd, Clients &clients, int client_fd)
         return;
     ClientState *csp = it->second.get();
     int count = DrainClientRing(csp);
+    if (count < 0)
+    {
+        std::fprintf(stderr,
+                     "server: client #%d protocol error, disconnecting\n",
+                     csp->id);
+        RemoveClient(loop, clients, client_fd, csp);
+        return;
+    }
     if (count > 0)
     {
         std::printf("server: client #%d realtime read count=%d total=%d\n",
@@ -250,9 +270,13 @@ void OnClientSocket(int fd, short revents, shm::EventLoop &loop,
         if (n <= 0 || buf == 0)
         {
             int remaining = DrainClientRing(csp);
-            std::printf("server: client #%d disconnected, "
-                        "drained %d remaining, total read=%d\n",
-                        csp->id, remaining, csp->total_read);
+            if (remaining < 0)
+                std::fprintf(stderr, "server: client #%d protocol error, "
+                                     "total read=%d\n", csp->id, csp->total_read);
+            else
+                std::printf("server: client #%d disconnected, "
+                            "drained %d remaining, total read=%d\n",
+                            csp->id, remaining, csp->total_read);
             RemoveClient(loop, clients, client_fd, csp);
             return;
         }
@@ -281,7 +305,19 @@ void OnAccept(int lfd, shm::EventLoop &loop,
 
     auto cs      = std::make_unique<ClientState>();
     cs->id       = cid;
-    cs->channel  = Channel::Accept(cfd.Get());
+
+    // 握手失败（对端超时、乱发数据等）只关闭该连接，
+    // 不能让异常穿出回调杀死整个 server 进程
+    try
+    {
+        cs->channel = Channel::Accept(cfd.Get());
+    }
+    catch (const std::exception &e)
+    {
+        std::fprintf(stderr, "server: client #%d handshake failed: %s\n",
+                     cid, e.what());
+        return;  // cfd 由 RAII 自动关闭
+    }
     std::printf("server: client #%d ring channel established\n", cid);
 
 #ifdef SHM_IPC_HAS_PROTOBUF
@@ -295,21 +331,36 @@ void OnAccept(int lfd, shm::EventLoop &loop,
     cs->socket_fd  = std::move(cfd);
     cs->notify_efd = cs->channel.NotifyReadFd();
 
-    // 注册心跳定时器
-    int tfd = loop.AddTimer(kHeartbeatMs,
-        std::bind(OnHeartbeatTimer, std::placeholders::_1,
-                  std::ref(loop), std::ref(clients), client_fd));
-    cs->timer_fd = tfd;
+    // 注册失败（如 fd 耗尽导致 timerfd_create 抛异常）只关闭该连接，
+    // 不能让异常穿出回调杀死整个 server 进程
+    try
+    {
+        // 注册心跳定时器
+        int tfd = loop.AddTimer(kHeartbeatMs,
+            std::bind(OnHeartbeatTimer, std::placeholders::_1,
+                      std::ref(loop), std::ref(clients), client_fd));
+        cs->timer_fd = tfd;
 
-    // 注册 eventfd 实时读
-    loop.AddFd(cs->notify_efd,
-        std::bind(OnClientNotify, std::placeholders::_1,
-                  std::ref(clients), client_fd));
+        // 注册 eventfd 实时读
+        loop.AddFd(cs->notify_efd,
+            std::bind(OnClientNotify, std::placeholders::_1,
+                      std::ref(loop), std::ref(clients), client_fd));
 
-    // 注册 socket 断连检测
-    loop.AddFd(client_fd,
-        std::bind(OnClientSocket, std::placeholders::_1, std::placeholders::_2,
-                  std::ref(loop), std::ref(clients), client_fd));
+        // 注册 socket 断连检测
+        loop.AddFd(client_fd,
+            std::bind(OnClientSocket, std::placeholders::_1, std::placeholders::_2,
+                      std::ref(loop), std::ref(clients), client_fd));
+    }
+    catch (const std::exception &e)
+    {
+        std::fprintf(stderr, "server: client #%d setup failed: %s\n",
+                     cid, e.what());
+        if (cs->timer_fd >= 0)
+            loop.RemoveTimer(cs->timer_fd);
+        loop.RemoveFd(cs->notify_efd);
+        loop.RemoveFd(client_fd);
+        return;  // cs 析构自动关闭 socket 与通道
+    }
 
     clients[client_fd] = std::move(cs);
 }
@@ -339,9 +390,9 @@ void RunBench()
 
     for (;;)
     {
+        // 阻塞 stream socket 的 read 可能短读，必须循环读满
         shm::BenchCmd cmd{};
-        ssize_t n = ::read(cfd.Get(), &cmd, sizeof(cmd));
-        if (n != sizeof(cmd) || cmd.rounds == 0)
+        if (!shm::ReadFull(cfd.Get(), &cmd, sizeof(cmd)) || cmd.rounds == 0)
             break;
 
         int32_t received = 0;
@@ -376,7 +427,8 @@ void RunBench()
 
         // 发 ack
         char ack = 1;
-        (void)::write(cfd.Get(), &ack, 1);
+        if (!shm::WriteFull(cfd.Get(), &ack, 1))
+            break;  // 对端已关闭
 
         shm::PrintBenchRow(cmd.payload_size, received, elapsed);
     }
@@ -389,6 +441,10 @@ void RunBench()
 
 int main(int argc, char *argv[])
 {
+    // 向已断开的 socket 写入（对端先退出）会触发 SIGPIPE 杀死进程，
+    // 忽略之，让 write 返回 EPIPE 由调用方处理
+    ::signal(SIGPIPE, SIG_IGN);
+
     try
     {
         for (int i = 1; i < argc; ++i)
