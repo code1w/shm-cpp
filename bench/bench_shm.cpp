@@ -57,7 +57,7 @@ constexpr int kWarmup = 1000; ///< 预热轮次
  */
 void RunServer(int socket_fd)
 {
-    auto channel = Channel::Accept(socket_fd);
+    auto channel = Channel::CreateRingChannel(socket_fd, shm::ChannelRole::kServer);
     auto buf     = std::make_unique<char[]>(Channel::max_write_size);
 
     for (auto& tc : kTests)
@@ -88,7 +88,7 @@ void RunServer(int socket_fd)
  */
 void RunClient(int socket_fd)
 {
-    auto channel  = Channel::Connect(socket_fd);
+    auto channel  = Channel::CreateRingChannel(socket_fd, shm::ChannelRole::kClient);
     auto send_buf = std::make_unique<char[]>(Channel::max_write_size);
     auto recv_buf = std::make_unique<char[]>(Channel::max_write_size);
     std::memset(send_buf.get(), 'B', Channel::max_write_size);

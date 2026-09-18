@@ -234,7 +234,7 @@ struct ReadCmd
 
 void RunReader(int socket_fd, int ctrl_fd)
 {
-    auto ch  = Channel::Accept(socket_fd);
+    auto ch  = Channel::CreateRingChannel(socket_fd, shm::ChannelRole::kServer);
     auto raw_buf = std::make_unique<char[]>(Channel::max_write_size);
 
     shm::FrameReader<> reader;
@@ -305,7 +305,7 @@ struct RingResult
 
 void RunWriter(int socket_fd, int ctrl_fd)
 {
-    auto ch = Channel::Connect(socket_fd);
+    auto ch = Channel::CreateRingChannel(socket_fd, shm::ChannelRole::kClient);
     // payload_with_tag = [tag u32][payload data...]
     uint32_t max_payload_with_tag = shm::kTagSize + Channel::max_write_size;
     auto payload_with_tag = std::make_unique<char[]>(max_payload_with_tag);

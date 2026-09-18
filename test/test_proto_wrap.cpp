@@ -195,7 +195,7 @@ void TestSendRecvWrap()
     if (pid == 0)
     {
         ::close(sv[0]);
-        auto ch = SmallChannel::Connect(sv[1]);
+        auto ch = SmallChannel::CreateRingChannel(sv[1], shm::ChannelRole::kClient);
 
         // 发送 3 帧填充（每帧 payload 1024B → 帧 1032B），推进 ~3096
         char filler[1024];
@@ -224,7 +224,7 @@ void TestSendRecvWrap()
     }
 
     ::close(sv[1]);
-    auto ch = SmallChannel::Accept(sv[0]);
+    auto ch = SmallChannel::CreateRingChannel(sv[0], shm::ChannelRole::kServer);
 
     shm::FrameReader<> reader;
 
@@ -323,7 +323,7 @@ void TestMultiFrameContinuousWrap()
     if (pid == 0)
     {
         ::close(sv[0]);
-        auto ch = SmallChannel::Connect(sv[1]);
+        auto ch = SmallChannel::CreateRingChannel(sv[1], shm::ChannelRole::kClient);
 
         for (int i = 0; i < kCount; ++i)
         {
@@ -350,7 +350,7 @@ void TestMultiFrameContinuousWrap()
     }
 
     ::close(sv[1]);
-    auto ch = SmallChannel::Accept(sv[0]);
+    auto ch = SmallChannel::CreateRingChannel(sv[0], shm::ChannelRole::kServer);
 
     shm::FrameReader<> reader;
 

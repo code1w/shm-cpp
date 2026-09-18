@@ -21,6 +21,134 @@
 
 namespace shm {
 
+/// @brief 通道角色（决定握手时的收发顺序）
+enum class ChannelRole
+{
+    kClient,  ///< 客户端：先建环发送，后接收
+    kServer,  ///< 服务端：先接收，后建环发送
+};
+
+template <std::size_t Capacity>
+class RingChannel;
+
+// ---------------------------------------------------------------------------
+// detail — RingChannel 的内部实现组件
+// ---------------------------------------------------------------------------
+
+namespace detail {
+
+/// @brief RAII：握手期间设置 socket 收发超时（5秒，防止半连接阻塞），
+///        结束（含异常路径）恢复默认阻塞模式
+struct HandshakeGuard
+{
+    explicit HandshakeGuard(int fd) : fd_(fd)
+    {
+        timeval tv{};
+        tv.tv_sec  = 5;
+        tv.tv_usec = 0;
+        ::setsockopt(fd_, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+        ::setsockopt(fd_, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+    }
+    ~HandshakeGuard()
+    {
+        timeval tv{};
+        ::setsockopt(fd_, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+        ::setsockopt(fd_, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+    }
+    int fd_;
+};
+
+/**
+ * @brief RAII 通道级批量写入器
+ *
+ * 封装 RingBuf::BatchWriter，Flush 时自动调用 NotifyPeer()。
+ * 将 N 次写入的原子操作从 3N 降至 2，eventfd 通知从 N 降至 1。
+ *
+ * @code
+ * {
+ *     auto batch = channel.StartBatch();
+ *     batch.TryWrite(data1, len1);
+ *     batch.TryWrite(data2, len2);
+ *     batch.Flush();  // store write_pos + NotifyPeer()
+ * }
+ * @endcode
+ *
+ * @tparam Capacity 通道环形缓冲区容量
+ */
+template <std::size_t Capacity>
+class ChannelBatchWriter
+{
+ public:
+    ChannelBatchWriter(typename RingBuf<Capacity>::BatchWriter &&bw,
+                       const RingChannel<Capacity> *ch)
+        : batch_(std::move(bw)), channel_(ch) {}
+
+    ~ChannelBatchWriter() { Flush(); }
+
+    ChannelBatchWriter(ChannelBatchWriter &&o) noexcept
+        : batch_(std::move(o.batch_)), channel_(o.channel_)
+    {
+        o.channel_ = nullptr;
+    }
+
+    ChannelBatchWriter &operator=(ChannelBatchWriter &&)      = delete;
+    ChannelBatchWriter(const ChannelBatchWriter &)            = delete;
+    ChannelBatchWriter &operator=(const ChannelBatchWriter &) = delete;
+
+    /**
+     * @brief 尝试写入一段数据（不触发原子 store 和通知）
+     * @param data 待写入数据
+     * @param len  数据长度（字节）
+     * @return 0 成功，-1 空间不足或数据过大
+     */
+    int TryWrite(const void *data, uint32_t len)
+    {
+        return batch_.TryWrite(data, len);
+    }
+
+    /**
+     * @brief 发布所有累积写入并通知对端
+     * @return 自上次 Flush 以来的 TryWrite 成功调用次数
+     */
+    int Flush()
+    {
+        int n = batch_.Flush();
+        if (n > 0 && channel_)
+            channel_->NotifyPeer();
+        return n;
+    }
+
+    /** @brief 自上次 Flush 以来已成功 TryWrite 的次数 */
+    int Count() const noexcept { return batch_.Count(); }
+
+    /** @brief 自上次 Flush 以来已写入但尚未发布的字节数 */
+    uint64_t PendingBytes() const noexcept { return batch_.PendingBytes(); }
+
+    /** @brief 丢弃自上次 Flush 以来的所有未发布写入（析构时不再发布） */
+    void Cancel() noexcept { batch_.Cancel(); }
+
+    /** @brief 回滚到之前的 PendingBytes/Count 状态（撤销最近一次帧写入） */
+    void RewindTo(uint64_t pending, int count) noexcept
+    {
+        batch_.RewindTo(pending, count);
+    }
+
+    /** @brief 当前可写入的剩余字节数 */
+    uint64_t FreeBytes() const noexcept { return batch_.FreeBytes(); }
+
+    /** @brief 预留连续写入区域，不跨环尾时返回直写指针 */
+    char *Reserve(uint32_t len) { return batch_.Reserve(len); }
+
+    /** @brief 提交 Reserve 预留的写入 */
+    void CommitReserve(uint32_t len) { batch_.CommitReserve(len); }
+
+ private:
+    typename RingBuf<Capacity>::BatchWriter batch_;
+    const RingChannel<Capacity> *channel_;
+};
+
+}  // namespace detail
+
 /**
  * @brief 双向共享内存环形通道
  * @tparam Capacity 每方向环形缓冲区容量（字节），默认 8MB
@@ -31,6 +159,9 @@ class RingChannel
  public:
     using Ring = RingBuf<Capacity>;
 
+    /// @brief 通道级批量写入器（实现位于 detail 命名空间）
+    using ChannelBatchWriter = detail::ChannelBatchWriter<Capacity>;
+
     RingChannel() = default;
 
     // 移动语义（持有 memfd、mmap 区域、eventfd），禁止复制
@@ -40,84 +171,40 @@ class RingChannel
     RingChannel &operator=(const RingChannel &) = delete;
 
     /**
-     * @brief 客户端工厂方法
+     * @brief 创建双向环形通道（客户端/服务端统一入口）
      *
-     * 握手顺序（4 次 fd 交换）：
-     *   1. 发送 memfd_c2s        →  服务端
-     *   2. 发送 efd_client       →  服务端（服务端写入以唤醒客户端）
-     *   3. 接收 memfd_s2c        ←  服务端
-     *   4. 接收 efd_server       ←  服务端（客户端写入以唤醒服务端）
+     * 握手为 4 次 fd 交换，两端互为镜像，角色只决定收发顺序：
      *
-     * @param socket_fd 已连接的 Unix socket fd
+     *   客户端（kClient）              服务端（kServer）
+     *   1. 发送 memfd_c2s      →       1. 接收 memfd_c2s
+     *   2. 发送 efd_client     →       2. 接收 efd_client（服务端写入唤醒客户端）
+     *   3. 接收 memfd_s2c      ←       3. 创建并发送 memfd_s2c
+     *   4. 接收 efd_server     ←       4. 创建并发送 efd_server（客户端写入唤醒服务端）
+     *
+     * @param socket_fd 已建立连接的 Unix socket fd
+     * @param role      本端角色
      * @return 初始化完成的 RingChannel
      */
     [[nodiscard]]
-    static RingChannel Connect(int socket_fd)
+    static RingChannel CreateRingChannel(int socket_fd, ChannelRole role)
     {
-        SetHandshakeTimeout(socket_fd);
         RingChannel ch;
+        detail::HandshakeGuard guard{socket_fd};  // 握手超时，返回/异常时恢复
 
-        // 创建写环（client→server）
-        ch.write_memfd_  = CreateMemfd("client_to_server", Ring::shm_size);
-        ch.write_region_ = MmapRegion{ch.write_memfd_.Get(), Ring::shm_size,
-                                      PROT_READ | PROT_WRITE, MAP_SHARED};
-        Ring::Init(ch.write_region_.Get());
-
-        // 创建"唤醒自身"的 eventfd
-        ch.notify_read_efd_ = CreateEventfd();
-
-        // 发送：memfd_c2s、efd_client
-        SendFd(socket_fd, ch.write_memfd_.Get(), FdTag::kMemfd);
-        SendFd(socket_fd, ch.notify_read_efd_.Get(), FdTag::kEventfd);
-
-        // 接收：memfd_s2c、efd_server
-        ch.read_memfd_       = RecvFdExpect(socket_fd, FdTag::kMemfd);
-        ch.read_region_      = MmapRegion{ch.read_memfd_.Get(), Ring::shm_size,
-                                     PROT_READ | PROT_WRITE, MAP_SHARED};
-        ch.notify_write_efd_ = RecvFdExpect(socket_fd, FdTag::kEventfd);
-
-        ClearSocketTimeout(socket_fd);
-        return ch;
-    }
-
-    /**
-     * @brief 服务端工厂方法
-     *
-     * 握手顺序（4 次 fd 交换）：
-     *   1. 接收 memfd_c2s        ←  客户端
-     *   2. 接收 efd_client       ←  客户端（服务端写入以唤醒客户端）
-     *   3. 发送 memfd_s2c        →  客户端
-     *   4. 发送 efd_server       →  客户端（客户端写入以唤醒服务端）
-     *
-     * @param socket_fd 已接受的 Unix socket fd
-     * @return 初始化完成的 RingChannel
-     */
-    [[nodiscard]]
-    static RingChannel Accept(int socket_fd)
-    {
-        SetHandshakeTimeout(socket_fd);
-        RingChannel ch;
-
-        // 接收：memfd_c2s、efd_client
-        ch.read_memfd_       = RecvFdExpect(socket_fd, FdTag::kMemfd);
-        ch.read_region_      = MmapRegion{ch.read_memfd_.Get(), Ring::shm_size,
-                                     PROT_READ | PROT_WRITE, MAP_SHARED};
-        ch.notify_write_efd_ = RecvFdExpect(socket_fd, FdTag::kEventfd);
-
-        // 创建写环（server→client）
-        ch.write_memfd_  = CreateMemfd("server_to_client", Ring::shm_size);
-        ch.write_region_ = MmapRegion{ch.write_memfd_.Get(), Ring::shm_size,
-                                      PROT_READ | PROT_WRITE, MAP_SHARED};
-        Ring::Init(ch.write_region_.Get());
-
-        // 创建"唤醒自身"的 eventfd
-        ch.notify_read_efd_ = CreateEventfd();
-
-        // 发送：memfd_s2c、efd_server
-        SendFd(socket_fd, ch.write_memfd_.Get(), FdTag::kMemfd);
-        SendFd(socket_fd, ch.notify_read_efd_.Get(), FdTag::kEventfd);
-
-        ClearSocketTimeout(socket_fd);
+        if (role == ChannelRole::kClient)
+        {
+            ch.CreateWriteRing("client_to_server");
+            ch.notify_read_efd_ = CreateEventfd();
+            ch.SendLocalFds(socket_fd);  // 先发：memfd_c2s、efd_client
+            ch.RecvPeerFds(socket_fd);   // 后收：memfd_s2c、efd_server
+        }
+        else
+        {
+            ch.RecvPeerFds(socket_fd);   // 先收：memfd_c2s、efd_client
+            ch.CreateWriteRing("server_to_client");
+            ch.notify_read_efd_ = CreateEventfd();
+            ch.SendLocalFds(socket_fd);  // 后发：memfd_s2c、efd_server
+        }
         return ch;
     }
 
@@ -177,92 +264,6 @@ class RingChannel
     void CommitRead(uint32_t len) { Ring::CommitRead(read_region_.Get(), len); }
 
     // ---- 批量写入 ----
-
-    /**
-     * @brief RAII 通道级批量写入器
-     *
-     * 封装 RingBuf::BatchWriter，Flush 时自动调用 NotifyPeer()。
-     * 将 N 次写入的原子操作从 3N 降至 2，eventfd 通知从 N 降至 1。
-     *
-     * @code
-     * {
-     *     auto batch = channel.StartBatch();
-     *     batch.TryWrite(data1, len1);
-     *     batch.TryWrite(data2, len2);
-     *     batch.Flush();  // store write_pos + NotifyPeer()
-     * }
-     * @endcode
-     */
-    class ChannelBatchWriter
-    {
-     public:
-        ChannelBatchWriter(typename Ring::BatchWriter &&bw,
-                           const RingChannel *ch)
-            : batch_(std::move(bw)), channel_(ch) {}
-
-        ~ChannelBatchWriter() { Flush(); }
-
-        ChannelBatchWriter(ChannelBatchWriter &&o) noexcept
-            : batch_(std::move(o.batch_)), channel_(o.channel_)
-        {
-            o.channel_ = nullptr;
-        }
-
-        ChannelBatchWriter &operator=(ChannelBatchWriter &&)      = delete;
-        ChannelBatchWriter(const ChannelBatchWriter &)            = delete;
-        ChannelBatchWriter &operator=(const ChannelBatchWriter &) = delete;
-
-        /**
-         * @brief 尝试写入一段数据（不触发原子 store 和通知）
-         * @param data 待写入数据
-         * @param len  数据长度（字节）
-         * @return 0 成功，-1 空间不足或数据过大
-         */
-        int TryWrite(const void *data, uint32_t len)
-        {
-            return batch_.TryWrite(data, len);
-        }
-
-        /**
-         * @brief 发布所有累积写入并通知对端
-         * @return 自上次 Flush 以来的 TryWrite 成功调用次数
-         */
-        int Flush()
-        {
-            int n = batch_.Flush();
-            if (n > 0 && channel_)
-                channel_->NotifyPeer();
-            return n;
-        }
-
-        /** @brief 自上次 Flush 以来已成功 TryWrite 的次数 */
-        int Count() const noexcept { return batch_.Count(); }
-
-        /** @brief 自上次 Flush 以来已写入但尚未发布的字节数 */
-        uint64_t PendingBytes() const noexcept { return batch_.PendingBytes(); }
-
-        /** @brief 丢弃自上次 Flush 以来的所有未发布写入（析构时不再发布） */
-        void Cancel() noexcept { batch_.Cancel(); }
-
-        /** @brief 回滚到之前的 PendingBytes/Count 状态（撤销最近一次帧写入） */
-        void RewindTo(uint64_t pending, int count) noexcept
-        {
-            batch_.RewindTo(pending, count);
-        }
-
-        /** @brief 当前可写入的剩余字节数 */
-        uint64_t FreeBytes() const noexcept { return batch_.FreeBytes(); }
-
-        /** @brief 预留连续写入区域，不跨环尾时返回直写指针 */
-        char *Reserve(uint32_t len) { return batch_.Reserve(len); }
-
-        /** @brief 提交 Reserve 预留的写入 */
-        void CommitReserve(uint32_t len) { batch_.CommitReserve(len); }
-
-     private:
-        typename Ring::BatchWriter batch_;
-        const RingChannel *channel_;
-    };
 
     /**
      * @brief 创建通道级批量写入器
@@ -326,22 +327,30 @@ class RingChannel
     static constexpr std::size_t max_write_size = Ring::max_write_size;
 
  private:
-    /// @brief 设置握手阶段 socket 收发超时（5秒），防止半连接阻塞
-    static void SetHandshakeTimeout(int socket_fd)
+    /// @brief 创建写环：memfd + mmap + 清零初始化
+    /// @param name memfd 名称（调试用）
+    void CreateWriteRing(const char *name)
     {
-        timeval tv{};
-        tv.tv_sec  = 5;
-        tv.tv_usec = 0;
-        ::setsockopt(socket_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-        ::setsockopt(socket_fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+        write_memfd_  = CreateMemfd(name, Ring::shm_size);
+        write_region_ = MmapRegion{write_memfd_.Get(), Ring::shm_size,
+                                   PROT_READ | PROT_WRITE, MAP_SHARED};
+        Ring::Init(write_region_.Get());
     }
 
-    /// @brief 握手完成后清除收发超时，恢复为默认的阻塞模式
-    static void ClearSocketTimeout(int socket_fd)
+    /// @brief 发送本端 fd：写环 memfd + "唤醒自身"的 eventfd
+    void SendLocalFds(int socket_fd) const
     {
-        timeval tv{};
-        ::setsockopt(socket_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-        ::setsockopt(socket_fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+        SendFd(socket_fd, write_memfd_.Get(), FdTag::kMemfd);
+        SendFd(socket_fd, notify_read_efd_.Get(), FdTag::kEventfd);
+    }
+
+    /// @brief 接收对端 fd：读环 memfd（mmap 挂载）+ "唤醒对端"的 eventfd
+    void RecvPeerFds(int socket_fd)
+    {
+        read_memfd_  = RecvFdExpect(socket_fd, FdTag::kMemfd);
+        read_region_ = MmapRegion{read_memfd_.Get(), Ring::shm_size,
+                                  PROT_READ | PROT_WRITE, MAP_SHARED};
+        notify_write_efd_ = RecvFdExpect(socket_fd, FdTag::kEventfd);
     }
 
     UniqueFd write_memfd_;     ///< 写环对应的 memfd

@@ -140,7 +140,7 @@ void WriteBatch(Channel &ch, const char *buf, uint32_t msg_len, int total,
  */
 void RunReader(int socket_fd, int ctrl_fd)
 {
-    auto ch  = Channel::Accept(socket_fd);
+    auto ch  = Channel::CreateRingChannel(socket_fd, shm::ChannelRole::kServer);
     auto buf = std::make_unique<char[]>(Channel::max_write_size);
 
     for (;;)
@@ -244,7 +244,7 @@ BenchOne(Channel &ch, int ctrl_fd, const TestParam &p, const char *buf)
 
 void RunWriter(int socket_fd, int ctrl_fd)
 {
-    auto ch  = Channel::Connect(socket_fd);
+    auto ch  = Channel::CreateRingChannel(socket_fd, shm::ChannelRole::kClient);
     auto buf = std::make_unique<char[]>(Channel::max_write_size);
     std::memset(buf.get(), 'B', Channel::max_write_size);
 

@@ -310,7 +310,7 @@ void OnAccept(int lfd, shm::EventLoop &loop,
     // 不能让异常穿出回调杀死整个 server 进程
     try
     {
-        cs->channel = Channel::Accept(cfd.Get());
+        cs->channel = Channel::CreateRingChannel(cfd.Get(), shm::ChannelRole::kServer);
     }
     catch (const std::exception &e)
     {
@@ -382,7 +382,7 @@ void RunBench()
         return;
     }
 
-    auto ch = Channel::Accept(cfd.Get());
+    auto ch = Channel::CreateRingChannel(cfd.Get(), shm::ChannelRole::kServer);
     std::printf("server(bench): client connected, ring established\n\n");
 
     shm::FrameReader<3 * 1024 * 1024> reader;

@@ -131,7 +131,7 @@ void TestSendRecvViaRing()
     {
         // 子进程：writer
         ::close(sv[0]);
-        auto ch = Channel::Connect(sv[1]);
+        auto ch = Channel::CreateRingChannel(sv[1], shm::ChannelRole::kClient);
 
         shm_ipc::HeartbeatProto hb;
         hb.set_client_id(1);
@@ -157,7 +157,7 @@ void TestSendRecvViaRing()
 
     // 父进程：reader
     ::close(sv[1]);
-    auto ch = Channel::Accept(sv[0]);
+    auto ch = Channel::CreateRingChannel(sv[0], shm::ChannelRole::kServer);
 
     shm::FrameReader<> reader;
 

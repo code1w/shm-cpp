@@ -186,7 +186,7 @@ void TestEncodePodDecodePod()
 
 void RunSenderBasic(int socket_fd)
 {
-    auto ch = Channel::Accept(socket_fd);
+    auto ch = Channel::CreateRingChannel(socket_fd, shm::ChannelRole::kServer);
 
     ClientMsg msg = MakeTestMsg();
     if (shm::PodCodec<ClientMsg>::Send(ch, msg, kMsgSeq) != 0)
@@ -205,7 +205,7 @@ void RunSenderBasic(int socket_fd)
 
 void RunReceiverBasic(int socket_fd)
 {
-    auto ch = Channel::Connect(socket_fd);
+    auto ch = Channel::CreateRingChannel(socket_fd, shm::ChannelRole::kClient);
     int efd = ch.NotifyReadFd();
 
     shm::FrameReader<> reader;
@@ -257,7 +257,7 @@ void RunReceiverBasic(int socket_fd)
 
 void RunSenderByteByByte(int socket_fd)
 {
-    auto ch = Channel::Accept(socket_fd);
+    auto ch = Channel::CreateRingChannel(socket_fd, shm::ChannelRole::kServer);
 
     ClientMsg msg = MakeTestMsg();
 
@@ -291,7 +291,7 @@ void RunSenderByteByByte(int socket_fd)
 
 void RunReceiverByteByByte(int socket_fd)
 {
-    auto ch = Channel::Connect(socket_fd);
+    auto ch = Channel::CreateRingChannel(socket_fd, shm::ChannelRole::kClient);
     int efd = ch.NotifyReadFd();
 
     shm::FrameReader<> reader;
@@ -350,7 +350,7 @@ constexpr uint32_t kVarSeq = 555;
 
 void RunSenderVar(int socket_fd)
 {
-    auto ch = Channel::Accept(socket_fd);
+    auto ch = Channel::CreateRingChannel(socket_fd, shm::ChannelRole::kServer);
 
     const char *msgs[] = {"short", "medium length message for testing",
                           "a]longer]payload]with]various]characters]0123456789"};
@@ -374,7 +374,7 @@ void RunSenderVar(int socket_fd)
 
 void RunReceiverVar(int socket_fd)
 {
-    auto ch = Channel::Connect(socket_fd);
+    auto ch = Channel::CreateRingChannel(socket_fd, shm::ChannelRole::kClient);
     int efd = ch.NotifyReadFd();
 
     shm::FrameReader<> reader;
@@ -503,7 +503,7 @@ void TestTagValidation()
 
 void RunSenderOversized(int socket_fd)
 {
-    auto ch = Channel::Accept(socket_fd);
+    auto ch = Channel::CreateRingChannel(socket_fd, shm::ChannelRole::kServer);
 
     // payload 超过 max_write_size（Capacity/2）：必须返回 -1 且不写入任何数据
     std::vector<char> big(Channel::max_write_size + 1, 'B');
@@ -531,7 +531,7 @@ void RunSenderOversized(int socket_fd)
 
 void RunReceiverOversized(int socket_fd)
 {
-    auto ch = Channel::Connect(socket_fd);
+    auto ch = Channel::CreateRingChannel(socket_fd, shm::ChannelRole::kClient);
     int efd = ch.NotifyReadFd();
 
     pollfd pfd{};
@@ -575,7 +575,7 @@ constexpr uint32_t kLargePayloadLen = 65536;  // 远大于下面的 BufSize=128
 
 void RunSenderLargeFrame(int socket_fd)
 {
-    auto ch = Channel::Accept(socket_fd);
+    auto ch = Channel::CreateRingChannel(socket_fd, shm::ChannelRole::kServer);
 
     std::vector<char> body(kLargePayloadLen, 'L');
     if (shm::Send(ch, body.data(), kLargePayloadLen, 7) != 0)
@@ -592,7 +592,7 @@ void RunSenderLargeFrame(int socket_fd)
 
 void RunReceiverLargeFrame(int socket_fd)
 {
-    auto ch = Channel::Connect(socket_fd);
+    auto ch = Channel::CreateRingChannel(socket_fd, shm::ChannelRole::kClient);
     int efd = ch.NotifyReadFd();
 
     pollfd pfd{};
@@ -648,7 +648,7 @@ constexpr uint32_t kPoisonLen = 512;   // 毒帧 payload，跨环尾且 > BufSiz
 
 void RunSenderPoison(int socket_fd)
 {
-    auto ch = SmallChannel::Accept(socket_fd);
+    auto ch = SmallChannel::CreateRingChannel(socket_fd, shm::ChannelRole::kServer);
 
     // 阶段 1：两条填充帧把写位置推到环尾附近
     std::vector<char> filler(kFillerLen, 'F');
@@ -683,7 +683,7 @@ void RunSenderPoison(int socket_fd)
 
 void RunReceiverPoison(int socket_fd)
 {
-    auto ch = SmallChannel::Connect(socket_fd);
+    auto ch = SmallChannel::CreateRingChannel(socket_fd, shm::ChannelRole::kClient);
     int efd = ch.NotifyReadFd();
     shm::FrameReader<128> reader;
 
@@ -832,7 +832,7 @@ void TestBatchRewindCount()
 
 void RunSenderBadLen(int socket_fd)
 {
-    auto ch = SmallChannel::Accept(socket_fd);
+    auto ch = SmallChannel::CreateRingChannel(socket_fd, shm::ChannelRole::kServer);
 
     // 帧头声称 payload 为 0x7FFFFFFF，远超环容量，永远不可能完整到达
     shm::MsgHeader hdr{};
@@ -853,7 +853,7 @@ void RunSenderBadLen(int socket_fd)
 
 void RunReceiverBadLen(int socket_fd)
 {
-    auto ch = SmallChannel::Connect(socket_fd);
+    auto ch = SmallChannel::CreateRingChannel(socket_fd, shm::ChannelRole::kClient);
     int efd = ch.NotifyReadFd();
 
     pollfd pfd{};
@@ -890,7 +890,7 @@ void RunReceiverBadLen(int socket_fd)
 
 void RunSenderMixedTypes(int socket_fd)
 {
-    auto ch = Channel::Accept(socket_fd);
+    auto ch = Channel::CreateRingChannel(socket_fd, shm::ChannelRole::kServer);
 
     // 先写一条 Heartbeat 帧（对接收方 PodCodec<ClientMsg> 而言 tag 不匹配），
     // 再写一条正常 ClientMsg 帧，同一批 Flush + 一次通知
@@ -918,7 +918,7 @@ void RunSenderMixedTypes(int socket_fd)
 
 void RunReceiverMixedTypes(int socket_fd)
 {
-    auto ch = Channel::Connect(socket_fd);
+    auto ch = Channel::CreateRingChannel(socket_fd, shm::ChannelRole::kClient);
     int efd = ch.NotifyReadFd();
 
     pollfd pfd{};
@@ -973,7 +973,7 @@ char SplitByte(uint32_t i) { return static_cast<char>(i * 7 + 3); }
 
 void RunSenderSplit(int socket_fd)
 {
-    auto ch = Channel::Accept(socket_fd);
+    auto ch = Channel::CreateRingChannel(socket_fd, shm::ChannelRole::kServer);
 
     // 预编码完整帧
     char payload[kSplitPayloadLen];
@@ -1033,7 +1033,7 @@ void RunSenderSplit(int socket_fd)
 
 void RunReceiverSplit(int socket_fd)
 {
-    auto ch = Channel::Connect(socket_fd);
+    auto ch = Channel::CreateRingChannel(socket_fd, shm::ChannelRole::kClient);
     shm::FrameReader<> reader;
 
     constexpr uint32_t kFrameSize = shm::kMsgHeaderSize + kSplitPayloadLen;
@@ -1114,7 +1114,7 @@ char StreamMsgByte(int k, uint32_t i)
 
 void RunSenderStream(int socket_fd)
 {
-    auto ch = Channel::Accept(socket_fd);
+    auto ch = Channel::CreateRingChannel(socket_fd, shm::ChannelRole::kServer);
 
     // 拼接全部帧为一条字节流
     std::vector<char> stream;
@@ -1162,7 +1162,7 @@ void RunSenderStream(int socket_fd)
 
 void RunReceiverStream(int socket_fd)
 {
-    auto ch = Channel::Connect(socket_fd);
+    auto ch = Channel::CreateRingChannel(socket_fd, shm::ChannelRole::kClient);
     int efd = ch.NotifyReadFd();
     shm::FrameReader<> reader;
 

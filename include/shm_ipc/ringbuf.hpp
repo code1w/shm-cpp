@@ -46,6 +46,266 @@ static_assert(sizeof(RingHeader) == 128, "RingHeader must be 128 bytes (2 cache 
 static_assert(alignof(RingHeader) == 64, "RingHeader must be aligned to 64 bytes");
 
 // ---------------------------------------------------------------------------
+// detail — RingBuf 的内部实现组件
+// ---------------------------------------------------------------------------
+
+namespace detail {
+
+/// @brief 共享内存起始地址 → RingHeader 指针
+inline RingHeader *RingHdr(void *shm)
+{
+    return static_cast<RingHeader *>(shm);
+}
+
+/// @brief 共享内存起始地址 → RingHeader 指针（const 版本）
+inline const RingHeader *RingHdr(const void *shm)
+{
+    return static_cast<const RingHeader *>(shm);
+}
+
+/// @brief 共享内存起始地址 → 数据区起始指针
+inline char *RingData(void *shm)
+{
+    return static_cast<char *>(shm) + sizeof(RingHeader);
+}
+
+/// @brief 共享内存起始地址 → 数据区起始指针（const 版本）
+inline const char *RingData(const void *shm)
+{
+    return static_cast<const char *>(shm) + sizeof(RingHeader);
+}
+
+/// @brief 单调递增偏移 → 物理偏移（要求 Capacity 为 2 的幂）
+template <std::size_t Capacity>
+constexpr std::size_t RingPhys(uint64_t pos)
+{
+    return static_cast<std::size_t>(pos & (Capacity - 1));
+}
+
+/**
+ * @brief 从环形缓冲区拷贝数据到线性缓冲区（处理回绕）
+ * @param base   环形缓冲区数据区域基地址
+ * @param phys_r 物理读偏移
+ * @param dst    输出缓冲区
+ * @param len    要拷贝的字节数
+ */
+template <std::size_t Capacity>
+void RingCopyOut(const char *base, std::size_t phys_r, void *dst, uint32_t len)
+{
+    std::size_t contig = Capacity - phys_r;
+    auto *d = static_cast<char *>(dst);
+    if (len <= contig)
+    {
+        std::memcpy(d, base + phys_r, len);
+    }
+    else
+    {
+        std::memcpy(d, base + phys_r, contig);
+        std::memcpy(d + contig, base, len - contig);
+    }
+}
+
+/**
+ * @brief RAII 批量写入器，减少原子操作次数
+ *
+ * 普通 TryWrite 每次写入需要 3 次原子操作（load write_pos、load read_pos、
+ * store write_pos）。BatchWriter 在构造时快照一次 read_pos，写入过程中
+ * 仅本地追踪 write_pos，Flush 时一次性 store，将 N 次写入的原子操作
+ * 从 3N 降至 2（1 acquire load + 1 release store）。
+ *
+ * 使用示例：
+ * @code
+ * {
+ *     auto batch = RingBuf<>::BatchWriter(shm);
+ *     batch.TryWrite(data1, len1);
+ *     batch.TryWrite(data2, len2);
+ *     batch.Flush();  // 或依赖析构自动 flush
+ * }
+ * @endcode
+ *
+ * @note read_pos 快照是保守估计：读方可能已消费更多数据，
+ *       但绝不会消费得更少，因此空间检查不会产生错误。
+ *       代价是在读方已消费数据的场景下，可能误判为空间不足。
+ *
+ * @warning 同一时刻同一环上只允许存在一个活跃的 BatchWriter。
+ *       每个 BatchWriter 在构造时从共享内存快照 write_pos，
+ *       两个活跃实例会向同一物理位置写入并互相覆盖，造成静默的
+ *       数据损坏。同理，持有活跃 ChannelBatchWriter 期间不得调用
+ *       独立的 Send/SendFrame（它们内部会新建 BatchWriter）。
+ *
+ * @tparam Capacity 环形缓冲区容量（字节），必须为 2 的幂
+ */
+template <std::size_t Capacity>
+class BatchWriter
+{
+    static_assert((Capacity & (Capacity - 1)) == 0,
+                  "Capacity must be a power of 2");
+    static_assert(Capacity >= 1024, "Capacity must be at least 1024 bytes");
+
+ public:
+    static constexpr std::size_t max_write_size = Capacity / 2;
+
+    /**
+     * @brief 构造批量写入器，快照当前 write_pos 和 read_pos
+     * @param shm 共享内存指针
+     */
+    explicit BatchWriter(void *shm)
+        : hdr_(RingHdr(shm)), base_(RingData(shm)),
+          w_(hdr_->write_pos.load(std::memory_order_relaxed)),
+          r_(hdr_->read_pos.load(std::memory_order_acquire)),
+          w_start_(w_) {}
+
+    ~BatchWriter() { Flush(); }
+
+    BatchWriter(BatchWriter &&o) noexcept
+        : hdr_(o.hdr_), base_(o.base_),
+          w_(o.w_), r_(o.r_), w_start_(o.w_start_),
+          count_(o.count_)
+    {
+        o.hdr_ = nullptr;
+    }
+
+    BatchWriter &operator=(BatchWriter &&)      = delete;
+    BatchWriter(const BatchWriter &)            = delete;
+    BatchWriter &operator=(const BatchWriter &) = delete;
+
+    /**
+     * @brief 尝试写入一段数据到批量缓冲区（不触发原子 store）
+     * @param data 待写入数据
+     * @param len  数据长度（字节）
+     * @return 0 成功，-1 空间不足或数据过大
+     */
+    int TryWrite(const void *data, uint32_t len)
+    {
+        if (len == 0 || len > max_write_size)
+            return -1;
+        if (data == nullptr)  // memcpy(dst, nullptr, n) 是 UB，防御性拒绝
+            return -1;
+
+        if ((w_ + len) - r_ > Capacity)
+            return -1;
+
+        std::size_t phys_w = RingPhys<Capacity>(w_);
+        std::size_t tail   = Capacity - phys_w;
+
+        auto *src = static_cast<const char *>(data);
+        if (len <= tail)
+        {
+            std::memcpy(base_ + phys_w, src, len);
+        }
+        else
+        {
+            std::memcpy(base_ + phys_w, src, tail);
+            std::memcpy(base_, src + tail, len - tail);
+        }
+
+        w_ += len;
+        ++count_;
+        return 0;
+    }
+
+    /**
+     * @brief 将累积的写入发布到共享内存（一次 release store）
+     * @return 自上次 Flush 以来的 TryWrite 成功调用次数
+     */
+    int Flush()
+    {
+        if (!hdr_)
+            return 0;
+        int n = count_;
+        if (w_ != w_start_)
+        {
+            hdr_->write_pos.store(w_, std::memory_order_release);
+            w_start_ = w_;
+        }
+        count_ = 0;
+        return n;
+    }
+
+    /** @brief 自上次 Flush 以来已成功 TryWrite 的次数 */
+    int Count() const noexcept { return count_; }
+
+    /** @brief 自上次 Flush 以来已写入但尚未发布的字节数 */
+    uint64_t PendingBytes() const noexcept { return w_ - w_start_; }
+
+    /**
+     * @brief 丢弃自上次 Flush 以来的所有未发布写入
+     *
+     * 未发布的数据对对端不可见（write_pos 未推进），丢弃是安全的。
+     */
+    void Cancel() noexcept
+    {
+        w_     = w_start_;
+        count_ = 0;
+    }
+
+    /**
+     * @brief 回滚到之前的 PendingBytes/Count 状态（撤销最近一次帧写入）
+     * @param pending 之前通过 PendingBytes() 记录的值
+     * @param count   之前通过 Count() 记录的值
+     *
+     * 一帧由多次 TryWrite 组成（header + 分段 payload），回滚必须同时
+     * 恢复字节计数与写入次数计数；只减一次 count 会导致计数虚高。
+     * 数据本身未发布，无需清除。
+     */
+    void RewindTo(uint64_t pending, int count) noexcept
+    {
+        // pending 超过当前未发布字节数会虚增 w_，
+        // Flush 时把未写入的垃圾数据发布给对端
+        assert(pending <= PendingBytes());
+        w_     = w_start_ + pending;
+        count_ = count;
+    }
+
+    /** @brief 当前可写入的剩余字节数 */
+    uint64_t FreeBytes() const noexcept { return Capacity - (w_ - r_); }
+
+    /**
+     * @brief 预留 len 字节连续写入区域，返回直写指针
+     *
+     * 仅当写入区域不跨越环尾时成功，返回指向 ring 数据区的指针。
+     * 调用者必须在返回非空指针后自行填充数据，然后调用 CommitReserve(len)。
+     * 空间不足或跨环尾时返回 nullptr，调用者应回退到 TryWrite。
+     *
+     * @param len 请求字节数
+     * @return 非空 = 可直接写入的指针；nullptr = 不可用（跨环尾或空间不足）
+     */
+    char *Reserve(uint32_t len)
+    {
+        if (len == 0 || len > max_write_size)
+            return nullptr;
+        if ((w_ + len) - r_ > Capacity)
+            return nullptr;
+        std::size_t phys_w = RingPhys<Capacity>(w_);
+        std::size_t tail   = Capacity - phys_w;
+        if (len > tail)
+            return nullptr;  // 跨环尾，调用者应回退
+        return base_ + phys_w;
+    }
+
+    /**
+     * @brief 提交 Reserve 预留的写入
+     * @param len 与 Reserve 调用时相同的长度
+     */
+    void CommitReserve(uint32_t len)
+    {
+        assert(len > 0 && len <= max_write_size);
+        w_ += len;
+        ++count_;
+    }
+
+ private:
+    RingHeader *hdr_;
+    char *base_;
+    uint64_t w_;        ///< 本地追踪的写位置（不触发原子 store）
+    uint64_t r_;        ///< 快照的读位置（整批只读一次 acquire）
+    uint64_t w_start_;  ///< Flush 前的写位置，用于判断是否有新数据
+    int count_ = 0;     ///< 自上次 Flush 以来已写入次数计数
+};
+
+}  // namespace detail
+
+// ---------------------------------------------------------------------------
 // RingBuf<Capacity>
 // ---------------------------------------------------------------------------
 
@@ -78,6 +338,9 @@ class RingBuf
     static constexpr std::size_t capacity       = Capacity;
     static constexpr std::size_t shm_size       = sizeof(RingHeader) + Capacity;
     static constexpr std::size_t max_write_size = Capacity / 2;
+
+    /// @brief RAII 批量写入器（实现位于 detail 命名空间）
+    using BatchWriter = detail::BatchWriter<Capacity>;
 
     // ---- 初始化 ----
 
@@ -114,8 +377,8 @@ class RingBuf
         if (data == nullptr)  // memcpy(dst, nullptr, n) 是 UB，防御性拒绝
             return -1;
 
-        auto *hdr  = Header(shm);
-        char *base = DataRegion(shm);
+        auto *hdr  = detail::RingHdr(shm);
+        char *base = detail::RingData(shm);
 
         uint64_t w = hdr->write_pos.load(std::memory_order_relaxed);
         uint64_t r = hdr->read_pos.load(std::memory_order_acquire);
@@ -123,7 +386,7 @@ class RingBuf
         if ((w + len) - r > Capacity)
             return -1;
 
-        std::size_t phys_w = Mask(w);
+        std::size_t phys_w = detail::RingPhys<Capacity>(w);
         std::size_t tail   = Capacity - phys_w;
 
         auto *src = static_cast<const char *>(data);
@@ -141,197 +404,6 @@ class RingBuf
         return 0;
     }
 
-    // ---- 批量写入 ----
-
-    /**
-     * @brief RAII 批量写入器，减少原子操作次数
-     *
-     * 普通 TryWrite 每次写入需要 3 次原子操作（load write_pos、load read_pos、
-     * store write_pos）。BatchWriter 在构造时快照一次 read_pos，写入过程中
-     * 仅本地追踪 write_pos，Flush 时一次性 store，将 N 次写入的原子操作
-     * 从 3N 降至 2（1 acquire load + 1 release store）。
-     *
-     * 使用示例：
-     * @code
-     * {
-     *     auto batch = RingBuf<>::BatchWriter(shm);
-     *     batch.TryWrite(data1, len1);
-     *     batch.TryWrite(data2, len2);
-     *     batch.Flush();  // 或依赖析构自动 flush
-     * }
-     * @endcode
-     *
-     * @note read_pos 快照是保守估计：读方可能已消费更多数据，
-     *       但绝不会消费得更少，因此空间检查不会产生错误。
-     *       代价是在读方已消费数据的场景下，可能误判为空间不足。
-     *
-     * @warning 同一时刻同一环上只允许存在一个活跃的 BatchWriter。
-     *       每个 BatchWriter 在构造时从共享内存快照 write_pos，
-     *       两个活跃实例会向同一物理位置写入并互相覆盖，造成静默的
-     *       数据损坏。同理，持有活跃 ChannelBatchWriter 期间不得调用
-     *       独立的 Send/SendFrame（它们内部会新建 BatchWriter）。
-     */
-    class BatchWriter
-    {
-     public:
-        /**
-         * @brief 构造批量写入器，快照当前 write_pos 和 read_pos
-         * @param shm 共享内存指针
-         */
-        explicit BatchWriter(void *shm)
-            : hdr_(Header(shm)), base_(DataRegion(shm)),
-              w_(hdr_->write_pos.load(std::memory_order_relaxed)),
-              r_(hdr_->read_pos.load(std::memory_order_acquire)),
-              w_start_(w_) {}
-
-        ~BatchWriter() { Flush(); }
-
-        BatchWriter(BatchWriter &&o) noexcept
-            : hdr_(o.hdr_), base_(o.base_),
-              w_(o.w_), r_(o.r_), w_start_(o.w_start_),
-              count_(o.count_)
-        {
-            o.hdr_ = nullptr;
-        }
-
-        BatchWriter &operator=(BatchWriter &&)      = delete;
-        BatchWriter(const BatchWriter &)            = delete;
-        BatchWriter &operator=(const BatchWriter &) = delete;
-
-        /**
-         * @brief 尝试写入一段数据到批量缓冲区（不触发原子 store）
-         * @param data 待写入数据
-         * @param len  数据长度（字节）
-         * @return 0 成功，-1 空间不足或数据过大
-         */
-        int TryWrite(const void *data, uint32_t len)
-        {
-            if (len == 0 || len > max_write_size)
-                return -1;
-            if (data == nullptr)  // memcpy(dst, nullptr, n) 是 UB，防御性拒绝
-                return -1;
-
-            if ((w_ + len) - r_ > Capacity)
-                return -1;
-
-            std::size_t phys_w = Mask(w_);
-            std::size_t tail   = Capacity - phys_w;
-
-            auto *src = static_cast<const char *>(data);
-            if (len <= tail)
-            {
-                std::memcpy(base_ + phys_w, src, len);
-            }
-            else
-            {
-                std::memcpy(base_ + phys_w, src, tail);
-                std::memcpy(base_, src + tail, len - tail);
-            }
-
-            w_ += len;
-            ++count_;
-            return 0;
-        }
-
-        /**
-         * @brief 将累积的写入发布到共享内存（一次 release store）
-         * @return 自上次 Flush 以来的 TryWrite 成功调用次数
-         */
-        int Flush()
-        {
-            if (!hdr_)
-                return 0;
-            int n = count_;
-            if (w_ != w_start_)
-            {
-                hdr_->write_pos.store(w_, std::memory_order_release);
-                w_start_ = w_;
-            }
-            count_ = 0;
-            return n;
-        }
-
-        /** @brief 自上次 Flush 以来已成功 TryWrite 的次数 */
-        int Count() const noexcept { return count_; }
-
-        /** @brief 自上次 Flush 以来已写入但尚未发布的字节数 */
-        uint64_t PendingBytes() const noexcept { return w_ - w_start_; }
-
-        /**
-         * @brief 丢弃自上次 Flush 以来的所有未发布写入
-         *
-         * 未发布的数据对对端不可见（write_pos 未推进），丢弃是安全的。
-         */
-        void Cancel() noexcept
-        {
-            w_     = w_start_;
-            count_ = 0;
-        }
-
-        /**
-         * @brief 回滚到之前的 PendingBytes/Count 状态（撤销最近一次帧写入）
-         * @param pending 之前通过 PendingBytes() 记录的值
-         * @param count   之前通过 Count() 记录的值
-         *
-         * 一帧由多次 TryWrite 组成（header + 分段 payload），回滚必须同时
-         * 恢复字节计数与写入次数计数；只减一次 count 会导致计数虚高。
-         * 数据本身未发布，无需清除。
-         */
-        void RewindTo(uint64_t pending, int count) noexcept
-        {
-            // pending 超过当前未发布字节数会虚增 w_，
-            // Flush 时把未写入的垃圾数据发布给对端
-            assert(pending <= PendingBytes());
-            w_     = w_start_ + pending;
-            count_ = count;
-        }
-
-        /** @brief 当前可写入的剩余字节数 */
-        uint64_t FreeBytes() const noexcept { return Capacity - (w_ - r_); }
-
-        /**
-         * @brief 预留 len 字节连续写入区域，返回直写指针
-         *
-         * 仅当写入区域不跨越环尾时成功，返回指向 ring 数据区的指针。
-         * 调用者必须在返回非空指针后自行填充数据，然后调用 CommitReserve(len)。
-         * 空间不足或跨环尾时返回 nullptr，调用者应回退到 TryWrite。
-         *
-         * @param len 请求字节数
-         * @return 非空 = 可直接写入的指针；nullptr = 不可用（跨环尾或空间不足）
-         */
-        char *Reserve(uint32_t len)
-        {
-            if (len == 0 || len > max_write_size)
-                return nullptr;
-            if ((w_ + len) - r_ > Capacity)
-                return nullptr;
-            std::size_t phys_w = Mask(w_);
-            std::size_t tail   = Capacity - phys_w;
-            if (len > tail)
-                return nullptr;  // 跨环尾，调用者应回退
-            return base_ + phys_w;
-        }
-
-        /**
-         * @brief 提交 Reserve 预留的写入
-         * @param len 与 Reserve 调用时相同的长度
-         */
-        void CommitReserve(uint32_t len)
-        {
-            assert(len > 0 && len <= max_write_size);
-            w_ += len;
-            ++count_;
-        }
-
-     private:
-        RingHeader *hdr_;
-        char *base_;
-        uint64_t w_;        ///< 本地追踪的写位置（不触发原子 store）
-        uint64_t r_;        ///< 快照的读位置（整批只读一次 acquire）
-        uint64_t w_start_;  ///< Flush 前的写位置，用于判断是否有新数据
-        int count_ = 0;     ///< 自上次 Flush 以来已写入次数计数
-    };
-
     // ---- 读取 ----
 
     /**
@@ -346,8 +418,8 @@ class RingBuf
      */
     static uint32_t TryRead(void *shm, void *data, uint32_t max_len)
     {
-        auto *hdr        = Header(shm);
-        const char *base = DataRegion(shm);
+        auto *hdr        = detail::RingHdr(shm);
+        const char *base = detail::RingData(shm);
 
         uint64_t r     = hdr->read_pos.load(std::memory_order_relaxed);
         uint64_t w     = hdr->write_pos.load(std::memory_order_acquire);
@@ -360,7 +432,7 @@ class RingBuf
         // max_len == 0：不拷贝不推进；memcpy(dst, src, 0) 对空指针属 UB
         if (to_read == 0)
             return 0;
-        CopyOut(base, Mask(r), data, to_read);
+        detail::RingCopyOut<Capacity>(base, detail::RingPhys<Capacity>(r), data, to_read);
 
         hdr->read_pos.store(r + to_read, std::memory_order_release);
         return to_read;
@@ -379,8 +451,8 @@ class RingBuf
         if (len == 0)
             return 0;
 
-        auto *hdr        = Header(shm);
-        const char *base = DataRegion(shm);
+        auto *hdr        = detail::RingHdr(shm);
+        const char *base = detail::RingData(shm);
 
         uint64_t r     = hdr->read_pos.load(std::memory_order_relaxed);
         uint64_t w     = hdr->write_pos.load(std::memory_order_acquire);
@@ -389,7 +461,7 @@ class RingBuf
         if (avail < len)
             return -1;
 
-        CopyOut(base, Mask(r), data, len);
+        detail::RingCopyOut<Capacity>(base, detail::RingPhys<Capacity>(r), data, len);
 
         hdr->read_pos.store(r + len, std::memory_order_release);
         return 0;
@@ -411,8 +483,8 @@ class RingBuf
     static int Peek(const void *shm, const void **seg1, uint32_t *seg1_len,
                     const void **seg2, uint32_t *seg2_len)
     {
-        auto *hdr        = Header(shm);
-        const char *base = DataRegion(shm);
+        auto *hdr        = detail::RingHdr(shm);
+        const char *base = detail::RingData(shm);
 
         uint64_t r     = hdr->read_pos.load(std::memory_order_relaxed);
         uint64_t w     = hdr->write_pos.load(std::memory_order_acquire);
@@ -421,7 +493,7 @@ class RingBuf
         if (avail == 0)
             return -1;
 
-        std::size_t phys_r = Mask(r);
+        std::size_t phys_r = detail::RingPhys<Capacity>(r);
         std::size_t contig = Capacity - phys_r;
 
         if (avail <= contig)
@@ -451,7 +523,7 @@ class RingBuf
      */
     static void CommitRead(void *shm, uint32_t len)
     {
-        auto *hdr = Header(shm);
+        auto *hdr = detail::RingHdr(shm);
         uint64_t r = hdr->read_pos.load(std::memory_order_relaxed);
         assert(static_cast<uint64_t>(len) <=
                hdr->write_pos.load(std::memory_order_acquire) - r);
@@ -465,7 +537,7 @@ class RingBuf
      */
     static uint64_t Available(const void *shm)
     {
-        auto *hdr  = Header(shm);
+        auto *hdr  = detail::RingHdr(shm);
         uint64_t w = hdr->write_pos.load(std::memory_order_acquire);
         uint64_t r = hdr->read_pos.load(std::memory_order_acquire);
         return w - r;
@@ -479,51 +551,6 @@ class RingBuf
     static uint64_t FreeSpace(const void *shm)
     {
         return Capacity - Available(shm);
-    }
-
- private:
-    static RingHeader *Header(void *shm)
-    {
-        return static_cast<RingHeader *>(shm);
-    }
-    static const RingHeader *Header(const void *shm)
-    {
-        return static_cast<const RingHeader *>(shm);
-    }
-    static char *DataRegion(void *shm)
-    {
-        return static_cast<char *>(shm) + sizeof(RingHeader);
-    }
-    static const char *DataRegion(const void *shm)
-    {
-        return static_cast<const char *>(shm) + sizeof(RingHeader);
-    }
-    static constexpr std::size_t Mask(uint64_t pos)
-    {
-        return static_cast<std::size_t>(pos & (Capacity - 1));
-    }
-
-    /**
-     * @brief 从环形缓冲区拷贝数据到线性缓冲区（处理回绕）
-     * @param base   环形缓冲区数据区域基地址
-     * @param phys_r 物理读偏移
-     * @param dst    输出缓冲区
-     * @param len    要拷贝的字节数
-     */
-    static void CopyOut(const char *base, std::size_t phys_r,
-                        void *dst, uint32_t len)
-    {
-        std::size_t contig = Capacity - phys_r;
-        auto *d = static_cast<char *>(dst);
-        if (len <= contig)
-        {
-            std::memcpy(d, base + phys_r, len);
-        }
-        else
-        {
-            std::memcpy(d, base + phys_r, contig);
-            std::memcpy(d + contig, base, len - contig);
-        }
     }
 };
 

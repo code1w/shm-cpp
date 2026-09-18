@@ -251,7 +251,7 @@ void RunBench()
     auto sfd = ConnectToServer(shm::kDefaultSocketPath);
     std::printf("client(bench): connected\n");
 
-    auto ch = Channel::Connect(sfd.Get());
+    auto ch = Channel::CreateRingChannel(sfd.Get(), shm::ChannelRole::kClient);
     std::printf("client(bench): ring established\n\n");
 
     shm::PrintBenchHeader();
@@ -359,7 +359,7 @@ int main(int argc, char *argv[])
         cs.socket_fd = ConnectToServer(shm::kDefaultSocketPath);
         std::printf("client: connected to %s\n", shm::kDefaultSocketPath);
 
-        cs.channel    = Channel::Connect(cs.socket_fd.Get());
+        cs.channel    = Channel::CreateRingChannel(cs.socket_fd.Get(), shm::ChannelRole::kClient);
         cs.notify_efd = cs.channel.NotifyReadFd();
 
 #ifdef SHM_IPC_HAS_PROTOBUF
