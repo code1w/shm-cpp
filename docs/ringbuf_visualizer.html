@@ -1,0 +1,771 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RingBuf 环形缓冲区工作原理</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Share+Tech+Mono&display=swap');
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+    background: #050a12;
+    color: #c0d8f0;
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    overflow-x: hidden;
+    min-height: 100vh;
+    position: relative;
+}
+
+body::before {
+    content: '';
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background-image:
+        linear-gradient(rgba(0,255,255,0.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(0,255,255,0.03) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+    z-index: 0;
+}
+
+h1 {
+    position: relative; z-index: 1;
+    text-align: center;
+    padding: 28px 0 6px;
+    font-family: 'Orbitron', sans-serif;
+    font-size: 2rem;
+    font-weight: 900;
+    letter-spacing: 3px;
+    color: #00ffff;
+    text-shadow: 0 0 10px #00ffff80, 0 0 40px #00ffff30;
+}
+
+.subtitle {
+    position: relative; z-index: 1;
+    text-align: center;
+    color: #4a7a9a;
+    font-size: 0.85rem;
+    letter-spacing: 1px;
+    margin-bottom: 18px;
+    font-family: 'Share Tech Mono', monospace;
+}
+
+main {
+    position: relative; z-index: 1;
+    max-width: 1280px;
+    margin: 0 auto;
+    padding: 0 16px 30px;
+    display: grid;
+    grid-template-columns: 460px 1fr;
+    gap: 14px;
+}
+
+.panel {
+    background: rgba(8, 18, 32, 0.85);
+    border: 1px solid #0e2a3a;
+    border-radius: 8px;
+    padding: 14px;
+    box-shadow: 0 0 20px rgba(0,255,255,0.04) inset;
+}
+
+.panel h2 {
+    font-size: 0.8rem;
+    color: #00c8c8;
+    letter-spacing: 2px;
+    margin-bottom: 10px;
+    font-family: 'Share Tech Mono', monospace;
+    text-transform: uppercase;
+}
+
+canvas { display: block; margin: 0 auto; }
+
+/* ---- 状态面板 ---- */
+.statgrid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+    margin-bottom: 10px;
+}
+.stat {
+    background: #071522;
+    border: 1px solid #0e2a3a;
+    border-radius: 6px;
+    padding: 8px 10px;
+    text-align: center;
+}
+.stat .k { font-size: 0.68rem; color: #4a7a9a; letter-spacing: 1px; }
+.stat .v {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 1.25rem; color: #00ffff; margin-top: 2px;
+}
+
+/* RingHeader 缓存行 */
+.cachelines { display: flex; gap: 8px; margin-bottom: 4px; }
+.cacheline {
+    flex: 1;
+    border: 1px dashed #1a4a5a;
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.78rem;
+}
+.cacheline .cl-name { color: #4a7a9a; font-size: 0.65rem; letter-spacing: 1px; }
+.cacheline .cl-val { font-size: 1.1rem; margin-top: 2px; }
+.cl-w .cl-val { color: #00ff88; text-shadow: 0 0 8px #00ff8860; }
+.cl-r .cl-val { color: #ffaa00; text-shadow: 0 0 8px #ffaa0060; }
+
+/* ---- 控制面板 ---- */
+.controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.controls label { font-size: 0.75rem; color: #4a7a9a; }
+input[type=number] {
+    width: 64px;
+    background: #071522;
+    border: 1px solid #1a4a5a;
+    border-radius: 4px;
+    color: #00ffff;
+    font-family: 'Share Tech Mono', monospace;
+    padding: 6px 8px;
+    font-size: 0.9rem;
+}
+input[type=range] { width: 110px; accent-color: #00c8c8; }
+
+button {
+    background: linear-gradient(180deg, #0a2a3a, #071a26);
+    border: 1px solid #00c8c8;
+    color: #00ffff;
+    border-radius: 4px;
+    padding: 7px 14px;
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.8rem;
+    cursor: pointer;
+    letter-spacing: 1px;
+    transition: all 0.15s;
+}
+button:hover { background: #0e3a4a; box-shadow: 0 0 12px #00ffff40; }
+button:active { transform: translateY(1px); }
+button.warn { border-color: #ffaa00; color: #ffaa00; }
+button.warn:hover { box-shadow: 0 0 12px #ffaa0040; }
+button.ghost { border-color: #1a4a5a; color: #6a9aba; }
+button.active { background: #0a4a3a; border-color: #00ff88; color: #00ff88; }
+
+/* ---- 图例 ---- */
+.legend {
+    display: flex; flex-wrap: wrap; gap: 12px;
+    font-size: 0.7rem; color: #6a9aba; margin-top: 10px;
+    font-family: 'Share Tech Mono', monospace;
+}
+.legend span::before {
+    content: '■'; margin-right: 4px;
+}
+.lg-data::before { color: #00c8e8; }
+.lg-pend::before { color: #0a5f6e; }
+.lg-tail::before { color: #ffd166; }
+.lg-head::before { color: #06d6a0; }
+.lg-seg1::before { color: #4da3ff; }
+.lg-seg2::before { color: #c586ff; }
+
+/* ---- 日志 ---- */
+.log {
+    height: 210px;
+    overflow-y: auto;
+    background: #030810;
+    border: 1px solid #0e2a3a;
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.74rem;
+    line-height: 1.55;
+}
+.log .l-ok   { color: #00e5a0; }
+.log .l-info { color: #6ab8d8; }
+.log .l-warn { color: #ffd166; }
+.log .l-err  { color: #ff5577; }
+.log .l-dim  { color: #3a5a70; }
+.log::-webkit-scrollbar { width: 6px; }
+.log::-webkit-scrollbar-thumb { background: #1a4a5a; border-radius: 3px; }
+
+/* ---- 代码面板 ---- */
+pre.code {
+    background: #030810;
+    border: 1px solid #0e2a3a;
+    border-radius: 6px;
+    padding: 10px 12px;
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.7rem;
+    line-height: 1.5;
+    color: #7ab8c8;
+    overflow-x: auto;
+    white-space: pre;
+}
+pre.code .kw { color: #ff7a93; }
+pre.code .cm { color: #3a6a7a; }
+pre.code .fn { color: #00e5ff; }
+pre.code .num { color: #ffd166; }
+
+.full { grid-column: 1 / -1; }
+
+.flash {
+    animation: flash 0.4s;
+}
+@keyframes flash {
+    0% { box-shadow: 0 0 0 2px #ff5577; }
+    100% { box-shadow: none; }
+}
+
+footer {
+    position: relative; z-index: 1;
+    text-align: center;
+    color: #2a4a5a;
+    font-size: 0.7rem;
+    padding: 10px 0 20px;
+    font-family: 'Share Tech Mono', monospace;
+}
+</style>
+</head>
+<body>
+
+<h1>RingBuf 环形缓冲区</h1>
+<div class="subtitle">SPSC 无锁字节环 &nbsp;·&nbsp; write_pos / read_pos 单调递增 &nbsp;·&nbsp; 物理偏移 = pos &amp; (Capacity - 1) &nbsp;·&nbsp; 跨环尾两段 memcpy</div>
+
+<main>
+    <!-- 左列：环形视图 -->
+    <div class="panel">
+        <h2>环形视图（Capacity = 64，每格 1 字节）</h2>
+        <canvas id="ring" width="440" height="440"></canvas>
+        <div class="legend">
+            <span class="lg-data">已发布数据</span>
+            <span class="lg-pend">已 memcpy 未发布</span>
+            <span class="lg-tail">回绕写·尾段</span>
+            <span class="lg-head">回绕写·头段</span>
+            <span class="lg-seg1">Peek seg1</span>
+            <span class="lg-seg2">Peek seg2</span>
+        </div>
+    </div>
+
+    <!-- 右列：状态 + 控制 -->
+    <div style="display:flex; flex-direction:column; gap:14px;">
+        <div class="panel">
+            <h2>RingHeader（写/读位置各占独立缓存行，防 false sharing）</h2>
+            <div class="cachelines">
+                <div class="cacheline cl-w">
+                    <div class="cl-name">CACHE LINE 0 — write_pos（写进程 release store）</div>
+                    <div class="cl-val" id="hv-w">0</div>
+                </div>
+                <div class="cacheline cl-r">
+                    <div class="cl-name">CACHE LINE 1 — read_pos（读进程 release store）</div>
+                    <div class="cl-val" id="hv-r">0</div>
+                </div>
+            </div>
+            <div class="statgrid">
+                <div class="stat"><div class="k">已用 used</div><div class="v" id="sv-used">0</div></div>
+                <div class="stat"><div class="k">空闲 free</div><div class="v" id="sv-free">64</div></div>
+                <div class="stat"><div class="k">max_write</div><div class="v">32</div></div>
+                <div class="stat"><div class="k">phys_w = w &amp; 63</div><div class="v" id="sv-pw">0</div></div>
+                <div class="stat"><div class="k">phys_r = r &amp; 63</div><div class="v" id="sv-pr">0</div></div>
+                <div class="stat"><div class="k">tail = 64 - phys_w</div><div class="v" id="sv-tail">64</div></div>
+            </div>
+        </div>
+
+        <div class="panel">
+            <h2>操作台</h2>
+            <div class="controls">
+                <label>写入</label>
+                <input type="number" id="in-w" value="12" min="1" max="32">
+                <button id="btn-w">TryWrite</button>
+                <label>读取</label>
+                <input type="number" id="in-r" value="8" min="1" max="64">
+                <button id="btn-r">TryRead</button>
+                <button id="btn-peek">Peek</button>
+                <button id="btn-commit" class="ghost">CommitRead</button>
+            </div>
+            <div class="controls" style="margin-top:10px;">
+                <button id="btn-wrap" class="warn">演示跨环尾写入</button>
+                <button id="btn-auto" class="ghost">自动模式：关</button>
+                <label>速度</label>
+                <input type="range" id="in-speed" min="8" max="120" value="40">
+                <button id="btn-reset" class="ghost">重置</button>
+            </div>
+        </div>
+
+        <div class="panel" style="flex:1;">
+            <h2>TryWrite 真实实现（ringbuf.hpp，简化注释）</h2>
+            <pre class="code"><span class="kw">if</span> (len == <span class="num">0</span> || len &gt; max_write_size) <span class="kw">return</span> -<span class="num">1</span>;  <span class="cm">// 空写 / 超上限拒绝</span>
+w = write_pos.<span class="fn">load</span>(relaxed);      <span class="cm">// 写者独占 write_pos → relaxed</span>
+r = read_pos.<span class="fn">load</span>(acquire);       <span class="cm">// 配对读者的 release</span>
+<span class="kw">if</span> ((w + len) - r &gt; Capacity) <span class="kw">return</span> -<span class="num">1</span>; <span class="cm">// 空间检查（无符号减法）</span>
+phys = w &amp; (Capacity - <span class="num">1</span>);         <span class="cm">// 单调偏移 → 物理偏移</span>
+tail = Capacity - phys;
+<span class="kw">if</span> (len &lt;= tail) <span class="fn">memcpy</span>(base+phys, src, len);
+<span class="kw">else</span> { <span class="fn">memcpy</span>(base+phys, src, tail);        <span class="cm">// 段 1：环尾</span>
+       <span class="fn">memcpy</span>(base, src+tail, len-tail); }  <span class="cm">// 段 2：环头</span>
+write_pos.<span class="fn">store</span>(w + len, release);  <span class="cm">// 发布！此前数据对读者不可见</span></pre>
+        </div>
+    </div>
+
+    <!-- 底部：线性视图 + 日志 -->
+    <div class="panel full">
+        <h2>线性内存视图（同一块内存的展开——回绕时数据在物理上是两段）</h2>
+        <canvas id="bar" width="1230" height="110"></canvas>
+    </div>
+
+    <div class="panel full">
+        <h2>操作日志</h2>
+        <div class="log" id="log"></div>
+    </div>
+</main>
+
+<footer>shm-cpp · RingBuf&lt;64&gt; 教学模型 · 写者（进程A）独占 write_pos，读者（进程B）独占 read_pos，单写者原则使无锁成为可能</footer>
+
+<script>
+'use strict';
+
+// ============================================================
+// 模型：与 ringbuf.hpp 一致的 SPSC 字节环
+// ============================================================
+const CAP  = 64;          // 演示用小容量（2 的幂）
+const MAXW = CAP / 2;     // max_write_size = Capacity / 2
+
+let w = 0, r = 0;         // 单调递增的绝对字节偏移
+// 动画把一次操作拉长到数百毫秒，期间新操作必须以"计划中的 w/r"
+// （含队列中未完成的操作）做空间检查与定位，等价于真实实现中
+// 单写者/单读者同步串行执行完毕后的状态
+let pendingW = 0, pendingR = 0;
+const cells    = new Array(CAP).fill(0);   // 0 空 / 1 已发布 / 2 已写入未发布
+const cellKind = new Array(CAP).fill('N'); // N 普通 / T 回绕尾段 / H 回绕头段
+const cellT    = new Array(CAP).fill(0);   // 发布时间戳（光晕衰减用）
+
+let queue = [];           // 操作队列（写者/读者各自单线程，操作串行化）
+let cur   = null;         // 当前正在逐字节动画的操作
+let peekSegs = null;      // Peek 高亮段
+let byteMs = 40;          // 每字节动画耗时
+let autoTimer = null;
+
+const $ = id => document.getElementById(id);
+const logEl = $('log');
+
+function log(msg, cls) {
+    const line = document.createElement('div');
+    line.className = cls || 'l-info';
+    line.textContent = msg;
+    logEl.prepend(line);
+    while (logEl.childNodes.length > 220) logEl.lastChild.remove();
+}
+
+// ============================================================
+// 操作：与 C++ 实现逐步对应
+// ============================================================
+function tryWrite(len) {
+    peekSegs = null;
+    if (len === 0 || len > MAXW) {
+        log(`TryWrite(len=${len}) → -1  len==0 或超过 max_write_size=${MAXW}（Capacity/2）`, 'l-err');
+        flashPanel();
+        return;
+    }
+    const wPlanned = w + pendingW;
+    const used = wPlanned - r, free = CAP - used;
+    if ((wPlanned + len) - r > CAP) {
+        log(`TryWrite(len=${len}) → -1  空间不足：used=${used} free=${free}，(w+len)-r=${len+used} > ${CAP}`, 'l-err');
+        flashPanel();
+        return;
+    }
+    const physW = wPlanned & (CAP - 1);
+    const tail  = CAP - physW;
+    const wrap  = len > tail;
+    log(`TryWrite(len=${len})：w=${wPlanned} r=${r} used=${used} free=${free}`, 'l-info');
+    log(`  phys_w = ${wPlanned} & ${CAP-1} = ${physW}，tail = ${CAP}-${physW} = ${tail}`, 'l-dim');
+    if (wrap) {
+        log(`  len(${len}) > tail(${tail}) → 跨环尾！拆分两段 memcpy：`, 'l-warn');
+        log(`    memcpy(base+${physW}, src, ${tail})  +  memcpy(base, src+${tail}, ${len-tail})`, 'l-warn');
+    } else {
+        log(`  len(${len}) ≤ tail(${tail}) → 单次 memcpy(base+${physW}, src, ${len})`, 'l-dim');
+    }
+    const positions = [], kinds = [];
+    for (let i = 0; i < len; ++i) {
+        positions.push((physW + i) & (CAP - 1));
+        kinds.push(wrap ? (i < tail ? 'T' : 'H') : 'N');
+    }
+    queue.push({ type: 'w', len, positions, kinds, i: 0, next: 0 });
+    pendingW += len;
+}
+
+function tryRead(reqLen) {
+    peekSegs = null;
+    const rPlanned = r + pendingR;
+    const avail = w - rPlanned;
+    if (avail === 0) {
+        log(`TryRead(max=${reqLen}) → 0  环空（w==r==${w}）`, 'l-warn');
+        return;
+    }
+    const n = Math.min(reqLen, avail);
+    if (n < reqLen)
+        log(`TryRead(max=${reqLen})：avail=${avail} < ${reqLen} → 实际读 ${n} 字节（TryRead 语义 min）`, 'l-info');
+    else
+        log(`TryRead(max=${reqLen})：avail=${avail} → 读 ${n} 字节`, 'l-info');
+    const positions = [];
+    for (let i = 0; i < n; ++i) positions.push((rPlanned + i) & (CAP - 1));
+    queue.push({ type: 'r', len: n, positions, i: 0, next: 0 });
+    pendingR += n;
+}
+
+function peek() {
+    const rPlanned = r + pendingR;
+    const avail = w - rPlanned;
+    if (avail === 0) {
+        log('Peek() → -1  环空', 'l-warn');
+        return;
+    }
+    const physR  = rPlanned & (CAP - 1);
+    const contig = CAP - physR;
+    const s1 = Math.min(avail, contig);
+    const s2 = avail - s1;
+    peekSegs = { s1, s2, physR };
+    if (s2 > 0) {
+        log(`Peek()：avail=${avail} 跨环尾 → seg1=[phys ${physR}..${CAP}) ${s1}B，seg2=[phys 0..${s2}) ${s2}B（零拷贝，read_pos 不动）`, 'l-info');
+    } else {
+        log(`Peek()：avail=${avail} 未跨环尾 → seg1=${s1}B，seg2=0（零拷贝，read_pos 不动）`, 'l-info');
+    }
+    log('  数据仍留在环中，调用 CommitRead 后才释放空间', 'l-dim');
+}
+
+function commitRead() {
+    if (!peekSegs) {
+        log('CommitRead：请先 Peek', 'l-warn');
+        return;
+    }
+    const n = Math.min(peekSegs.s1 + peekSegs.s2, w - (r + pendingR));
+    peekSegs = null;
+    if (n === 0) { log('CommitRead：无可提交数据', 'l-warn'); return; }
+    log(`CommitRead(${n})：提交 Peek 到的数据`, 'l-ok');
+    const positions = [];
+    for (let i = 0; i < n; ++i) positions.push((r + pendingR + i) & (CAP - 1));
+    queue.push({ type: 'r', len: n, positions, i: 0, next: 0 });
+    pendingR += n;
+}
+
+// 演示跨环尾：清空环 → 快进到 phys_w = CAP-6 → 写入触发拆分
+function demoWrap() {
+    if (cur || queue.length) {
+        log('演示跨环尾：请等待当前操作完成', 'l-warn');
+        return;
+    }
+    peekSegs = null;
+    if (w !== r) {
+        for (let i = 0; i < CAP; ++i) cells[i] = 0;
+        r = w;
+        log('演示跨环尾：环非空，已清空（教学演示）', 'l-dim');
+    }
+    const curPhys = w & (CAP - 1);
+    const target  = CAP - 6;
+    const adv = (target - curPhys + CAP) % CAP;
+    if (adv > 0) {
+        w += adv; r += adv;
+        log(`  快进 ${adv} 字节（写后即读，净推进），phys_w → ${target}`, 'l-dim');
+    }
+    const len = Math.max(8, Math.min(MAXW, +$('in-w').value || 12));
+    tryWrite(len);
+}
+
+function reset() {
+    queue = []; cur = null; peekSegs = null;
+    w = 0; r = 0; pendingW = 0; pendingR = 0;
+    for (let i = 0; i < CAP; ++i) { cells[i] = 0; cellKind[i] = 'N'; cellT[i] = 0; }
+    logEl.innerHTML = '';
+    log('已重置：write_pos = read_pos = 0，环为空', 'l-ok');
+}
+
+// ============================================================
+// 动画引擎：逐字节推进当前操作
+// ============================================================
+function stepEngine(now) {
+    if (!cur && queue.length) {
+        cur = queue.shift();
+        cur.next = now;
+    }
+    if (!cur) return;
+    while (cur && now >= cur.next) {
+        if (cur.type === 'w') {
+            const idx = cur.positions[cur.i];
+            cells[idx] = 2;                 // 已 memcpy 但 write_pos 未发布
+            cellKind[idx] = cur.kinds[cur.i];
+        } else {
+            cells[cur.positions[cur.i]] = 0;
+        }
+        ++cur.i;
+        cur.next = now + byteMs;
+        if (cur.i >= cur.len) {
+            const done = cur; cur = null;
+            if (done.type === 'w') {
+                for (const idx of done.positions) { cells[idx] = 1; cellT[idx] = now; }
+                pendingW -= done.len;
+                w += done.len;
+                log(`  write_pos.store(${w}, release) ✓ 数据发布，读进程立即可见`, 'l-ok');
+            } else {
+                pendingR -= done.len;
+                r += done.len;
+                log(`  read_pos.store(${r}, release) ✓ 槽位释放，写进程可复用`, 'l-ok');
+            }
+        }
+    }
+}
+
+// ============================================================
+// 渲染
+// ============================================================
+const ringCv = $('ring'), barCv = $('bar');
+const rctx = ringCv.getContext('2d');
+const bctx = barCv.getContext('2d');
+
+function setupHiDPI(cv, ctx) {
+    const dpr = window.devicePixelRatio || 1;
+    const wCss = cv.width, hCss = cv.height;
+    cv.width = wCss * dpr; cv.height = hCss * dpr;
+    cv.style.width = wCss + 'px'; cv.style.height = hCss + 'px';
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    return { w: wCss, h: hCss };
+}
+const RDIM = setupHiDPI(ringCv, rctx);
+const BDIM = setupHiDPI(barCv, bctx);
+
+const COLORS = {
+    empty:  '#0a1420',
+    grid:   '#14324a',
+    data:   { N: '#00c8e8', T: '#ffd166', H: '#06d6a0' },
+    pend:   '#0e6a7a',
+    seg1:   '#4da3ff',
+    seg2:   '#c586ff',
+    wp:     '#00ff88',
+    rp:     '#ffaa00',
+};
+
+function cellColor(i, now) {
+    if (cells[i] === 2) return COLORS.pend;
+    if (cells[i] === 0) return COLORS.empty;
+    const base = COLORS.data[cellKind[i]];
+    // 发布后短暂发光
+    const age = now - cellT[i];
+    return { base, glow: Math.max(0, 1 - age / 900) };
+}
+
+function drawRing(now) {
+    const cx = RDIM.w / 2, cy = RDIM.h / 2;
+    const rOut = 185, rIn = 118;
+    rctx.clearRect(0, 0, RDIM.w, RDIM.h);
+
+    for (let i = 0; i < CAP; ++i) {
+        const a0 = -Math.PI / 2 + (i / CAP) * Math.PI * 2 + 0.008;
+        const a1 = -Math.PI / 2 + ((i + 1) / CAP) * Math.PI * 2 - 0.008;
+        rctx.beginPath();
+        rctx.arc(cx, cy, rOut, a0, a1);
+        rctx.arc(cx, cy, rIn, a1, a0, true);
+        rctx.closePath();
+
+        const c = cellColor(i, now);
+        if (typeof c === 'string') {
+            rctx.fillStyle = c;
+            rctx.fill();
+        } else {
+            rctx.fillStyle = c.base;
+            rctx.globalAlpha = 0.75 + 0.25 * c.glow;
+            rctx.fill();
+            rctx.globalAlpha = 1;
+            if (c.glow > 0) {
+                rctx.save();
+                rctx.shadowColor = c.base;
+                rctx.shadowBlur = 18 * c.glow;
+                rctx.fill();
+                rctx.restore();
+            }
+        }
+        rctx.strokeStyle = COLORS.grid;
+        rctx.lineWidth = 0.5;
+        rctx.stroke();
+
+        // Peek 高亮
+        if (peekSegs && cells[i] !== 0) {
+            const inS1 = i >= peekSegs.physR && i < peekSegs.physR + peekSegs.s1;
+            const inS2 = peekSegs.s2 > 0 && i < peekSegs.s2;
+            if (inS1 || inS2) {
+                rctx.strokeStyle = inS1 ? COLORS.seg1 : COLORS.seg2;
+                rctx.lineWidth = 2.5;
+                rctx.stroke();
+            }
+        }
+    }
+
+    // 指针
+    drawRingPointer(cx, cy, rOut, w & (CAP - 1), COLORS.wp, 'W', +1);
+    drawRingPointer(cx, cy, rIn,  r & (CAP - 1), COLORS.rp, 'R', -1);
+
+    // 中心文字
+    const used = w - r;
+    rctx.fillStyle = '#00ffff';
+    rctx.font = '900 34px Orbitron, monospace';
+    rctx.textAlign = 'center';
+    rctx.textBaseline = 'middle';
+    rctx.fillText(used, cx, cy - 14);
+    rctx.fillStyle = '#3a6a7a';
+    rctx.font = '12px "Share Tech Mono", monospace';
+    rctx.fillText('used / ' + CAP, cx, cy + 14);
+    const state = used === 0 ? 'EMPTY' : used === CAP ? 'FULL' : 'ACTIVE';
+    rctx.fillStyle = used === CAP ? '#ff5577' : '#2a5a6a';
+    rctx.fillText(state, cx, cy + 34);
+}
+
+function drawRingPointer(cx, cy, radius, phys, color, label, dir) {
+    const a = -Math.PI / 2 + (phys / CAP) * Math.PI * 2;
+    const rr = radius + dir * 16;
+    const x = cx + Math.cos(a) * rr;
+    const y = cy + Math.sin(a) * rr;
+    // 三角
+    rctx.save();
+    rctx.translate(x, y);
+    rctx.rotate(a + Math.PI / 2);
+    rctx.beginPath();
+    rctx.moveTo(0, dir * 10);
+    rctx.lineTo(-6, 0);
+    rctx.lineTo(6, 0);
+    rctx.closePath();
+    rctx.fillStyle = color;
+    rctx.shadowColor = color;
+    rctx.shadowBlur = 12;
+    rctx.fill();
+    rctx.restore();
+    // 标签
+    const lx = cx + Math.cos(a) * (rr + dir * 26);
+    const ly = cy + Math.sin(a) * (rr + dir * 26);
+    rctx.fillStyle = color;
+    rctx.font = '700 13px "Share Tech Mono", monospace';
+    rctx.textAlign = 'center';
+    rctx.textBaseline = 'middle';
+    rctx.fillText(label, lx, ly);
+}
+
+function drawBar(now) {
+    bctx.clearRect(0, 0, BDIM.w, BDIM.h);
+    const pad = 14, top = 16, h = 40;
+    const cw = (BDIM.w - pad * 2) / CAP;
+
+    for (let i = 0; i < CAP; ++i) {
+        const x = pad + i * cw;
+        const c = cellColor(i, now);
+        if (typeof c === 'string') {
+            bctx.fillStyle = c;
+        } else {
+            bctx.fillStyle = c.base;
+            bctx.globalAlpha = 0.75 + 0.25 * c.glow;
+        }
+        bctx.fillRect(x + 0.5, top, cw - 1, h);
+        bctx.globalAlpha = 1;
+        bctx.strokeStyle = COLORS.grid;
+        bctx.lineWidth = 0.5;
+        bctx.strokeRect(x + 0.5, top, cw - 1, h);
+
+        if (peekSegs && cells[i] !== 0) {
+            const inS1 = i >= peekSegs.physR && i < peekSegs.physR + peekSegs.s1;
+            const inS2 = peekSegs.s2 > 0 && i < peekSegs.s2;
+            if (inS1 || inS2) {
+                bctx.strokeStyle = inS1 ? COLORS.seg1 : COLORS.seg2;
+                bctx.lineWidth = 2.5;
+                bctx.strokeRect(x + 1.5, top + 1.5, cw - 3, h - 3);
+            }
+        }
+        if (i % 8 === 0) {
+            bctx.fillStyle = '#2a4a5a';
+            bctx.font = '9px "Share Tech Mono", monospace';
+            bctx.textAlign = 'left';
+            bctx.fillText(i, x, top + h + 12);
+        }
+    }
+
+    // 指针标记
+    drawBarMarker(pad, top, h, cw, w & (CAP - 1), COLORS.wp, 'phys_w=' + (w & (CAP - 1)));
+    drawBarMarker(pad, top, h, cw, r & (CAP - 1), COLORS.rp, 'phys_r=' + (r & (CAP - 1)));
+}
+
+function drawBarMarker(pad, top, h, cw, phys, color, label) {
+    const x = pad + phys * cw;
+    bctx.strokeStyle = color;
+    bctx.lineWidth = 2;
+    bctx.beginPath();
+    bctx.moveTo(x, top - 4);
+    bctx.lineTo(x, top + h + 4);
+    bctx.stroke();
+    bctx.fillStyle = color;
+    bctx.font = '11px "Share Tech Mono", monospace';
+    bctx.textAlign = phys > CAP - 12 ? 'right' : 'left';
+    bctx.fillText(label, x + (phys > CAP - 12 ? 0 : 4), top - 6);
+}
+
+function updateHud() {
+    const used = w - r;
+    $('hv-w').textContent = w;
+    $('hv-r').textContent = r;
+    $('sv-used').textContent = used;
+    $('sv-free').textContent = CAP - used;
+    $('sv-pw').textContent = w & (CAP - 1);
+    $('sv-pr').textContent = r & (CAP - 1);
+    $('sv-tail').textContent = CAP - (w & (CAP - 1));
+    $('sv-free').style.color = used === CAP ? '#ff5577' : '#00ffff';
+}
+
+function flashPanel() {
+    const el = $('hv-w').closest('.panel');
+    el.classList.remove('flash');
+    void el.offsetWidth;
+    el.classList.add('flash');
+}
+
+function frame(now) {
+    stepEngine(now);
+    drawRing(now);
+    drawBar(now);
+    updateHud();
+    requestAnimationFrame(frame);
+}
+
+// ============================================================
+// 自动模式：生产者/消费者按速度随机写入/读取
+// ============================================================
+function autoTick() {
+    if (queue.length + (cur ? 1 : 0) > 2) return;  // 防止队列堆积
+    const used = (w + pendingW) - (r + pendingR);
+    const doWrite = used === 0 || (used < CAP && Math.random() < 0.55);
+    if (doWrite) {
+        tryWrite(2 + Math.floor(Math.random() * 9));
+    } else {
+        tryRead(4 + Math.floor(Math.random() * 9));
+    }
+}
+
+$('btn-w').onclick = () => tryWrite(Math.max(0, Math.min(64, +$('in-w').value || 0)));
+$('btn-r').onclick = () => tryRead(Math.max(0, Math.min(64, +$('in-r').value || 0)));
+$('btn-peek').onclick = peek;
+$('btn-commit').onclick = commitRead;
+$('btn-wrap').onclick = demoWrap;
+$('btn-reset').onclick = reset;
+$('in-speed').oninput = e => { byteMs = 1000 / +e.target.value; };
+byteMs = 1000 / 40;
+
+$('btn-auto').onclick = () => {
+    if (autoTimer) {
+        clearInterval(autoTimer);
+        autoTimer = null;
+        $('btn-auto').textContent = '自动模式：关';
+        $('btn-auto').classList.remove('active');
+        log('自动模式停止', 'l-dim');
+    } else {
+        autoTimer = setInterval(autoTick, 450);
+        $('btn-auto').textContent = '自动模式：开';
+        $('btn-auto').classList.add('active');
+        log('自动模式启动：生产者/消费者随机写入/读取', 'l-ok');
+    }
+};
+
+log('RingBuf<64> 初始化完成（memset 清零，write_pos = read_pos = 0）', 'l-ok');
+log('提示：试试「演示跨环尾写入」，观察一次写入被拆成两段 memcpy', 'l-dim');
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
