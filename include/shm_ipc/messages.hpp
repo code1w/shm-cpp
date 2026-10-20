@@ -20,6 +20,10 @@ struct Heartbeat
 SHM_IPC_REGISTER_POD(Heartbeat, 0x48425454)  // "HBTT"
 
 /// 客户端消息
+///
+/// @note sizeof(ClientMsg)=4104，其中含 4 字节尾随对齐填充。发送前务必
+///       值初始化（`ClientMsg msg{}`），否则填充字节中的未初始化内存会
+///       随 memcpy 进入共享内存（跨进程信息泄漏）。
 struct ClientMsg
 {
     int32_t seq;

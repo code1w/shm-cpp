@@ -87,29 +87,6 @@ void PrintHeartbeat(const shm_ipc::HeartbeatProto &hb)
 #endif
 
 // ---------------------------------------------------------------------------
-// 辅助函数
-// ---------------------------------------------------------------------------
-
-/**
- * @brief 连接到服务端的 Unix domain socket
- */
-shm::UniqueFd ConnectToServer(const char *path)
-{
-    shm::UniqueFd sfd{::socket(AF_UNIX, SOCK_STREAM, 0)};
-    if (!sfd)
-        throw std::runtime_error(std::string("socket: ") + std::strerror(errno));
-
-    sockaddr_un addr{};
-    addr.sun_family = AF_UNIX;
-    std::strncpy(addr.sun_path, path, sizeof(addr.sun_path) - 1);
-
-    if (::connect(sfd.Get(), reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) < 0)
-        throw std::runtime_error(std::string("connect: ") + std::strerror(errno));
-
-    return sfd;
-}
-
-// ---------------------------------------------------------------------------
 // EventLoop 回调函数
 // ---------------------------------------------------------------------------
 
@@ -248,7 +225,7 @@ void OnServerSocket(int fd, short revents, shm::ClientState & /*cs*/,
 
 void RunBench()
 {
-    auto sfd = ConnectToServer(shm::kDefaultSocketPath);
+    auto sfd = shm::ConnectUnixSocket(shm::kDefaultSocketPath);
     std::printf("client(bench): connected\n");
 
     auto ch = Channel::CreateRingChannel(sfd.Get(), shm::ChannelRole::kClient);
@@ -356,7 +333,7 @@ int main(int argc, char *argv[])
         ::sigaction(SIGTERM, &sa, nullptr);
 
         shm::ClientState cs;
-        cs.socket_fd = ConnectToServer(shm::kDefaultSocketPath);
+        cs.socket_fd = shm::ConnectUnixSocket(shm::kDefaultSocketPath);
         std::printf("client: connected to %s\n", shm::kDefaultSocketPath);
 
         cs.channel    = Channel::CreateRingChannel(cs.socket_fd.Get(), shm::ChannelRole::kClient);

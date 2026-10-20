@@ -88,29 +88,6 @@ void PrintMsg(int client_id, const shm_ipc::ClientMsgProto &m)
 // ---------------------------------------------------------------------------
 
 /**
- * @brief 创建并绑定 Unix domain socket 监听端
- */
-shm::UniqueFd CreateListenSocket(const char *path)
-{
-    shm::UniqueFd sfd{::socket(AF_UNIX, SOCK_STREAM, 0)};
-    if (!sfd)
-        throw std::runtime_error(std::string("socket: ") + std::strerror(errno));
-
-    ::unlink(path);
-
-    sockaddr_un addr{};
-    addr.sun_family = AF_UNIX;
-    std::strncpy(addr.sun_path, path, sizeof(addr.sun_path) - 1);
-
-    if (::bind(sfd.Get(), reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) < 0)
-        throw std::runtime_error(std::string("bind: ") + std::strerror(errno));
-    if (::listen(sfd.Get(), 5) < 0)
-        throw std::runtime_error(std::string("listen: ") + std::strerror(errno));
-
-    return sfd;
-}
-
-/**
  * @brief 从事件循环中移除客户端的所有关联 fd 并销毁状态
  */
 void RemoveClient(shm::EventLoop &loop, Clients &clients,
@@ -371,7 +348,7 @@ void OnAccept(int lfd, shm::EventLoop &loop,
 
 void RunBench()
 {
-    auto listen_fd = CreateListenSocket(shm::kDefaultSocketPath);
+    auto listen_fd = shm::ListenUnixSocket(shm::kDefaultSocketPath);
     std::printf("server(bench): waiting for client on %s ...\n",
                 shm::kDefaultSocketPath);
 
@@ -475,7 +452,7 @@ int main(int argc, char *argv[])
         Clients clients;
         int next_client_id = 1;
 
-        auto listen_fd = CreateListenSocket(shm::kDefaultSocketPath);
+        auto listen_fd = shm::ListenUnixSocket(shm::kDefaultSocketPath);
         std::printf("server: listening on %s (max %d clients, ring=%zuMB, realtime "
                     "eventfd read, codec=%s)\n",
                     shm::kDefaultSocketPath, kMaxClients,

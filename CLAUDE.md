@@ -14,7 +14,7 @@ cmake .. -DCMAKE_BUILD_TYPE=Release
 make -j$(nproc)
 ```
 
-Produces: `server`, `client`, `socket_server`, `socket_client`, `bench_shm`, `bench_socket`, `bench_batch`, `bench_codec`, `test_codec`, `test_ringbuf_wrap`, `test_eventloop` (plus `test_proto_codec`, `test_proto_wrap` when protobuf is found under `3rd/protobuf`).
+Produces: `server`, `client`, `socket_server`, `socket_client`, `app_server`, `app_client`, `bench_shm`, `bench_socket`, `bench_batch`, `bench_codec`, `test_codec`, `test_ringbuf_wrap`, `test_eventloop`, `test_shm_app` (plus `test_proto_codec`, `test_proto_wrap` when protobuf is found under `3rd/protobuf`).
 
 ## Run Tests
 
@@ -22,6 +22,7 @@ Produces: `server`, `client`, `socket_server`, `socket_client`, `bench_shm`, `be
 ./build/test_codec
 ./build/test_ringbuf_wrap
 ./build/test_eventloop
+./build/test_shm_app    # 上层接口（ShmServer/ShmAsyncClient/ShmClient + comm 接口层）集成测试
 ```
 
 No test framework — tests use `assert()` and print `=== TEST PASSED ===` on success. Test targets are built with `-UNDEBUG` so asserts stay live in Release builds. `test_codec` forks a child process (sender) and uses socketpair for IPC.
@@ -49,9 +50,22 @@ include/shm_ipc/
   proto_codec.hpp     — ProtoCodec<T>: protobuf messages, payload = [type_name_len u16][type_name][pb bytes]
   messages.hpp        — Application-layer POD message definitions (Heartbeat, ClientMsg)
   client_state.hpp    — Per-connection state struct (shared by client/server)
+  simple_pod_codec.hpp — codec::SimplePodCodec：std::any 模型的通用 POD codec（[tag u32][T bytes]）
+  shm_connection.hpp  — 上层接口：ShmConnection（实现 comm::ITcpConnection，std::any + SendCmd 模型）
+  shm_server.hpp      — 上层接口：ShmServer（实现 comm::ITcpServer）
+  shm_async_client.hpp — 上层接口：ShmAsyncClient（实现 comm::ITcpAsyncClient）
+  shm_client.hpp      — 上层接口：ShmClient（实现 comm::ITcpClient，同步裸字节流）
+include/comm/         — 与 framework/io 共享的接口层（应用代码只依赖它，实现可替换）
+  types.h             — 回调签名/枚举（与 io/defines.h 的 tcp 部分对齐）
+  codec.h             — codec::Codec 接口（与框架同签名）+ codec::Adapt 鸭类型适配器
+  connection.h        — ITcpConnection（对应框架 tcp::TcpConnection 的应用层 API）
+  server.h            — ITcpServer（对应框架 io::TcpServer）
+  client.h            — ITcpAsyncClient（对应 io::TcpAsyncClient）+ ITcpClient（对应 io::tcp::Client）
 src/
   server.cpp          — Multi-client server using EventLoop + RingChannel
   client.cpp          — Client using EventLoop + RingChannel
+  app_server.cpp      — shm::ShmServer 上层接口示例（echo 服务）
+  app_client.cpp      — shm::ShmAsyncClient 上层接口示例
 ```
 
 Namespace: `shm` (headers live in `include/shm_ipc/`). Default ring capacity: 8MB (template parameter).
@@ -74,7 +88,7 @@ Namespace: `shm` (headers live in `include/shm_ipc/`). Default ring capacity: 8M
 
 ## Dependencies
 
-None beyond Linux system headers for the core library. Optional: protobuf (under `3rd/protobuf`) enables `proto_codec.hpp` targets.
+Linux system headers plus pthread (`shm_server.hpp` 内部持有握手线程，INTERFACE 目标通过 `Threads::Threads` 传递）。Optional: protobuf (under `3rd/protobuf`) enables `proto_codec.hpp` targets.
 
 ## Key Design Decisions
 
@@ -83,6 +97,9 @@ None beyond Linux system headers for the core library. Optional: protobuf (under
 - `eventfd` for cross-process notification — shared via SCM_RIGHTS during handshake
 - `poll` (not `epoll`) — max 16 clients, poll is simpler and sufficient
 - `timerfd` (not SIGALRM) — per-client independent timers, works with poll
+- EventLoop 增删用墓碑机制 — RemoveFd/RemoveTimer 立即生效（含同一分发批次内，被取消的定时器不会用旧 revents 补触发），条目在分发结束后回收
+- ShmServer 握手在后台线程 — accept 后 fd 交给握手线程完成 fd 交换（5s 超时），恶意/僵死连接不会阻塞事件循环；完成后经 eventfd 通知 loop 线程收编
+- ShmClient::Close 线程安全 — 置原子标志 + shutdown socket 唤醒阻塞读线程，资源回收延迟到 Connect()/析构
 - Ring capacity must be power of 2 (bitmask for physical offset)
-- Max single message = Capacity/2 (guarantees contiguous free space always available)
+- Max single message = Capacity/2 (guarantees contiguous free space always available); `SendFrameBatch` 分块写入可接近 Capacity，FrameReader 的 -3 上限为 Cap - 8
 - Pure byte-stream ring buffer — no framing at ringbuf layer; codec layer adds type-tagged frames on top

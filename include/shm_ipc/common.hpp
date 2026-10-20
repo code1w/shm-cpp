@@ -11,6 +11,7 @@
 #include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/syscall.h>
+#include <sys/un.h>
 #include <unistd.h>
 
 #include <array>
@@ -19,6 +20,7 @@
 #include <cstring>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 
 namespace shm {
@@ -238,6 +240,20 @@ inline TaggedFd RecvFd(int socket)
         throw std::runtime_error("RecvFd: no SCM_RIGHTS in control message");
     if (cmsg->cmsg_len < CMSG_LEN(sizeof(int)))
         throw std::runtime_error("RecvFd: control message too short for fd");
+    // 对端一条消息携带多个 fd 时只取第一个会造成其余 fd 泄漏，
+    // 属协议违规：关闭全部并报错
+    if (cmsg->cmsg_len > CMSG_LEN(sizeof(int)))
+    {
+        int nfds = static_cast<int>((cmsg->cmsg_len - CMSG_LEN(0)) / sizeof(int));
+        for (int i = 0; i < nfds; ++i)
+        {
+            int extra = -1;
+            std::memcpy(&extra, CMSG_DATA(cmsg) + i * sizeof(int), sizeof(int));
+            if (extra >= 0)
+                ::close(extra);
+        }
+        throw std::runtime_error("RecvFd: multiple fds in one message");
+    }
     int fd = -1;
     std::memcpy(&fd, CMSG_DATA(cmsg), sizeof(int));
 
@@ -281,6 +297,77 @@ inline UniqueFd CreateEventfd()
     if (fd < 0)
         throw std::runtime_error(std::string("eventfd: ") + std::strerror(errno));
     return UniqueFd{fd};
+}
+
+/**
+ * @brief 从 uri 中提取 Unix socket 路径
+ *
+ * 支持 "shm:///path"、"uds:///path"、"unix:///path" 形式，无 scheme 时原样返回。
+ */
+[[nodiscard]]
+inline std::string UriToPath(std::string_view uri)
+{
+    auto pos = uri.find("://");
+    if (pos == std::string_view::npos)
+        return std::string(uri);
+    return std::string(uri.substr(pos + 3));
+}
+
+/**
+ * @brief 创建并绑定 Unix domain socket 监听端
+ * @param path    socket 文件路径（已存在则先 unlink）
+ * @param backlog listen 积压队列长度
+ * @return 持有监听 socket 的 UniqueFd
+ */
+[[nodiscard]]
+inline UniqueFd ListenUnixSocket(const char *path, int backlog = 16)
+{
+    // strncpy 超长会静默截断到错误路径，必须显式拒绝
+    if (std::strlen(path) >= sizeof(sockaddr_un::sun_path))
+        throw std::runtime_error(std::string("unix socket path too long: ") + path);
+
+    UniqueFd sfd{::socket(AF_UNIX, SOCK_STREAM, 0)};
+    if (!sfd)
+        throw std::runtime_error(std::string("socket: ") + std::strerror(errno));
+
+    ::unlink(path);
+
+    sockaddr_un addr{};
+    addr.sun_family = AF_UNIX;
+    std::strncpy(addr.sun_path, path, sizeof(addr.sun_path) - 1);
+
+    if (::bind(sfd.Get(), reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) < 0)
+        throw std::runtime_error(std::string("bind: ") + std::strerror(errno));
+    if (::listen(sfd.Get(), backlog) < 0)
+        throw std::runtime_error(std::string("listen: ") + std::strerror(errno));
+
+    return sfd;
+}
+
+/**
+ * @brief 连接到指定路径的 Unix domain socket
+ * @param path socket 文件路径
+ * @return 已连接的 UniqueFd
+ */
+[[nodiscard]]
+inline UniqueFd ConnectUnixSocket(const char *path)
+{
+    // 同 ListenUnixSocket：超长路径静默截断会连到错误地址
+    if (std::strlen(path) >= sizeof(sockaddr_un::sun_path))
+        throw std::runtime_error(std::string("unix socket path too long: ") + path);
+
+    UniqueFd sfd{::socket(AF_UNIX, SOCK_STREAM, 0)};
+    if (!sfd)
+        throw std::runtime_error(std::string("socket: ") + std::strerror(errno));
+
+    sockaddr_un addr{};
+    addr.sun_family = AF_UNIX;
+    std::strncpy(addr.sun_path, path, sizeof(addr.sun_path) - 1);
+
+    if (::connect(sfd.Get(), reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) < 0)
+        throw std::runtime_error(std::string("connect: ") + std::strerror(errno));
+
+    return sfd;
 }
 
 }  // namespace shm

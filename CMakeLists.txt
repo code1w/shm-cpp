@@ -9,6 +9,9 @@ add_compile_options(-Wall -Wextra -pedantic)
 
 add_library(shm_ipc INTERFACE)
 target_include_directories(shm_ipc INTERFACE include/)
+# shm_server.hpp 内部持有握手线程（std::thread/mutex），接口依赖须传递给使用方
+find_package(Threads REQUIRED)
+target_link_libraries(shm_ipc INTERFACE Threads::Threads)
 
 add_executable(client src/client.cpp)
 target_link_libraries(client PRIVATE shm_ipc)
@@ -51,6 +54,17 @@ target_link_libraries(socket_server PRIVATE shm_ipc)
 
 add_executable(socket_client src/socket_client.cpp)
 target_link_libraries(socket_client PRIVATE shm_ipc)
+
+# --- 上层应用接口示例与集成测试 ---
+add_executable(app_server src/app_server.cpp)
+target_link_libraries(app_server PRIVATE shm_ipc)
+
+add_executable(app_client src/app_client.cpp)
+target_link_libraries(app_client PRIVATE shm_ipc)
+
+add_executable(test_shm_app test/test_shm_app.cpp)
+target_link_libraries(test_shm_app PRIVATE shm_ipc pthread)
+target_compile_options(test_shm_app PRIVATE -UNDEBUG)
 
 # --- Protobuf（本地安装到 3rd/protobuf） ---
 set(PROTOBUF_ROOT ${CMAKE_SOURCE_DIR}/3rd/protobuf)

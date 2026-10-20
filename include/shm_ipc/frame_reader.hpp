@@ -87,13 +87,13 @@ class FrameReader
         }
 
         // 合理性上限检查（在完整性校验之前）：
-        // 合法 payload 最大为 max_write_size（codec 层单次发送限制）
-        // + kMaxPayloadSlack（类型前缀余量），且任何帧都不可能超过环容量。
-        // 超过上限的 hdr.len 只可能来自损坏/恶意对端——这种帧永远不可能
-        // 完整到达，若仅当"数据不足"等待会永久卡死字节流，必须立即报错。
-        constexpr uint64_t kMaxPayload =
-            RingChannel<Cap>::max_write_size + kMaxPayloadSlack;
-        if (hdr.len > kMaxPayload || hdr.len > Cap - kMsgHeaderSize)
+        // 一帧最多占满整个环（header + payload ≤ Capacity），超过
+        // Cap - kMsgHeaderSize 的 hdr.len 在本环上永远不可能完整到达。
+        // 这种帧头只可能来自损坏/恶意对端——若仅当"数据不足"等待会
+        // 永久卡死字节流，必须立即报错。
+        //（注意不能按 max_write_size 限定：SendFrameBatch 允许分块写入
+        // 接近环容量的 payload，见 codec.hpp。）
+        if (hdr.len > Cap - kMsgHeaderSize)
             return -3;
 
         // 完整性校验（减法形式，避免 hdr.len 接近 UINT32_MAX 时

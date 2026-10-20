@@ -51,13 +51,6 @@ static_assert(sizeof(MsgHeader) == 8, "MsgHeader must be 8 bytes");
 /// @brief MsgHeader 占用的字节数
 inline constexpr uint32_t kMsgHeaderSize = sizeof(MsgHeader);
 
-/// @brief 合法 payload 超出 max_write_size 的最大余量
-///
-/// codec 层单次发送的序列化数据被限制在 max_write_size（Capacity/2）以内，
-/// 但 payload 还包含类型前缀：POD tag 4B，protobuf type_name 前缀最大
-/// 2 + 65535B。取 128KB 作为余量，足以覆盖所有前缀又不会放过异常帧。
-inline constexpr uint32_t kMaxPayloadSlack = 128 * 1024;
-
 // ---------------------------------------------------------------------------
 // TypeTag 特化框架
 // ---------------------------------------------------------------------------
