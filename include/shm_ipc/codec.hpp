@@ -149,7 +149,18 @@ int SendFrame(RingChannel<Cap> &ch, uint32_t payload_len, uint32_t seq,
     hdr.seq = seq;
     batch.TryWrite(&hdr, kMsgHeaderSize);
 
-    write_payload(batch);
+    try
+    {
+        write_payload(batch);
+    }
+    catch (...)
+    {
+        // 回调抛异常：丢弃半截写入（未 Flush 不发布），保持字节流完好。
+        // 若放任析构自动 Flush，对端会读到 [头][半截 payload] 的残缺帧，
+        // 并按伪造的 len 消费后续帧的字节，造成永久流错位
+        batch.Cancel();
+        throw;
+    }
 
     // 防御性校验：回调写入的字节数必须与 payload_len 一致，
     // 否则回滚（不 Flush，数据未发布），避免帧流损坏
@@ -194,7 +205,17 @@ int SendFrameBatch(typename RingChannel<Cap>::ChannelBatchWriter &batch,
     hdr.seq = seq;
     batch.TryWrite(&hdr, kMsgHeaderSize);
 
-    write_payload(batch);
+    try
+    {
+        write_payload(batch);
+    }
+    catch (...)
+    {
+        // 回调抛异常：回滚本帧（含字节与计数），不影响 batch 中此前的帧。
+        // 放任析构 Flush 会向对端发布残缺帧，永久破坏字节流（同 SendFrame）
+        batch.RewindTo(before, before_count);
+        throw;
+    }
 
     // 回滚必须同时恢复字节计数与写入次数计数：一帧由多次
     // TryWrite 组成（header + 分段 payload），只恢复字节数会

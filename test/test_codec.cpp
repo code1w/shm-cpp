@@ -17,6 +17,7 @@
  * 12. PodCodec 毒帧立即丢弃并自动跳过（回归）
  * 13. 单帧在任意字节边界切成两段到达，接收方正确拆包（穷尽切分）
  * 14. 多帧字节流被随机大小块切分到达，接收方按序还原全部帧
+ * 15. SendFrame 回调抛异常不得发布半截帧（回归）
  *
  * 使用 fork + socketpair，与 bench_shm.cpp 相同的进程隔离方式。
  */
@@ -31,6 +32,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <random>
+#include <stdexcept>
 #include <vector>
 #include <poll.h>
 #include <sys/mman.h>
@@ -694,19 +696,34 @@ void RunReceiverPoison(int socket_fd)
     const void *payload = nullptr;
     uint32_t payload_len = 0;
 
-    // 阶段 1：读取两条填充帧（将 read_pos 推进到环尾附近）
-    if (::poll(&pfd, 1, 5000) <= 0)
+    // 事件通知与数据到达不严格同步：发送方每条 Send 各写一次 eventfd，
+    // 单次 DrainNotify 可能只清掉前一条，残留计数会让后续 poll 提前唤醒
+    // （彼时数据尚未写入环，TryRecv 返回 -1）。统一采用"先试读，
+    // -1 再 poll 等待"的次序（与 ShmClient::ReadMessage 一致），
+    // 只有超时才是失败
+    auto recv_wait = [&](const char *what) -> int
     {
-        std::fprintf(stderr, "FAIL: poll timeout phase 1\n");
-        std::abort();
-    }
-    Channel::DrainNotify(efd);
-    if (reader.TryRecv(ch, &payload, &payload_len) != 0 || payload_len != kFillerLen)
+        for (;;)
+        {
+            int rc = reader.TryRecv(ch, &payload, &payload_len);
+            if (rc != -1)
+                return rc;
+            if (::poll(&pfd, 1, 5000) <= 0)
+            {
+                std::fprintf(stderr, "FAIL: poll timeout (%s)\n", what);
+                std::abort();
+            }
+            Channel::DrainNotify(efd);
+        }
+    };
+
+    // 阶段 1：读取两条填充帧（将 read_pos 推进到环尾附近）
+    if (recv_wait("filler 1") != 0 || payload_len != kFillerLen)
     {
         std::fprintf(stderr, "FAIL: filler frame 1\n");
         std::abort();
     }
-    if (reader.TryRecv(ch, &payload, &payload_len) != 0 || payload_len != kFillerLen)
+    if (recv_wait("filler 2") != 0 || payload_len != kFillerLen)
     {
         std::fprintf(stderr, "FAIL: filler frame 2\n");
         std::abort();
@@ -715,13 +732,7 @@ void RunReceiverPoison(int socket_fd)
     ::write(socket_fd, &ack, 1);
 
     // 阶段 2：毒帧跨环尾且超过 BufSize，应返回 -2
-    if (::poll(&pfd, 1, 5000) <= 0)
-    {
-        std::fprintf(stderr, "FAIL: poll timeout phase 2\n");
-        std::abort();
-    }
-    Channel::DrainNotify(efd);
-    int rc = reader.TryRecv(ch, &payload, &payload_len);
+    int rc = recv_wait("poison");
     if (rc != -2)
     {
         std::fprintf(stderr, "FAIL: expected -2 for wrapped oversized frame, got %d\n", rc);
@@ -729,10 +740,9 @@ void RunReceiverPoison(int socket_fd)
     }
 
     // 自愈：下一次 TryRecv 自动丢弃毒帧，读到后续正常帧
-    rc = reader.TryRecv(ch, &payload, &payload_len);
-    if (rc != 0)
+    if (recv_wait("heal") != 0)
     {
-        std::fprintf(stderr, "FAIL: poisoned frame not auto-discarded (rc=%d)\n", rc);
+        std::fprintf(stderr, "FAIL: poisoned frame not auto-discarded\n");
         std::abort();
     }
     if (payload_len != 5 || std::memcmp(payload, "after", 5) != 0)
@@ -1226,6 +1236,118 @@ void RunReceiverStream(int socket_fd)
 }
 
 // =========================================================================
+// 测试 15（回归）：SendFrame 回调抛异常不得发布半截帧
+// =========================================================================
+
+void RunSenderThrow(int socket_fd)
+{
+    auto ch = SmallChannel::CreateRingChannel(socket_fd, shm::ChannelRole::kServer);
+
+    char body[32] = {};
+    if (shm::Send(ch, body, sizeof(body), 1) != 0)
+    {
+        std::fprintf(stderr, "FAIL: Send normal 1\n");
+        std::abort();
+    }
+
+    // 异常帧：payload_len=100，回调写 50 字节后抛异常。
+    // 修复前：异常展开时 ~ChannelBatchWriter 的 Flush 会把这
+    // [头+半截 payload] 发布进环，接收方字节流永久错位
+    bool threw = false;
+    try
+    {
+        shm::SendFrame(ch, 100, 2, [](SmallChannel::ChannelBatchWriter &batch) {
+            char half[50] = {};
+            batch.TryWrite(half, sizeof(half));
+            throw std::runtime_error("user callback failed mid-payload");
+        });
+    }
+    catch (const std::exception &)
+    {
+        threw = true;
+    }
+    if (!threw)
+    {
+        std::fprintf(stderr, "FAIL: expected exception from SendFrame\n");
+        std::abort();
+    }
+
+    // 异常后字节流必须仍然可用
+    if (shm::Send(ch, body, sizeof(body), 3) != 0)
+    {
+        std::fprintf(stderr, "FAIL: Send normal 2\n");
+        std::abort();
+    }
+
+    char ack = 0;
+    ::read(socket_fd, &ack, 1);  // 等接收方校验完毕
+    ::close(socket_fd);
+    std::_Exit(0);
+}
+
+void RunReceiverThrow(int socket_fd)
+{
+    auto ch = SmallChannel::CreateRingChannel(socket_fd, shm::ChannelRole::kClient);
+    int efd = ch.NotifyReadFd();
+
+    pollfd pfd{};
+    pfd.fd     = efd;
+    pfd.events = POLLIN;
+
+    // 期望恰好两条完整帧：2 * (MsgHeader 8B + payload 32B) = 80 字节。
+    // 若异常路径泄漏半截帧，字节数与第二帧的字段都会对不上
+    const uint32_t kExpectTotal = 2 * (shm::kMsgHeaderSize + 32);
+
+    char buf[256];
+    uint32_t got = 0;
+    while (got < kExpectTotal)
+    {
+        uint32_t n = ch.TryRead(buf + got, sizeof(buf) - got);
+        if (n > 0)
+        {
+            got += n;
+            continue;
+        }
+        if (::poll(&pfd, 1, 5000) <= 0)
+        {
+            std::fprintf(stderr, "FAIL: poll timeout (got %u bytes)\n", got);
+            std::abort();
+        }
+        SmallChannel::DrainNotify(efd);
+    }
+
+    if (got != kExpectTotal)
+    {
+        std::fprintf(stderr, "FAIL: stream has %u bytes, expected %u"
+                             " (partial frame leaked)\n",
+                     got, kExpectTotal);
+        std::abort();
+    }
+
+    // 校验两帧字段：len=32、seq 依次为 1 和 3（异常帧不存在）
+    for (int frame = 0; frame < 2; ++frame)
+    {
+        uint32_t len = 0, seq = 0;
+        const char *p = buf + frame * (shm::kMsgHeaderSize + 32);
+        std::memcpy(&len, p, sizeof(len));
+        std::memcpy(&seq, p + sizeof(len), sizeof(seq));
+        if (len != 32 || seq != static_cast<uint32_t>(frame * 2 + 1))
+        {
+            std::fprintf(stderr,
+                         "FAIL: frame %d len=%u seq=%u (partial frame leaked)\n",
+                         frame, len, seq);
+            std::abort();
+        }
+    }
+
+    std::printf("  PASS: exception in write_payload publishes no partial frame\n");
+
+    char ack = 1;
+    ::write(socket_fd, &ack, 1);
+    ::close(socket_fd);
+}
+
+// =========================================================================
 // 辅助：fork + 运行测试对
 // =========================================================================
 
@@ -1258,7 +1380,17 @@ void RunForkTest(const char *name,
     {
         ::close(sv[1]);
         receiver_fn(sv[0]);
-        ::waitpid(pid, nullptr, 0);
+        // 必须检查 sender 退出码：sender 侧断言失败（abort）若被丢弃，
+        // 只要 receiver 自身通过，套件会假打印 TEST PASSED
+        int status = 0;
+        ::waitpid(pid, &status, 0);
+        if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+        {
+            std::fprintf(stderr, "FAIL: %s sender exited abnormally"
+                                 " (killed=%d exit=%d)\n",
+                         name, WIFSIGNALED(status), WEXITSTATUS(status));
+            std::_Exit(1);
+        }
     }
 }
 
@@ -1318,6 +1450,10 @@ int main()
 
     RunForkTest("Test 14: random-chunk stream reassembly",
                 RunSenderStream, RunReceiverStream);
+    std::printf("\n");
+
+    RunForkTest("Test 15: SendFrame exception publishes no partial frame",
+                RunSenderThrow, RunReceiverThrow);
 
     std::printf("\n=== TEST PASSED ===\n");
     return 0;

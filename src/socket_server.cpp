@@ -87,6 +87,17 @@ void RunBench()
         if (cmd.rounds == 0)
             break;
 
+        // 命令来自对端：payload_size 超过 16MB 或 rounds 为负视为协议违规。
+        // 不校验时 payload_size 接近 UINT32_MAX 会令 max_body 回绕成极小值
+        if (cmd.payload_size > (16u << 20) || cmd.rounds < 0)
+        {
+            std::fprintf(stderr,
+                         "socket_server: invalid cmd (payload_size=%u rounds=%d)"
+                         ", disconnect\n",
+                         cmd.payload_size, cmd.rounds);
+            return;
+        }
+
         // 接收缓冲区（MsgHeader 之后的 body 部分）
         uint32_t max_body = shm::kTagSize
                           + static_cast<uint32_t>(sizeof(shm::BenchPayloadHeader))
@@ -103,7 +114,17 @@ void RunBench()
             shm::MsgHeader hdr{};
             ReadAll(cfd.Get(), &hdr, sizeof(hdr));
 
-            // 再读 body（tag + payload）
+            // 再读 body（tag + payload）。len 完全由对端控制，必须与按
+            // cmd.payload_size 分配的缓冲比对，否则越界写堆内存
+            // （/tmp 下的 socket 任意本地进程可连，可触发）
+            if (hdr.len > body_buf.size())
+            {
+                std::fprintf(stderr,
+                             "socket_server: frame len %u exceeds buffer %zu"
+                             " (payload_size=%u), disconnect\n",
+                             hdr.len, body_buf.size(), cmd.payload_size);
+                return;
+            }
             ReadAll(cfd.Get(), body_buf.data(), hdr.len);
 
             // 解析 tag

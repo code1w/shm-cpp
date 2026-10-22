@@ -6,6 +6,7 @@
 #ifndef SHM_IPC_COMMON_HPP_
 #define SHM_IPC_COMMON_HPP_
 
+#include <fcntl.h>
 #include <linux/memfd.h>
 #include <sys/eventfd.h>
 #include <sys/mman.h>
@@ -26,6 +27,17 @@
 namespace shm {
 
 inline constexpr const char *kDefaultSocketPath = "/tmp/fd-pass.socket";
+
+// memfd seal 常量：glibc 2.17 等老版本的 <fcntl.h> 未定义，而
+// <linux/fcntl.h> 与其 struct flock 定义冲突，故直接使用内核 UAPI 固定值
+#ifndef MFD_ALLOW_SEALING
+#define MFD_ALLOW_SEALING 0x0004U
+#endif
+#ifndef F_ADD_SEALS
+#define F_ADD_SEALS   1033     ///< UAPI: fcntl 命令，为文件添加 seal
+#define F_SEAL_SHRINK 0x0002   ///< 禁止 ftruncate 缩小文件
+#define F_SEAL_GROW   0x0004   ///< 禁止 ftruncate 扩大文件
+#endif
 
 // ---------------------------------------------------------------------------
 // UniqueFd — 移动语义 RAII 文件描述符包装
@@ -148,6 +160,12 @@ struct TaggedFd
 
 /**
  * @brief 创建匿名 memfd 并 ftruncate 到指定大小
+ *
+ * 创建后立即以 F_SEAL_SHRINK|F_SEAL_GROW 封印尺寸：memfd 经 SCM_RIGHTS
+ * 发给对端后，任何持有 fd 者（含创建者）都无法再 ftruncate 改变大小，
+ * 防止恶意对端握手后缩小文件使接收方映射读越界（SIGBUS）。
+ * seal 不影响已建立的可写映射，本库创建后也不再改文件大小。
+ *
  * @param name  memfd 名称（调试用）
  * @param size  文件大小（字节）
  * @return 持有 memfd 的 UniqueFd
@@ -155,8 +173,14 @@ struct TaggedFd
 [[nodiscard]]
 inline UniqueFd CreateMemfd(const char *name, std::size_t size)
 {
-    int fd = static_cast<int>(
-        ::syscall(__NR_memfd_create, name, static_cast<unsigned>(MFD_CLOEXEC)));
+    // MFD_ALLOW_SEALING 允许随后 fcntl(F_ADD_SEALS)；内核不识别该标志
+    // （EINVAL）时退化为普通 memfd，仅失去防 truncate 硬化
+    int fd = static_cast<int>(::syscall(
+        __NR_memfd_create, name,
+        static_cast<unsigned>(MFD_CLOEXEC | MFD_ALLOW_SEALING)));
+    if (fd < 0 && errno == EINVAL)
+        fd = static_cast<int>(
+            ::syscall(__NR_memfd_create, name, static_cast<unsigned>(MFD_CLOEXEC)));
     if (fd < 0)
         throw std::runtime_error(std::string("memfd_create: ") +
                                  std::strerror(errno));
@@ -165,6 +189,8 @@ inline UniqueFd CreateMemfd(const char *name, std::size_t size)
         ::close(fd);
         throw std::runtime_error(std::string("ftruncate: ") + std::strerror(errno));
     }
+    // 封印尺寸（尽力而为：不支持 seal 的内核静默跳过，与历史行为一致）
+    (void)::fcntl(fd, F_ADD_SEALS, F_SEAL_SHRINK | F_SEAL_GROW);
     return UniqueFd{fd};
 }
 

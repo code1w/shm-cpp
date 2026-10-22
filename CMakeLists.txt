@@ -14,10 +14,10 @@ find_package(Threads REQUIRED)
 target_link_libraries(shm_ipc INTERFACE Threads::Threads)
 
 add_executable(client src/client.cpp)
-target_link_libraries(shm_client PRIVATE shm_ipc)
+target_link_libraries(client PRIVATE shm_ipc)
 
 add_executable(server src/server.cpp)
-target_link_libraries(shm_server PRIVATE shm_ipc)
+target_link_libraries(server PRIVATE shm_ipc)
 
 add_executable(bench_socket bench/bench_socket.cpp)
 target_link_libraries(bench_socket PRIVATE shm_ipc)

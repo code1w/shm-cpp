@@ -167,7 +167,77 @@ int main()
         std::printf("part2: async client echo OK\n");
     }
 
-    // 等待服务端感知两条连接的关闭，再停止服务端
+    // ------------------------------------------------------------------
+    // Part 3: verifing 中析构 ShmAsyncClient，挂起的验证定时器必须被摘除
+    //（回归：析构曾只 RemoveFd 不 Close，验证定时器回调捕获裸 this，
+    //  连接释放后触发即 use-after-free）
+    // ------------------------------------------------------------------
+    {
+        shm::EventLoop client_loop;
+        std::atomic<bool> verify_started{false};
+        std::atomic<bool> timer_fired{false};
+        {
+            shm::ShmAsyncClient async_client(&client_loop);
+
+            async_client.SetCodecFactory([] {
+                return std::make_shared<shm::codec::SimplePodCodec>();
+            });
+            async_client.SetConnectionCallback([](const comm::TcpConnPtr &) {});
+            async_client.SetMessageCallback([](const comm::TcpConnPtr &,
+                                               const std::any &) {});
+            async_client.SetCloseCallback([](const comm::TcpConnPtr &) {});
+            async_client.SetVerifyCallback([&](const comm::TcpConnPtr &conn) {
+                // 挂 500ms 验证超时定时器，故意不回调 OnVerify。
+                // 时序：Stop 在 ~60ms 内生效（Run 用 50ms poll 粒度），
+                // 定时器 500ms 才到期，保证它活到析构之后
+                conn->StartVerifyTimer(500, 0, [&](int64_t) {
+                    timer_fired = true;
+                });
+                verify_started = true;
+            });
+
+            std::thread client_thread([&] {
+                async_client.Connect(kTestSock);
+                client_loop.Run(50);
+            });
+            assert(WaitFor([&] { return verify_started.load(); }, 3000));
+            client_loop.Stop();
+            client_thread.join();
+        }  // ~ShmAsyncClient：此刻连接仍 verifing、定时器仍挂起
+
+        // 重启 loop 观察到 500ms 之后：若定时器未被析构摘除（bug），
+        // 它会在此窗口触发，命中已释放连接的悬垂 this（ASan 下报 UAF）
+        std::thread rerun_thread([&] { client_loop.Run(50); });
+        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+        client_loop.Stop();
+        rerun_thread.join();
+
+        assert(!timer_fired.load());
+        std::printf("part3: pending verify timer removed on client dtor\n");
+    }
+
+    // ------------------------------------------------------------------
+    // Part 4: 二次 Start 不应崩溃（回归：Listen 对仍 joinable 的握手线程
+    // move 赋值曾触发 std::terminate）
+    // ------------------------------------------------------------------
+    {
+        shm::EventLoop idle_loop;
+        shm::ShmServer server2(&idle_loop, "/tmp/test-shm-app-dbl.socket", "dbl");
+        server2.SetCodecFactory([] {
+            return std::make_shared<shm::codec::SimplePodCodec>();
+        });
+        server2.SetConnectionCallback([](const comm::TcpConnPtr &) {});
+        server2.SetMessageCallback([](const comm::TcpConnPtr &,
+                                      const std::any &) {});
+        server2.SetCloseCallback([](const comm::TcpConnPtr &) {});
+
+        assert(server2.Start());
+        assert(server2.Start());  // 回归：此处曾 std::terminate
+        server2.Stop();           // 幂等停止（~ShmServer 会再次调用）
+        std::printf("part4: double Start() is a no-op\n");
+    }
+
+    // 等待服务端感知三条连接的关闭，再停止服务端
     assert(WaitFor([&] { return conn_count.load() == 0; }, 2000));
     server_loop.Stop();
     server_thread.join();

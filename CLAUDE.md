@@ -103,3 +103,7 @@ Linux system headers plus pthread (`shm_server.hpp` 内部持有握手线程，I
 - Ring capacity must be power of 2 (bitmask for physical offset)
 - Max single message = Capacity/2 (guarantees contiguous free space always available); `SendFrameBatch` 分块写入可接近 Capacity，FrameReader 的 -3 上限为 Cap - 8
 - Pure byte-stream ring buffer — no framing at ringbuf layer; codec layer adds type-tagged frames on top
+- SendFrame/SendFrameBatch 异常安全 — write_payload 回调抛异常时 Cancel/RewindTo 回滚未发布写入后重新抛出；放任析构 Flush 会向对端发布半截帧，永久破坏字节流（test_codec Test 15 回归）
+- memfd 创建即封印（F_SEAL_SHRINK|F_SEAL_GROW）— 防恶意对端握手后 ftruncate 缩小文件使接收方读映射越界（SIGBUS）；seal 不影响已建立的可写映射
+- ~ShmAsyncClient 必须 Close 连接 — 摘除可能挂起的验证定时器（回调捕获裸 this，不摘除即 UAF；test_shm_app Part 3 回归）
+- ShmServer::Start 幂等 — Listen 入口 started_ 守卫，二次 Start 直接成功（否则对 joinable 握手线程 move 赋值 = std::terminate；test_shm_app Part 4 回归）

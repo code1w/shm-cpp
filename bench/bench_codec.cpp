@@ -159,7 +159,7 @@ void BenchMemory()
 
         // --- EncodePod (ClientMsg, fixed size) ---
         double best_epod = 1e18;
-        if (tc.payload_size <= sizeof(ClientMsg))
+        if (tc.payload_size <= sizeof(ClientMsg::payload))
         {
             auto pod_buf = std::make_unique<char[]>(pod_frame_size);
             ClientMsg msg{};

@@ -234,6 +234,12 @@ class ShmServer : public comm::ITcpServer
     /// @brief 创建监听、握手线程与完成通知 fd，并注册 accept 回调
     bool Listen()
     {
+        // 已在监听：直接成功。不做此守卫时，二次 Start 会对仍 joinable 的
+        // hs_thread_ move 赋值（std::terminate），且 hs_wake_fd_ 赋值会
+        // 关闭旧 eventfd（旧线程仍在使用）
+        if (started_)
+            return true;
+
         try
         {
             listen_fd_ = ListenUnixSocket(UriToPath(uri_).c_str());

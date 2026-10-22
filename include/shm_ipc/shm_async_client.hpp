@@ -60,6 +60,10 @@ class ShmAsyncClient : public comm::ITcpAsyncClient
     {
         if (conn_ && loop_)
         {
+            // 先 Close（内部含 RemoveVerifyTimer）：verifing 中析构时，
+            // 未触发的验证定时器若不摘除，其回调（捕获裸 this）将在连接
+            // 释放后命中悬垂指针（use-after-free）
+            conn_->Close();
             loop_->RemoveFd(conn_->NotifyFd());
             loop_->RemoveFd(conn_->SocketFd());
         }
