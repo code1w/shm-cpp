@@ -26,6 +26,7 @@
 #include <cassert>
 #include <cstdint>
 #include <cstring>
+#include <new>
 
 namespace shm {
 
@@ -160,9 +161,18 @@ class BatchWriter
     BatchWriter(BatchWriter &&o) noexcept
         : hdr_(o.hdr_), base_(o.base_),
           w_(o.w_), r_(o.r_), w_start_(o.w_start_),
-          count_(o.count_)
+          count_(o.count_),
+          reserved_(o.reserved_), reserved_len_(o.reserved_len_)
     {
-        o.hdr_ = nullptr;
+        // moved-from 必须是惰性对象：只清 hdr_ 而保留 base_/w_ 时，
+        // 对其 TryWrite 会写入共享环并返回成功，但 Flush 永不发布；
+        // 更糟的是它会覆写活 writer 尚未 Flush 的数据，造成静默损坏。
+        o.hdr_          = nullptr;
+        o.base_         = nullptr;
+        o.w_ = o.r_ = o.w_start_ = 0;
+        o.count_        = 0;
+        o.reserved_     = nullptr;
+        o.reserved_len_ = 0;
     }
 
     BatchWriter &operator=(BatchWriter &&)      = delete;
@@ -177,6 +187,8 @@ class BatchWriter
      */
     int TryWrite(const void *data, uint32_t len)
     {
+        if (!hdr_ || !base_)  // moved-from / 已失效：不得写入
+            return -1;
         if (len == 0 || len > max_write_size)
             return -1;
         if (data == nullptr)  // memcpy(dst, nullptr, n) 是 UB，防御性拒绝
@@ -201,6 +213,9 @@ class BatchWriter
 
         w_ += len;
         ++count_;
+        // 直接写入会使此前的 Reserve 预留失效
+        reserved_     = nullptr;
+        reserved_len_ = 0;
         return 0;
     }
 
@@ -219,6 +234,9 @@ class BatchWriter
             w_start_ = w_;
         }
         count_ = 0;
+        // 未提交的预留随本批结束而失效
+        reserved_     = nullptr;
+        reserved_len_ = 0;
         return n;
     }
 
@@ -235,8 +253,10 @@ class BatchWriter
      */
     void Cancel() noexcept
     {
-        w_     = w_start_;
-        count_ = 0;
+        w_            = w_start_;
+        count_        = 0;
+        reserved_     = nullptr;
+        reserved_len_ = 0;
     }
 
     /**
@@ -250,11 +270,18 @@ class BatchWriter
      */
     void RewindTo(uint64_t pending, int count) noexcept
     {
+        if (!hdr_)
+            return;  // moved-from
         // pending 超过当前未发布字节数会虚增 w_，
-        // Flush 时把未写入的垃圾数据发布给对端
+        // Flush 时把未写入的垃圾数据发布给对端。
+        // assert 仅在 debug 生效，release 下钳制到实际未发布字节数。
         assert(pending <= PendingBytes());
-        w_     = w_start_ + pending;
-        count_ = count;
+        if (pending > PendingBytes())
+            pending = PendingBytes();
+        w_            = w_start_ + pending;
+        count_        = (count < 0) ? 0 : count;
+        reserved_     = nullptr;
+        reserved_len_ = 0;
     }
 
     /** @brief 当前可写入的剩余字节数 */
@@ -272,6 +299,8 @@ class BatchWriter
      */
     char *Reserve(uint32_t len)
     {
+        if (!hdr_ || !base_)  // moved-from / 已失效
+            return nullptr;
         if (len == 0 || len > max_write_size)
             return nullptr;
         if ((w_ + len) - r_ > Capacity)
@@ -280,18 +309,28 @@ class BatchWriter
         std::size_t tail   = Capacity - phys_w;
         if (len > tail)
             return nullptr;  // 跨环尾，调用者应回退
-        return base_ + phys_w;
+        reserved_     = base_ + phys_w;
+        reserved_len_ = len;
+        return reserved_;
     }
 
     /**
      * @brief 提交 Reserve 预留的写入
      * @param len 与 Reserve 调用时相同的长度
+     *
+     * release 构建同样校验：只有成功 Reserve 且长度一致才推进写位置，
+     * 否则拒绝提交（不发布未写入的字节，避免破坏 w - r <= Capacity）。
      */
     void CommitReserve(uint32_t len)
     {
-        assert(len > 0 && len <= max_write_size);
+        // 注意：这里不做 assert。非法提交在 debug/release 下都应当被
+        // 安全拒绝（而不是 abort），否则调试构建与发布构建行为不一致。
+        if (!hdr_ || !reserved_ || len != reserved_len_)
+            return;  // 非法提交：调用方未 Reserve 或长度不符
         w_ += len;
         ++count_;
+        reserved_     = nullptr;
+        reserved_len_ = 0;
     }
 
  private:
@@ -301,6 +340,10 @@ class BatchWriter
     uint64_t r_;        ///< 快照的读位置（整批只读一次 acquire）
     uint64_t w_start_;  ///< Flush 前的写位置，用于判断是否有新数据
     int count_ = 0;     ///< 自上次 Flush 以来已写入次数计数
+
+    // Reserve/CommitReserve 配对校验（release 下也生效）
+    char *reserved_        = nullptr;  ///< 当前未提交的预留区起始指针
+    uint32_t reserved_len_ = 0;        ///< 当前未提交的预留长度
 };
 
 }  // namespace detail
@@ -356,7 +399,17 @@ class RingBuf
      *       之前完成（见 RingChannel::Connect/Accept 的调用顺序）。
      *       对端后续读到的 write_pos=0 即"环为空"，是安全的初态。
      */
-    static void Init(void *shm) { std::memset(shm, 0, shm_size); }
+    static void Init(void *shm)
+    {
+        // 控制头含 std::atomic：必须原地构造以开始对象生命周期，
+        // 不能仅对原始 mmap 内存 memset（形式上 UB）。RingHeader{}
+        // 的值初始化会把控制区清零，数据区单独清零。
+        assert(reinterpret_cast<uintptr_t>(shm) % alignof(RingHeader) == 0);
+        auto *hdr = new (shm) RingHeader{};
+        hdr->write_pos.store(0, std::memory_order_relaxed);
+        hdr->read_pos.store(0, std::memory_order_relaxed);
+        std::memset(detail::RingData(shm), 0, Capacity);
+    }
 
     // ---- 写入 ----
 
@@ -418,6 +471,10 @@ class RingBuf
      */
     static uint32_t TryRead(void *shm, void *data, uint32_t max_len)
     {
+        // memcpy(dst, src, n>0) 对空指针属 UB；与 TryWrite 的防御保持一致
+        if (data == nullptr)
+            return 0;
+
         auto *hdr        = detail::RingHdr(shm);
         const char *base = detail::RingData(shm);
 
@@ -429,7 +486,7 @@ class RingBuf
             return 0;
 
         uint32_t to_read = (avail < max_len) ? static_cast<uint32_t>(avail) : max_len;
-        // max_len == 0：不拷贝不推进；memcpy(dst, src, 0) 对空指针属 UB
+        // max_len == 0：不拷贝不推进
         if (to_read == 0)
             return 0;
         detail::RingCopyOut<Capacity>(base, detail::RingPhys<Capacity>(r), data, to_read);
@@ -450,6 +507,8 @@ class RingBuf
         // 读 0 字节平凡成功；提前返回避免 memcpy(dst, src, 0) 的 UB 边界
         if (len == 0)
             return 0;
+        if (data == nullptr)  // 非零长度读入空指针：拒绝而不是崩溃
+            return -1;
 
         auto *hdr        = detail::RingHdr(shm);
         const char *base = detail::RingData(shm);
@@ -483,6 +542,10 @@ class RingBuf
     static int Peek(const void *shm, const void **seg1, uint32_t *seg1_len,
                     const void **seg2, uint32_t *seg2_len)
     {
+        // 输出参数为空时安全拒绝（debug/release 行为一致）
+        if (!seg1 || !seg1_len || !seg2 || !seg2_len)
+            return -1;
+
         auto *hdr        = detail::RingHdr(shm);
         const char *base = detail::RingData(shm);
 
@@ -518,15 +581,18 @@ class RingBuf
      * @param shm 共享内存指针
      * @param len 要推进的字节数（不得超过当前可读字节数）
      *
-     * @note len 超过可读字节数会破坏 r <= w 不变式（debug 构建触发
-     *       assert；release 构建静默损坏，调用方必须保证不超交）。
+     * @note len 超过可读字节数会破坏 r <= w 不变式。debug 构建触发
+     *       assert；release 构建钳制到实际可读字节数，避免静默损坏。
      */
     static void CommitRead(void *shm, uint32_t len)
     {
         auto *hdr = detail::RingHdr(shm);
         uint64_t r = hdr->read_pos.load(std::memory_order_relaxed);
-        assert(static_cast<uint64_t>(len) <=
-               hdr->write_pos.load(std::memory_order_acquire) - r);
+        uint64_t avail =
+            hdr->write_pos.load(std::memory_order_acquire) - r;
+        assert(static_cast<uint64_t>(len) <= avail);
+        if (static_cast<uint64_t>(len) > avail)
+            len = static_cast<uint32_t>(avail);  // release 防御：不越过写位置
         hdr->read_pos.store(r + len, std::memory_order_release);
     }
 

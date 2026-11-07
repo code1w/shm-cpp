@@ -21,6 +21,7 @@ Produces: `server`, `client`, `socket_server`, `socket_client`, `app_server`, `a
 ```bash
 ./build/test_codec
 ./build/test_ringbuf_wrap
+./build/test_ringbuf_boundary   # 满环/Reserve/空指针/moved-from/SPSC 压测
 ./build/test_eventloop
 ./build/test_shm_app    # 上层接口（ShmServer/ShmAsyncClient/ShmClient + comm 接口层）集成测试
 ```
@@ -107,3 +108,8 @@ Linux system headers plus pthread (`shm_server.hpp` 内部持有握手线程，I
 - memfd 创建即封印（F_SEAL_SHRINK|F_SEAL_GROW）— 防恶意对端握手后 ftruncate 缩小文件使接收方读映射越界（SIGBUS）；seal 不影响已建立的可写映射
 - ~ShmAsyncClient 必须 Close 连接 — 摘除可能挂起的验证定时器（回调捕获裸 this，不摘除即 UAF；test_shm_app Part 3 回归）
 - ShmServer::Start 幂等 — Listen 入口 started_ 守卫，二次 Start 直接成功（否则对 joinable 握手线程 move 赋值 = std::terminate；test_shm_app Part 4 回归）
+- 握手校验对端 memfd 尺寸 — 收到 memfd 后先 fstat 比对 `Ring::shm_size` 再 mmap；两端 Capacity 不一致或恶意 0 字节 fd 会直接拒绝，而不是在环尾访问时 SIGBUS（test_codec Test 16 回归）
+- FrameReader 回退缓冲按需增长 — `BufSize` 仅作初始 reserve，跨环尾的大帧（发送端允许到 Capacity/2）不再因 64KB 固定缓冲被判毒帧丢弃；`-2` 仅表示显式配置的 `MaxBufSize` 上限被超过
+- BatchWriter 契约收紧 — moved-from 对象拒绝写入；`CommitReserve` 在 release 下也校验"已 Reserve 且长度一致"；`CommitRead`/`RewindTo` 越界时 debug assert、release 钳制
+- SendFd/RecvFd 处理 SOCK_STREAM 短读短写 — SCM_RIGHTS 随首字节送达，剩余固定载荷循环补齐，避免后续握手消息流错位
+- RingBuf::Init 原地构造 RingHeader — 原子对象必须有生命周期起点（不能只对 mmap 原始内存 memset），并校验 64B 对齐

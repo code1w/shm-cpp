@@ -14,7 +14,12 @@
 #define SHM_IPC_RING_CHANNEL_HPP_
 
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <sys/time.h>
+
+#include <cerrno>
+#include <stdexcept>
+#include <string>
 
 #include "common.hpp"
 #include "ringbuf.hpp"
@@ -218,6 +223,8 @@ class RingChannel
      */
     int TryWrite(const void *data, uint32_t len)
     {
+        if (!write_region_)  // 默认构造 / moved-from：无写环
+            return -1;
         return Ring::TryWrite(write_region_.Get(), data, len);
     }
 
@@ -229,6 +236,8 @@ class RingChannel
      */
     uint32_t TryRead(void *data, uint32_t max_len)
     {
+        if (!read_region_)
+            return 0;
         return Ring::TryRead(read_region_.Get(), data, max_len);
     }
 
@@ -240,6 +249,8 @@ class RingChannel
      */
     int ReadExact(void *data, uint32_t len)
     {
+        if (!read_region_)
+            return -1;
         return Ring::ReadExact(read_region_.Get(), data, len);
     }
 
@@ -254,6 +265,8 @@ class RingChannel
     int Peek(const void **seg1, uint32_t *seg1_len,
              const void **seg2, uint32_t *seg2_len)
     {
+        if (!read_region_)
+            return -1;
         return Ring::Peek(read_region_.Get(), seg1, seg1_len, seg2, seg2_len);
     }
 
@@ -261,7 +274,12 @@ class RingChannel
      * @brief 提交读取，推进 read_pos
      * @param len 要推进的字节数
      */
-    void CommitRead(uint32_t len) { Ring::CommitRead(read_region_.Get(), len); }
+    void CommitRead(uint32_t len)
+    {
+        if (!read_region_)
+            return;
+        Ring::CommitRead(read_region_.Get(), len);
+    }
 
     // ---- 批量写入 ----
 
@@ -272,17 +290,25 @@ class RingChannel
     [[nodiscard]]
     ChannelBatchWriter StartBatch()
     {
+        if (!write_region_)
+            throw std::runtime_error("StartBatch on uninitialized RingChannel");
         return ChannelBatchWriter(
             typename Ring::BatchWriter(write_region_.Get()), this);
     }
 
     // ---- 状态查询 ----
 
-    /** @brief 返回读环中可读字节数 */
-    uint64_t Readable() const { return Ring::Available(read_region_.Get()); }
+    /** @brief 返回读环中可读字节数（通道未初始化时为 0） */
+    uint64_t Readable() const
+    {
+        return read_region_ ? Ring::Available(read_region_.Get()) : 0;
+    }
 
-    /** @brief 返回写环中剩余可写字节数 */
-    uint64_t WritableBytes() const { return Ring::FreeSpace(write_region_.Get()); }
+    /** @brief 返回写环中剩余可写字节数（通道未初始化时为 0） */
+    uint64_t WritableBytes() const
+    {
+        return write_region_ ? Ring::FreeSpace(write_region_.Get()) : 0;
+    }
 
     // ---- 通知 ----
 
@@ -301,6 +327,8 @@ class RingChannel
      */
     void NotifyPeer() const
     {
+        if (!notify_write_efd_)  // 未完成握手 / moved-from
+            return;
         uint64_t v = 1;
         ssize_t r;
         do {
@@ -347,7 +375,26 @@ class RingChannel
     /// @brief 接收对端 fd：读环 memfd（mmap 挂载）+ "唤醒对端"的 eventfd
     void RecvPeerFds(int socket_fd)
     {
-        read_memfd_  = RecvFdExpect(socket_fd, FdTag::kMemfd);
+        read_memfd_ = RecvFdExpect(socket_fd, FdTag::kMemfd);
+
+        // 必须先校验对端 memfd 尺寸再 mmap/访问：
+        // 两端 Capacity 不一致或对端发送 0 字节/被截断的 memfd 时，
+        // 按本地 Ring::shm_size 映射并在环尾读写会越过文件尾（SIGBUS）
+        // 或越过本地映射（SIGSEGV）。
+        struct stat st{};
+        if (::fstat(read_memfd_.Get(), &st) != 0)
+        {
+            throw std::runtime_error(std::string("fstat peer memfd: ") +
+                                     std::strerror(errno));
+        }
+        if (!S_ISREG(st.st_mode) ||
+            st.st_size != static_cast<off_t>(Ring::shm_size))
+        {
+            throw std::runtime_error(
+                "peer ring size mismatch: peer=" + std::to_string(st.st_size) +
+                ", local=" + std::to_string(Ring::shm_size));
+        }
+
         read_region_ = MmapRegion{read_memfd_.Get(), Ring::shm_size,
                                   PROT_READ | PROT_WRITE, MAP_SHARED};
         notify_write_efd_ = RecvFdExpect(socket_fd, FdTag::kEventfd);

@@ -106,8 +106,10 @@ namespace shm {
 inline char *EncodeFrame(void *buf, uint32_t buf_size,
                          uint32_t payload_len, uint32_t seq)
 {
-    uint32_t frame_size = kMsgHeaderSize + payload_len;
-    if (buf_size < frame_size)
+    // 减法形式校验，避免 kMsgHeaderSize + payload_len 在 uint32 溢出：
+    // payload_len 接近 UINT32_MAX 时 frame_size 会回绕成小数，绕过
+    // buf_size 检查后由调用方按原始 payload_len 写入 → 堆溢出。
+    if (buf_size < kMsgHeaderSize || payload_len > buf_size - kMsgHeaderSize)
         return nullptr;
 
     auto *p = static_cast<char *>(buf);
@@ -138,9 +140,12 @@ template <std::size_t Cap, typename WriteFn>
 int SendFrame(RingChannel<Cap> &ch, uint32_t payload_len, uint32_t seq,
               WriteFn &&write_payload)
 {
-    uint32_t frame_size = kMsgHeaderSize + payload_len;
-    if (ch.WritableBytes() < frame_size)
+    // 64 位计算避免 kMsgHeaderSize + payload_len 在 uint32 溢出
+    //（溢出后 frame_size 变成小数，会绕过空间检查）
+    uint64_t frame_size64 = static_cast<uint64_t>(kMsgHeaderSize) + payload_len;
+    if (ch.WritableBytes() < frame_size64)
         return -1;
+    uint32_t frame_size = static_cast<uint32_t>(frame_size64);  // 已 <= Capacity
 
     auto batch = ch.StartBatch();
 
@@ -193,9 +198,11 @@ int SendFrameBatch(typename RingChannel<Cap>::ChannelBatchWriter &batch,
                    uint32_t payload_len, uint32_t seq,
                    WriteFn &&write_payload)
 {
-    uint32_t frame_size = kMsgHeaderSize + payload_len;
-    if (batch.FreeBytes() < frame_size)
+    // 同 SendFrame：64 位计算避免帧长在 uint32 溢出
+    uint64_t frame_size64 = static_cast<uint64_t>(kMsgHeaderSize) + payload_len;
+    if (batch.FreeBytes() < frame_size64)
         return -1;
+    uint32_t frame_size = static_cast<uint32_t>(frame_size64);  // 已 <= Capacity
 
     uint64_t before       = batch.PendingBytes();
     int      before_count = batch.Count();

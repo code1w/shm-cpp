@@ -195,11 +195,13 @@ class PodCodec : public ICodec
     /**
      * @brief 从内部 FrameReader 读取一帧并反序列化为 T
      *
-     * tag/长度不匹配的毒帧与 -2 超大帧会被立即提交丢弃（推进 read_pos
-     * 释放环空间）并自动跳过，直到取到一条合法帧或环空。每次丢弃都
-     * 推进 read_pos，循环必然终止。
+     * tag/长度不匹配的毒帧会被立即提交丢弃（推进 read_pos 释放环空间）
+     * 并自动跳过，直到取到一条合法帧或环空。每次丢弃都推进 read_pos，
+     * 循环必然终止。
      *
-     * @return 0 成功；-1 无数据；-3 帧头长度非法（协议错误，连接应断开）
+     * @return 0 成功；-1 无数据；-2 帧跨环尾且超过回退缓冲上限
+     *         （FrameReader 显式配置的 MaxBufSize）；-3 帧头长度非法
+     *         （协议错误，连接应断开）
      */
     template <std::size_t Cap>
     int Recv(RingChannel<Cap> &ch, T *out)
@@ -209,13 +211,8 @@ class PodCodec : public ICodec
             const void *payload = nullptr;
             uint32_t payload_len = 0;
             int rc = reader_.TryRecv(ch, &payload, &payload_len);
-            if (rc == -1 || rc == -3)
+            if (rc == -1 || rc == -2 || rc == -3)
                 return rc;
-            if (rc == -2)
-            {
-                reader_.Commit(ch);  // 超大帧已完整到达，立即丢弃释放环空间
-                continue;
-            }
             const void *data = nullptr;
             uint32_t data_len = 0;
             if (!DecodePayload(payload, payload_len, &data, &data_len) ||

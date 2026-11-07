@@ -120,6 +120,16 @@ void TestEncodeDecode()
         std::abort();
     }
 
+    // 长度溢出防护：payload_len 接近 UINT32_MAX 时，
+    // kMsgHeaderSize + payload_len 不得回绕成小数绕过缓冲区检查
+    char tiny[64];
+    if (shm::EncodeFrame(tiny, sizeof(tiny), 0xFFFFFFFFu, 0) != nullptr ||
+        shm::Encode(data, 0xFFFFFFFFu, tiny, sizeof(tiny), 0) != 0)
+    {
+        std::fprintf(stderr, "FAIL: uint32 length overflow not rejected\n");
+        std::abort();
+    }
+
     std::printf("  PASS: Encode/Decode round-trip correct\n");
 }
 
@@ -687,7 +697,9 @@ void RunReceiverPoison(int socket_fd)
 {
     auto ch = SmallChannel::CreateRingChannel(socket_fd, shm::ChannelRole::kClient);
     int efd = ch.NotifyReadFd();
-    shm::FrameReader<128> reader;
+    // 显式把回退上限设为 256B（小于毒帧 512B），使 -2 路径可被测试。
+    // 默认 MaxBufSize=UINT32_MAX 时同样的帧应成功接收（见 Test 9b）。
+    shm::FrameReader<128, 256> reader;
 
     pollfd pfd{};
     pfd.fd     = efd;
@@ -757,6 +769,90 @@ void RunReceiverPoison(int socket_fd)
     }
 
     std::printf("  PASS: -2 poisoned frame auto-discarded, stream recovered\n");
+
+    ::write(socket_fd, &ack, 1);
+    ::close(socket_fd);
+}
+
+// =========================================================================
+// 测试 9b（回归）：跨环尾的大帧（> BufSize）按需扩容回退缓冲并成功接收
+// =========================================================================
+
+void RunReceiverWrappedLarge(int socket_fd)
+{
+    auto ch = SmallChannel::CreateRingChannel(socket_fd, shm::ChannelRole::kClient);
+    int efd = ch.NotifyReadFd();
+    // 默认 MaxBufSize=UINT32_MAX：512B 的跨尾帧必须成功，而不是 -2 丢弃
+    shm::FrameReader<128> reader;
+
+    pollfd pfd{};
+    pfd.fd     = efd;
+    pfd.events = POLLIN;
+
+    const void *payload = nullptr;
+    uint32_t payload_len = 0;
+
+    auto recv_wait = [&](const char *what) -> int
+    {
+        for (;;)
+        {
+            int rc = reader.TryRecv(ch, &payload, &payload_len);
+            if (rc != -1)
+                return rc;
+            if (::poll(&pfd, 1, 5000) <= 0)
+            {
+                std::fprintf(stderr, "FAIL: poll timeout (%s)\n", what);
+                std::abort();
+            }
+            Channel::DrainNotify(efd);
+        }
+    };
+
+    // 两条填充帧把写位置推到环尾附近
+    if (recv_wait("filler 1") != 0 || payload_len != kFillerLen)
+    {
+        std::fprintf(stderr, "FAIL: filler frame 1\n");
+        std::abort();
+    }
+    if (recv_wait("filler 2") != 0 || payload_len != kFillerLen)
+    {
+        std::fprintf(stderr, "FAIL: filler frame 2\n");
+        std::abort();
+    }
+    char ack = 1;
+    ::write(socket_fd, &ack, 1);
+
+    // 512B 毒帧实际是合法大帧：必须成功返回完整内容
+    if (recv_wait("wrapped large") != 0)
+    {
+        std::fprintf(stderr, "FAIL: wrapped large frame rejected\n");
+        std::abort();
+    }
+    if (payload_len != kPoisonLen)
+    {
+        std::fprintf(stderr, "FAIL: wrapped large len=%u\n", payload_len);
+        std::abort();
+    }
+    auto *p = static_cast<const char *>(payload);
+    for (uint32_t i = 0; i < kPoisonLen; ++i)
+    {
+        if (p[i] != 'P')
+        {
+            std::fprintf(stderr, "FAIL: wrapped large content[%u]\n", i);
+            std::abort();
+        }
+    }
+
+    // 后续帧仍按序到达
+    if (recv_wait("after") != 0 || payload_len != 5 ||
+        std::memcmp(payload, "after", 5) != 0)
+    {
+        std::fprintf(stderr, "FAIL: frame after wrapped large\n");
+        std::abort();
+    }
+
+    std::printf("  PASS: wrapped %u-byte frame received via dynamic fallback\n",
+                kPoisonLen);
 
     ::write(socket_fd, &ack, 1);
     ::close(socket_fd);
@@ -1348,6 +1444,59 @@ void RunReceiverThrow(int socket_fd)
 }
 
 // =========================================================================
+// 测试 16（回归）：握手必须拒绝 Capacity 不一致的对端，而不是 SIGBUS
+//
+// 两端分别用 RingChannel<4096> / RingChannel<8192>：若不校验对端 memfd
+// 尺寸，接收方会按本地 shm_size 映射并在访问环尾时越过文件尾崩溃。
+// =========================================================================
+
+void RunSenderCapMismatch(int socket_fd)
+{
+    bool rejected = false;
+    try
+    {
+        auto ch = shm::RingChannel<4096>::CreateRingChannel(
+            socket_fd, shm::ChannelRole::kServer);
+        (void)ch;
+    }
+    catch (const std::exception &e)
+    {
+        rejected = true;
+        std::printf("sender(mismatch): rejected as expected: %s\n", e.what());
+    }
+    if (!rejected)
+    {
+        std::fprintf(stderr, "FAIL: 4096 side accepted 8192 peer ring\n");
+        std::abort();
+    }
+    ::close(socket_fd);
+    std::_Exit(0);
+}
+
+void RunReceiverCapMismatch(int socket_fd)
+{
+    bool rejected = false;
+    try
+    {
+        auto ch = shm::RingChannel<8192>::CreateRingChannel(
+            socket_fd, shm::ChannelRole::kClient);
+        (void)ch;
+    }
+    catch (const std::exception &e)
+    {
+        rejected = true;
+        std::printf("receiver(mismatch): rejected as expected: %s\n", e.what());
+    }
+    if (!rejected)
+    {
+        std::fprintf(stderr, "FAIL: 8192 side accepted 4096 peer ring\n");
+        std::abort();
+    }
+    std::printf("  PASS: capacity mismatch rejected during handshake\n");
+    ::close(socket_fd);
+}
+
+// =========================================================================
 // 辅助：fork + 运行测试对
 // =========================================================================
 
@@ -1429,8 +1578,12 @@ int main()
                 RunSenderLargeFrame, RunReceiverLargeFrame);
     std::printf("\n");
 
-    RunForkTest("Test 9: -2 poisoned frame auto-discard",
+    RunForkTest("Test 9: explicit MaxBufSize -> -2 auto-discard",
                 RunSenderPoison, RunReceiverPoison);
+    std::printf("\n");
+
+    RunForkTest("Test 9b: wrapped large frame via dynamic fallback",
+                RunSenderPoison, RunReceiverWrappedLarge);
     std::printf("\n");
 
     TestBatchRewindCount();
@@ -1446,6 +1599,10 @@ int main()
 
     RunForkTest("Test 13: exhaustive two-chunk split reassembly",
                 RunSenderSplit, RunReceiverSplit);
+    std::printf("\n");
+
+    RunForkTest("Test 16: handshake rejects capacity mismatch",
+                RunSenderCapMismatch, RunReceiverCapMismatch);
     std::printf("\n");
 
     RunForkTest("Test 14: random-chunk stream reassembly",

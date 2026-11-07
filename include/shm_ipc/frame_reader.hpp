@@ -8,6 +8,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include <vector>
 
 #include "codec.hpp"
 #include "ring_channel.hpp"
@@ -23,12 +24,17 @@ namespace shm {
  * 使用模式：TryRecv 成功后，payload 指针在下次 TryRecv 前有效
  * （下次 TryRecv 会推进 read_pos，释放上一帧占用的环空间）。
  *
- * @tparam BufSize 回绕时的回退缓冲区大小，默认 64KB
+ * @tparam BufSize    回绕回退缓冲区的初始容量，默认 64KB
+ * @tparam MaxBufSize 回退缓冲区上限；帧跨环尾且超过该上限时返回 -2。
+ *                    默认 UINT32_MAX（即不设实际上限，只受环容量约束），
+ *                    避免合法的大帧（发送端允许到 Capacity/2）被静默丢弃。
  */
-template <uint32_t BufSize = 64 * 1024>
+template <uint32_t BufSize = 64 * 1024, uint32_t MaxBufSize = UINT32_MAX>
 class FrameReader
 {
  public:
+    FrameReader() { buf_.reserve(BufSize); }
+
     virtual ~FrameReader() = default;
 
     /**
@@ -41,12 +47,15 @@ class FrameReader
      * @param ch               双向环形通道
      * @param[out] payload     payload 指针（指向 ring 内部或内部缓冲区）
      * @param[out] payload_len payload 字节数
-     * @return 0 成功，-1 数据不足，-2 帧跨环尾且超过回退缓冲区 BufSize，
-     *         -3 帧头长度非法（协议错误，连接应视为损坏并断开）
+     * @return 0 成功，-1 数据不足，-2 帧跨环尾且超过回退缓冲区上限
+     *         MaxBufSize（默认不设上限），-3 帧头长度非法（协议错误，
+     *         连接应视为损坏并断开）
      *
      * @note -2 时帧被标记为待丢弃：下次 TryRecv/Commit 会自动跳过该帧，
-     *       字节流可自行恢复（调用方也可立即调用 Commit 丢弃）。
-     *       零拷贝快速路径不受 BufSize 限制。
+     *       字节流可自行恢复（调用方也可立即调用 Commit 丢弃）。调用方
+     *       应把 -2 视为错误而非静默跳过——默认配置下只有显式设置了
+     *       MaxBufSize 才会出现。
+     *       零拷贝快速路径不受 BufSize/MaxBufSize 限制。
      * @note -3 时帧无法被跳过（其声称的长度永远不可能完整到达），
      *       read_pos 保持不动，调用方应当断开连接而不是继续重试。
      */
@@ -120,18 +129,22 @@ class FrameReader
         }
         else
         {
-            // 慢速路径：body 跨段，需要拷贝到 buf_
-            if (body_len > BufSize)
+            // 慢速路径：body 跨段，需要拷贝到回退缓冲区
+            if (body_len > MaxBufSize)
             {
-                // 回退缓冲区放不下：标记整帧为待丢弃，下次 TryRecv/Commit
-                // 自动跳过，避免毒帧永久卡死字节流
+                // 超过显式配置的回退上限：标记整帧为待丢弃，下次
+                // TryRecv/Commit 自动跳过，避免毒帧永久卡死字节流
                 pending_commit_ = frame_size;
                 return -2;
             }
+            // 按需增长（BufSize 仅是初始 reserve 大小的提示）。
+            // 默认上限 UINT32_MAX 下，合法的跨环尾大帧不再被丢弃。
+            if (buf_.size() < body_len)
+                buf_.resize(body_len);
             CopyFromSegments(s1, seg1_len,
                              static_cast<const char *>(seg2), seg2_len,
-                             body_offset, buf_, body_len);
-            *payload     = buf_;
+                             body_offset, buf_.data(), body_len);
+            *payload     = buf_.data();
             *payload_len = body_len;
         }
 
@@ -162,7 +175,7 @@ class FrameReader
  protected:
     MsgHeader hdr_{};
     uint32_t pending_commit_ = 0;  ///< 上一帧的总长度，下次 TryRecv 时提交
-    char buf_[BufSize]{};          ///< 回绕时的回退缓冲区
+    std::vector<char> buf_;        ///< 回绕时的回退缓冲区（按需增长）
 
  private:
     /**

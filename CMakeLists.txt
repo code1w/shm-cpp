@@ -7,6 +7,14 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 add_compile_options(-Wall -Wextra -pedantic)
 
+# 可选 sanitizer 构建：-DSHM_IPC_SANITIZE=address,undefined 或 thread
+set(SHM_IPC_SANITIZE "" CACHE STRING
+    "Enable sanitizers (e.g. address,undefined or thread)")
+if(SHM_IPC_SANITIZE)
+    add_compile_options(-fsanitize=${SHM_IPC_SANITIZE} -fno-omit-frame-pointer)
+    add_link_options(-fsanitize=${SHM_IPC_SANITIZE})
+endif()
+
 add_library(shm_ipc INTERFACE)
 target_include_directories(shm_ipc INTERFACE include/)
 # shm_server.hpp 内部持有握手线程（std::thread/mutex），接口依赖须传递给使用方

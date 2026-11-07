@@ -205,26 +205,42 @@ inline void SendFd(int socket, int fd, FdTag tag)
     std::array<char, 256> dummy{};
     auto tag_val = static_cast<uint32_t>(tag);
     std::memcpy(dummy.data(), &tag_val, sizeof(tag_val));
-    iovec io{dummy.data(), dummy.size()};
 
-    alignas(cmsghdr) std::array<char, CMSG_SPACE(sizeof(int))> ctrl{};
-    msghdr msg{};
-    msg.msg_iov        = &io;
-    msg.msg_iovlen     = 1;
-    msg.msg_control    = ctrl.data();
-    msg.msg_controllen = ctrl.size();
+    // SOCK_STREAM 允许短写：SCM_RIGHTS 随首字节一起送达，剩余 dummy
+    // 字节用不带控制消息的 send 补齐，保证接收端流对齐。
+    std::size_t sent = 0;
+    while (sent < dummy.size())
+    {
+        iovec io{dummy.data() + sent, dummy.size() - sent};
 
-    auto *cmsg       = CMSG_FIRSTHDR(&msg);
-    cmsg->cmsg_level = SOL_SOCKET;
-    cmsg->cmsg_type  = SCM_RIGHTS;
-    cmsg->cmsg_len   = CMSG_LEN(sizeof(int));
-    std::memcpy(CMSG_DATA(cmsg), &fd, sizeof(int));
+        alignas(cmsghdr) std::array<char, CMSG_SPACE(sizeof(int))> ctrl{};
+        msghdr msg{};
+        msg.msg_iov    = &io;
+        msg.msg_iovlen = 1;
 
-    ssize_t sent = ::sendmsg(socket, &msg, 0);
-    if (sent < 0)
-        throw std::runtime_error(std::string("sendmsg: ") + std::strerror(errno));
-    if (static_cast<std::size_t>(sent) < io.iov_len)
-        throw std::runtime_error("sendmsg: partial send");
+        if (sent == 0)  // fd 只在第一条消息上携带
+        {
+            msg.msg_control    = ctrl.data();
+            msg.msg_controllen = ctrl.size();
+            auto *cmsg         = CMSG_FIRSTHDR(&msg);
+            cmsg->cmsg_level   = SOL_SOCKET;
+            cmsg->cmsg_type    = SCM_RIGHTS;
+            cmsg->cmsg_len     = CMSG_LEN(sizeof(int));
+            std::memcpy(CMSG_DATA(cmsg), &fd, sizeof(int));
+        }
+
+        ssize_t n;
+        do {
+            n = ::sendmsg(socket, &msg, MSG_NOSIGNAL);
+        } while (n < 0 && errno == EINTR);
+
+        if (n < 0)
+            throw std::runtime_error(std::string("sendmsg: ") +
+                                     std::strerror(errno));
+        if (n == 0)
+            throw std::runtime_error("sendmsg: peer closed during fd transfer");
+        sent += static_cast<std::size_t>(n);
+    }
 }
 
 /**
@@ -236,52 +252,76 @@ inline void SendFd(int socket, int fd, FdTag tag)
 inline TaggedFd RecvFd(int socket)
 {
     std::array<char, 256> data{};
-    iovec io{data.data(), data.size()};
-
     alignas(cmsghdr) std::array<char, CMSG_SPACE(sizeof(int))> ctrl{};
-    msghdr msg{};
-    msg.msg_iov        = &io;
-    msg.msg_iovlen     = 1;
-    msg.msg_control    = ctrl.data();
-    msg.msg_controllen = ctrl.size();
 
-    ssize_t received = ::recvmsg(socket, &msg, 0);
-    if (received < 0)
-        throw std::runtime_error(std::string("recvmsg: ") + std::strerror(errno));
-    if (received == 0)
-        throw std::runtime_error("recvmsg: connection closed during fd transfer");
+    int fd           = -1;
+    bool have_cmsg   = false;
+    std::size_t got  = 0;
 
-    // 消息至少应包含 4 字节类型标签，否则说明对端行为异常，
-    // 继续解析会读到未初始化的栈数据
-    if (static_cast<std::size_t>(received) < sizeof(uint32_t))
-        throw std::runtime_error("recvmsg: message too short for fd tag");
-
-    // 控制消息被截断（对端一次发送了多个 fd 或缓冲区不足）时静默继续
-    // 会导致 fd 泄漏或标签错位，必须显式报错
-    if (msg.msg_flags & MSG_CTRUNC)
-        throw std::runtime_error("recvmsg: control message truncated");
-
-    auto *cmsg = CMSG_FIRSTHDR(&msg);
-    if (!cmsg || cmsg->cmsg_level != SOL_SOCKET || cmsg->cmsg_type != SCM_RIGHTS)
-        throw std::runtime_error("RecvFd: no SCM_RIGHTS in control message");
-    if (cmsg->cmsg_len < CMSG_LEN(sizeof(int)))
-        throw std::runtime_error("RecvFd: control message too short for fd");
-    // 对端一条消息携带多个 fd 时只取第一个会造成其余 fd 泄漏，
-    // 属协议违规：关闭全部并报错
-    if (cmsg->cmsg_len > CMSG_LEN(sizeof(int)))
+    // SOCK_STREAM 可能短读。必须收满整条固定长度载荷，否则残留的
+    // dummy 字节会被下一次 RecvFd 当成数据部分读取，导致后续消息的
+    // SCM_RIGHTS 丢失/标签错位。SCM_RIGHTS 随首字节到达，只解析一次。
+    while (got < data.size())
     {
-        int nfds = static_cast<int>((cmsg->cmsg_len - CMSG_LEN(0)) / sizeof(int));
-        for (int i = 0; i < nfds; ++i)
+        iovec io{data.data() + got, data.size() - got};
+
+        msghdr msg{};
+        msg.msg_iov    = &io;
+        msg.msg_iovlen = 1;
+        if (!have_cmsg)
         {
-            int extra = -1;
-            std::memcpy(&extra, CMSG_DATA(cmsg) + i * sizeof(int), sizeof(int));
-            if (extra >= 0)
-                ::close(extra);
+            msg.msg_control    = ctrl.data();
+            msg.msg_controllen = ctrl.size();
         }
-        throw std::runtime_error("RecvFd: multiple fds in one message");
+
+        ssize_t n;
+        do {
+            n = ::recvmsg(socket, &msg, MSG_WAITALL);
+        } while (n < 0 && errno == EINTR);
+
+        if (n < 0)
+            throw std::runtime_error(std::string("recvmsg: ") +
+                                     std::strerror(errno));
+        if (n == 0)
+            throw std::runtime_error(
+                "recvmsg: connection closed during fd transfer");
+
+        if (!have_cmsg)
+        {
+            // 控制消息被截断（对端一次发送了多个 fd 或缓冲区不足）时
+            // 静默继续会导致 fd 泄漏或标签错位，必须显式报错
+            if (msg.msg_flags & MSG_CTRUNC)
+                throw std::runtime_error("recvmsg: control message truncated");
+
+            auto *cmsg = CMSG_FIRSTHDR(&msg);
+            if (!cmsg || cmsg->cmsg_level != SOL_SOCKET ||
+                cmsg->cmsg_type != SCM_RIGHTS)
+                throw std::runtime_error(
+                    "RecvFd: no SCM_RIGHTS in control message");
+            if (cmsg->cmsg_len < CMSG_LEN(sizeof(int)))
+                throw std::runtime_error(
+                    "RecvFd: control message too short for fd");
+            // 对端一条消息携带多个 fd 时只取第一个会造成其余 fd 泄漏，
+            // 属协议违规：关闭全部并报错
+            if (cmsg->cmsg_len > CMSG_LEN(sizeof(int)))
+            {
+                int nfds = static_cast<int>(
+                    (cmsg->cmsg_len - CMSG_LEN(0)) / sizeof(int));
+                for (int i = 0; i < nfds; ++i)
+                {
+                    int extra = -1;
+                    std::memcpy(&extra, CMSG_DATA(cmsg) + i * sizeof(int),
+                                sizeof(int));
+                    if (extra >= 0)
+                        ::close(extra);
+                }
+                throw std::runtime_error("RecvFd: multiple fds in one message");
+            }
+            std::memcpy(&fd, CMSG_DATA(cmsg), sizeof(int));
+            have_cmsg = true;
+        }
+        got += static_cast<std::size_t>(n);
     }
-    int fd = -1;
-    std::memcpy(&fd, CMSG_DATA(cmsg), sizeof(int));
 
     uint32_t tag_val = 0;
     std::memcpy(&tag_val, data.data(), sizeof(tag_val));

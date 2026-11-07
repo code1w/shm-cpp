@@ -14,6 +14,10 @@
  * 6. BatchWriter 杂项：空 Flush、重复 Flush、空指针拒绝、移动语义
  * 7. 死亡测试：CommitRead 越界提交触发 assert（SIGABRT）
  * 8. 死亡测试：RewindTo 越过 PendingBytes 触发 assert（SIGABRT）
+ * 9. 读路径空指针防护：TryRead/ReadExact/Peek 不得崩溃、不得消费
+ * 10. moved-from BatchWriter 必须惰性：拒绝写入，且不破坏活 writer 数据
+ * 11. CommitReserve 校验：未 Reserve 或长度不符时不得推进写位置
+ * 12. 双线程 SPSC 压测：并发生产者/消费者，校验消息顺序与内容
  *
  * 无测试框架，abort() 失败，打印 "=== TEST PASSED ===" 成功。
  */
@@ -25,6 +29,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <atomic>
+#include <thread>
 #include <vector>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -455,6 +461,203 @@ void TestRewindOverrunAssert()
     std::printf("  PASS: overrun RewindTo aborts in debug build\n");
 }
 
+// =========================================================================
+// 测试 9：读路径空指针防护 —— 不得崩溃、不得消费数据
+// =========================================================================
+
+void TestNullReadBuffer()
+{
+    std::printf("--- Test 9: null read buffer guards ---\n");
+
+    void *shm = AllocShm();
+    char buf[50];
+    FillPattern(buf, 50, 0x42);
+    CHECK(SmallRing::TryWrite(shm, buf, 50) == 0, "write 50");
+
+    // 有数据时传入空指针：TryRead 返回 0 且不消费
+    CHECK(SmallRing::TryRead(shm, nullptr, 50) == 0, "TryRead null");
+    CHECK(SmallRing::Available(shm) == 50, "TryRead null must not consume");
+
+    // ReadExact 非零长度 + 空指针：返回 -1 且不消费
+    CHECK(SmallRing::ReadExact(shm, nullptr, 50) == -1, "ReadExact null");
+    CHECK(SmallRing::Available(shm) == 50, "ReadExact null must not consume");
+
+    // Peek 输出参数为空：拒绝而不是解引用
+    const void *seg1 = nullptr;
+    const void *seg2 = nullptr;
+    uint32_t l1 = 0, l2 = 0;
+    CHECK(SmallRing::Peek(shm, nullptr, &l1, &seg2, &l2) == -1,
+          "Peek null seg1 out");
+    CHECK(SmallRing::Peek(shm, &seg1, &l1, &seg2, nullptr) == -1,
+          "Peek null seg2_len out");
+    CHECK(SmallRing::Available(shm) == 50, "Peek null out must not consume");
+
+    // 数据仍完整可读
+    char out[50];
+    CHECK(SmallRing::ReadExact(shm, out, 50) == 0, "read back");
+    VerifyPattern(out, 50, 0x42, "null guards preserve data");
+
+    std::free(shm);
+    ++g_pass_count;
+    std::printf("  PASS: null buffers rejected without crash/consume\n");
+}
+
+// =========================================================================
+// 测试 10：moved-from BatchWriter 必须惰性，不得覆写活 writer 数据
+// =========================================================================
+
+void TestMovedFromWriterInert()
+{
+    std::printf("--- Test 10: moved-from BatchWriter is inert ---\n");
+
+    void *shm = AllocShm();
+    {
+        SmallRing::BatchWriter live(shm);
+        CHECK(live.TryWrite("12345", 5) == 0, "live write");
+
+        SmallRing::BatchWriter moved(std::move(live));
+
+        // 旧实现：stale writer 仍会写入同一物理位置并返回成功，
+        // 随后活 writer Flush 会发布被覆盖后的错误内容
+        CHECK(live.TryWrite("XXXXX", 5) == -1, "moved-from TryWrite rejected");
+        CHECK(live.Reserve(4) == nullptr, "moved-from Reserve rejected");
+        CHECK(live.Flush() == 0, "moved-from Flush no-op");
+        CHECK(live.PendingBytes() == 0, "moved-from pending is 0");
+
+        CHECK(moved.Flush() == 1, "live writer flush");
+    }
+
+    char out[5];
+    CHECK(SmallRing::ReadExact(shm, out, 5) == 0, "read back");
+    CHECK(std::memcmp(out, "12345", 5) == 0, "stale writer did not corrupt");
+
+    std::free(shm);
+    ++g_pass_count;
+    std::printf("  PASS: moved-from writer cannot write\n");
+}
+
+// =========================================================================
+// 测试 11：CommitReserve 校验 —— 非法提交不得推进写位置
+// =========================================================================
+
+void TestCommitReserveValidation()
+{
+    std::printf("--- Test 11: CommitReserve validation ---\n");
+
+    void *shm = AllocShm();
+    {
+        SmallRing::BatchWriter b(shm);
+
+        // 未 Reserve 直接提交：必须被忽略
+        b.CommitReserve(10);
+        CHECK(b.PendingBytes() == 0, "commit without reserve must not publish");
+        CHECK(b.Count() == 0, "commit without reserve must not count");
+
+        // Reserve 后提交长度不符：必须被忽略
+        char *p = b.Reserve(20);
+        CHECK(p != nullptr, "Reserve(20)");
+        b.CommitReserve(19);
+        CHECK(b.PendingBytes() == 0, "mismatched len must not publish");
+        CHECK(b.Count() == 0, "mismatched len must not count");
+
+        // 正确提交
+        b.CommitReserve(20);
+        CHECK(b.PendingBytes() == 20, "valid commit publishes");
+        CHECK(b.Count() == 1, "valid commit counts");
+        CHECK(b.Flush() == 1, "flush");
+    }
+
+    CHECK(SmallRing::Available(shm) == 20, "only valid commit visible");
+
+    std::free(shm);
+    ++g_pass_count;
+    std::printf("  PASS: illegal commits rejected in all build modes\n");
+}
+
+// =========================================================================
+// 测试 12：双线程 SPSC 压测 —— 生产者/消费者并发，校验顺序与内容
+// =========================================================================
+
+void TestSpscStress()
+{
+    std::printf("--- Test 12: two-thread SPSC stress ---\n");
+
+    void *shm = AllocShm();
+    constexpr int kMsgs = 20000;
+
+    std::atomic<bool> producer_done{false};
+    std::atomic<bool> failed{false};
+
+    std::thread producer([&] {
+        uint32_t seed = 1;
+        for (int i = 0; i < kMsgs && !failed.load(); ++i)
+        {
+            // 每帧一条完整消息：[len u32][payload]，单次 TryWrite 写入
+            uint32_t len = 1 + (seed % 1000);
+            std::vector<char> msg(4 + len);
+            std::memcpy(msg.data(), &len, 4);
+            FillPattern(msg.data() + 4, len, static_cast<uint8_t>(seed));
+
+            while (SmallRing::TryWrite(shm, msg.data(), 4 + len) != 0)
+            {
+                if (failed.load())
+                    return;
+                std::this_thread::yield();
+            }
+            seed = seed * 1103515245u + 12345u;
+        }
+        producer_done.store(true, std::memory_order_release);
+    });
+
+    std::thread consumer([&] {
+        uint32_t seed = 1;
+        for (int i = 0; i < kMsgs; ++i)
+        {
+            uint32_t len = 0;
+            while (SmallRing::ReadExact(shm, &len, 4) != 0)
+            {
+                if (producer_done.load(std::memory_order_acquire) &&
+                    SmallRing::Available(shm) == 0)
+                {
+                    failed.store(true, std::memory_order_release);
+                    return;
+                }
+                std::this_thread::yield();
+            }
+            if (len == 0 || len > 1500)
+            {
+                failed.store(true, std::memory_order_release);
+                return;
+            }
+
+            std::vector<char> got(len);
+            while (SmallRing::ReadExact(shm, got.data(), len) != 0)
+                std::this_thread::yield();
+
+            std::vector<char> expected(len);
+            FillPattern(expected.data(), len, static_cast<uint8_t>(seed));
+            if (std::memcmp(got.data(), expected.data(), len) != 0)
+            {
+                failed.store(true, std::memory_order_release);
+                return;
+            }
+            seed = seed * 1103515245u + 12345u;
+        }
+    });
+
+    producer.join();
+    consumer.join();
+
+    CHECK(!failed.load(), "SPSC content/order mismatch");
+    CHECK(producer_done.load(), "producer did not finish");
+    CHECK(SmallRing::Available(shm) == 0, "ring not empty after drain");
+
+    std::free(shm);
+    ++g_pass_count;
+    std::printf("  PASS: %d messages across concurrent producer/consumer\n",
+                kMsgs);
+}
+
 }  // anonymous namespace
 
 int main()
@@ -470,6 +673,10 @@ int main()
     TestBatchWriterMisc();
     TestCommitReadOverrunAssert();
     TestRewindOverrunAssert();
+    TestNullReadBuffer();
+    TestMovedFromWriterInert();
+    TestCommitReserveValidation();
+    TestSpscStress();
 
     std::printf("\n=== TEST PASSED === (%d sub-tests)\n", g_pass_count);
     return 0;

@@ -109,8 +109,20 @@ class EventLoop
         owned_timerfds_.emplace_back(tfd);
         AddFd(tfd, [this, tfd, cb = std::move(cb)](int fd, short revents) {
             DrainTimerfd(fd);
-            RemoveTimer(tfd);  // 一次性：先摘除自身再回调
-            cb(fd, revents);
+            // 先打墓碑（本轮不再补触发），但延迟 close：回调拿到的 fd
+            // 仍有效（旧实现先 RemoveTimer 关闭 fd 再回调，回调内
+            // fstat/read 该 fd 会 EBADF）
+            RemoveFd(tfd);
+            try
+            {
+                cb(fd, revents);
+            }
+            catch (...)
+            {
+                CloseOwnedTimer(tfd);
+                throw;
+            }
+            CloseOwnedTimer(tfd);
         });
         return tfd;
     }
@@ -126,10 +138,7 @@ class EventLoop
     {
         // 先打墓碑（立即停止分发，含本轮尚未分发的旧 revents），再关闭 fd
         RemoveFd(tfd);
-        auto it = std::find_if(owned_timerfds_.begin(), owned_timerfds_.end(),
-                               [tfd](const UniqueFd &u) { return u.Get() == tfd; });
-        if (it != owned_timerfds_.end())
-            owned_timerfds_.erase(it);
+        CloseOwnedTimer(tfd);
     }
 
     /**
@@ -252,6 +261,15 @@ class EventLoop
         bool dead;     ///< 墓碑标记：不再参与 poll 与分发，待回收
         Callback cb;   ///< 事件回调
     };
+
+    /** @brief 关闭并移除 EventLoop 持有的 timerfd（不处理 entries_） */
+    void CloseOwnedTimer(int tfd)
+    {
+        auto it = std::find_if(owned_timerfds_.begin(), owned_timerfds_.end(),
+                               [tfd](const UniqueFd &u) { return u.Get() == tfd; });
+        if (it != owned_timerfds_.end())
+            owned_timerfds_.erase(it);
+    }
 
     /** @brief 回收所有墓碑条目（仅在非分发阶段调用） */
     void CompactDead()
