@@ -283,16 +283,15 @@ void OnAccept(int lfd, shm::EventLoop &loop,
     auto cs      = std::make_unique<ClientState>();
     cs->id       = cid;
 
-    // 握手失败（对端超时、乱发数据等）只关闭该连接，
-    // 不能让异常穿出回调杀死整个 server 进程
-    try
-    {
-        cs->channel = Channel::CreateRingChannel(cfd.Get(), shm::ChannelRole::kServer);
-    }
-    catch (const std::exception &e)
+    // 握手失败（对端超时、乱发数据、尺寸不符等）只关闭该连接，
+    // 不能让错误影响整个 server 进程
+    int sys_errno = 0;
+    shm::ErrorCode ec = Channel::CreateRingChannel(
+        cfd.Get(), shm::ChannelRole::kServer, &cs->channel, &sys_errno);
+    if (ec != shm::ErrorCode::kOk)
     {
         std::fprintf(stderr, "server: client #%d handshake failed: %s\n",
-                     cid, e.what());
+                     cid, shm::ErrorCodeMessage(ec, sys_errno).c_str());
         return;  // cfd 由 RAII 自动关闭
     }
     std::printf("server: client #%d ring channel established\n", cid);
@@ -308,16 +307,23 @@ void OnAccept(int lfd, shm::EventLoop &loop,
     cs->socket_fd  = std::move(cfd);
     cs->notify_efd = cs->channel.NotifyReadFd();
 
-    // 注册失败（如 fd 耗尽导致 timerfd_create 抛异常）只关闭该连接，
-    // 不能让异常穿出回调杀死整个 server 进程
+    // 注册失败（如 fd 耗尽导致 timerfd_create 失败）只关闭该连接，
+    // 不能让错误影响整个 server 进程
+    int tfd = 0;
+    ec = loop.AddTimer(kHeartbeatMs,
+        std::bind(OnHeartbeatTimer, std::placeholders::_1,
+                  std::ref(loop), std::ref(clients), client_fd),
+        &tfd, &sys_errno);
+    if (ec != shm::ErrorCode::kOk)
+    {
+        std::fprintf(stderr, "server: client #%d AddTimer failed: %s\n",
+                     cid, shm::ErrorCodeMessage(ec, sys_errno).c_str());
+        return;  // cs 析构自动关闭 socket 与通道
+    }
+    cs->timer_fd = tfd;
+
     try
     {
-        // 注册心跳定时器
-        int tfd = loop.AddTimer(kHeartbeatMs,
-            std::bind(OnHeartbeatTimer, std::placeholders::_1,
-                      std::ref(loop), std::ref(clients), client_fd));
-        cs->timer_fd = tfd;
-
         // 注册 eventfd 实时读
         loop.AddFd(cs->notify_efd,
             std::bind(OnClientNotify, std::placeholders::_1,
@@ -328,12 +334,10 @@ void OnAccept(int lfd, shm::EventLoop &loop,
             std::bind(OnClientSocket, std::placeholders::_1, std::placeholders::_2,
                       std::ref(loop), std::ref(clients), client_fd));
     }
-    catch (const std::exception &e)
+    catch (const std::bad_alloc &)
     {
-        std::fprintf(stderr, "server: client #%d setup failed: %s\n",
-                     cid, e.what());
-        if (cs->timer_fd >= 0)
-            loop.RemoveTimer(cs->timer_fd);
+        std::fprintf(stderr, "server: client #%d setup out of memory\n", cid);
+        loop.RemoveTimer(cs->timer_fd);
         loop.RemoveFd(cs->notify_efd);
         loop.RemoveFd(client_fd);
         return;  // cs 析构自动关闭 socket 与通道
@@ -348,7 +352,16 @@ void OnAccept(int lfd, shm::EventLoop &loop,
 
 void RunBench()
 {
-    auto listen_fd = shm::ListenUnixSocket(shm::kDefaultSocketPath);
+    shm::UniqueFd listen_fd;
+    int sys_errno = 0;
+    shm::ErrorCode ec = shm::ListenUnixSocket(shm::kDefaultSocketPath, &listen_fd,
+                                              16, &sys_errno);
+    if (ec != shm::ErrorCode::kOk)
+    {
+        std::fprintf(stderr, "server(bench): listen failed: %s\n",
+                     shm::ErrorCodeMessage(ec, sys_errno).c_str());
+        return;
+    }
     std::printf("server(bench): waiting for client on %s ...\n",
                 shm::kDefaultSocketPath);
 
@@ -359,7 +372,15 @@ void RunBench()
         return;
     }
 
-    auto ch = Channel::CreateRingChannel(cfd.Get(), shm::ChannelRole::kServer);
+    Channel ch;
+    ec = Channel::CreateRingChannel(cfd.Get(), shm::ChannelRole::kServer, &ch,
+                                    &sys_errno);
+    if (ec != shm::ErrorCode::kOk)
+    {
+        std::fprintf(stderr, "server(bench): handshake failed: %s\n",
+                     shm::ErrorCodeMessage(ec, sys_errno).c_str());
+        return;
+    }
     std::printf("server(bench): client connected, ring established\n\n");
 
     shm::FrameReader<3 * 1024 * 1024> reader;
@@ -422,7 +443,6 @@ int main(int argc, char *argv[])
     // 忽略之，让 write 返回 EPIPE 由调用方处理
     ::signal(SIGPIPE, SIG_IGN);
 
-    try
     {
         for (int i = 1; i < argc; ++i)
         {
@@ -452,28 +472,46 @@ int main(int argc, char *argv[])
         Clients clients;
         int next_client_id = 1;
 
-        auto listen_fd = shm::ListenUnixSocket(shm::kDefaultSocketPath);
+        shm::UniqueFd listen_fd;
+        int sys_errno = 0;
+        shm::ErrorCode ec = shm::ListenUnixSocket(shm::kDefaultSocketPath,
+                                                  &listen_fd, 16, &sys_errno);
+        if (ec != shm::ErrorCode::kOk)
+        {
+            std::fprintf(stderr, "server: listen failed: %s\n",
+                         shm::ErrorCodeMessage(ec, sys_errno).c_str());
+            return EXIT_FAILURE;
+        }
         std::printf("server: listening on %s (max %d clients, ring=%zuMB, realtime "
                     "eventfd read, codec=%s)\n",
                     shm::kDefaultSocketPath, kMaxClients,
                     Channel::Ring::capacity / (1024 * 1024),
                     gUseProto ? "proto" : "pod");
 
-        loop.AddFd(listen_fd.Get(),
-            std::bind(OnAccept, std::placeholders::_1,
-                      std::ref(loop), std::ref(clients), std::ref(next_client_id)));
+        try
+        {
+            loop.AddFd(listen_fd.Get(),
+                std::bind(OnAccept, std::placeholders::_1,
+                          std::ref(loop), std::ref(clients), std::ref(next_client_id)));
+        }
+        catch (const std::bad_alloc &)
+        {
+            std::fprintf(stderr, "server: out of memory registering listen fd\n");
+            return EXIT_FAILURE;
+        }
 
-        loop.Run();
+        ec = loop.Run();
+        if (ec != shm::ErrorCode::kOk)
+        {
+            std::fprintf(stderr, "server: event loop failed: %s\n",
+                         shm::ErrorCodeName(ec));
+            return EXIT_FAILURE;
+        }
 
         std::printf("\nserver: shutting down (%zu clients remaining)\n",
                     clients.size());
         clients.clear();
-        ::unlink(shm::kDefaultSocketPath);
-    }
-    catch (const std::exception &e)
-    {
-        std::fprintf(stderr, "server: error: %s\n", e.what());
-        return EXIT_FAILURE;
+        (void)::unlink(shm::kDefaultSocketPath);
     }
     return 0;
 }

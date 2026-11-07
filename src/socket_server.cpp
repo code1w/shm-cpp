@@ -40,36 +40,31 @@ void ReadAll(int fd, void *buf, std::size_t len)
     }
 }
 
-shm::UniqueFd CreateListenSocket(const char *path)
+bool CreateListenSocket(const char *path, shm::UniqueFd *out)
 {
-    shm::UniqueFd sfd{::socket(AF_UNIX, SOCK_STREAM, 0)};
-    if (!sfd)
-        throw std::runtime_error(std::string("socket: ") + std::strerror(errno));
-
-    ::unlink(path);
-
-    sockaddr_un addr{};
-    addr.sun_family = AF_UNIX;
-    std::strncpy(addr.sun_path, path, sizeof(addr.sun_path) - 1);
-
-    if (::bind(sfd.Get(), reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) < 0)
-        throw std::runtime_error(std::string("bind: ") + std::strerror(errno));
-    if (::listen(sfd.Get(), 1) < 0)
-        throw std::runtime_error(std::string("listen: ") + std::strerror(errno));
-
-    return sfd;
+    int sys_errno = 0;
+    shm::ErrorCode ec = shm::ListenUnixSocket(path, out, 1, &sys_errno);
+    if (ec != shm::ErrorCode::kOk)
+    {
+        std::fprintf(stderr, "socket_server: listen failed: %s\n",
+                     shm::ErrorCodeMessage(ec, sys_errno).c_str());
+        return false;
+    }
+    return true;
 }
 
-void RunBench()
+bool RunBench()
 {
-    auto listen_fd = CreateListenSocket(kSocketPath);
+    shm::UniqueFd listen_fd;
+    if (!CreateListenSocket(kSocketPath, &listen_fd))
+        return false;
     std::printf("socket_server(bench): waiting for client on %s ...\n", kSocketPath);
 
     shm::UniqueFd cfd{::accept(listen_fd.Get(), nullptr, nullptr)};
     if (!cfd)
     {
         std::perror("accept");
-        return;
+        return false;
     }
 
     // 扩大 socket 缓冲区
@@ -95,7 +90,7 @@ void RunBench()
                          "socket_server: invalid cmd (payload_size=%u rounds=%d)"
                          ", disconnect\n",
                          cmd.payload_size, cmd.rounds);
-            return;
+            return false;
         }
 
         // 接收缓冲区（MsgHeader 之后的 body 部分）
@@ -123,7 +118,7 @@ void RunBench()
                              "socket_server: frame len %u exceeds buffer %zu"
                              " (payload_size=%u), disconnect\n",
                              hdr.len, body_buf.size(), cmd.payload_size);
-                return;
+                return false;
             }
             ReadAll(cfd.Get(), body_buf.data(), hdr.len);
 
@@ -155,6 +150,7 @@ void RunBench()
 
     std::printf("\nsocket_server(bench): done\n");
     ::unlink(kSocketPath);
+    return true;
 }
 
 }  // anonymous namespace
@@ -164,14 +160,5 @@ int main()
     // 对端中途退出时 write 会触发 SIGPIPE，忽略之以走 EPIPE 错误路径
     ::signal(SIGPIPE, SIG_IGN);
 
-    try
-    {
-        RunBench();
-    }
-    catch (const std::exception &e)
-    {
-        std::fprintf(stderr, "socket_server: error: %s\n", e.what());
-        return EXIT_FAILURE;
-    }
-    return 0;
+    return RunBench() ? 0 : EXIT_FAILURE;
 }

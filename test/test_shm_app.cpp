@@ -74,7 +74,7 @@ int main()
     });
 
     assert(server.Start());
-    std::thread server_thread([&] { server_loop.Run(); });
+    std::thread server_thread([&] { (void)server_loop.Run(); });
 
     // ------------------------------------------------------------------
     // Part 1: 同步 ShmClient，5 轮请求/响应（原始字节流 + 手动 codec）
@@ -153,7 +153,7 @@ int main()
         std::thread client_thread([&] {
             async_client.Connect(kTestSock);
             assert(async_client.State() == comm::TcpClientStates::established);
-            client_loop.Run();
+            (void)client_loop.Run();
         });
 
         if (!WaitFor([&] { return client_msgs.load() >= 1; }, 3000))
@@ -198,7 +198,7 @@ int main()
 
             std::thread client_thread([&] {
                 async_client.Connect(kTestSock);
-                client_loop.Run(50);
+                (void)client_loop.Run(50);
             });
             assert(WaitFor([&] { return verify_started.load(); }, 3000));
             client_loop.Stop();
@@ -207,7 +207,7 @@ int main()
 
         // 重启 loop 观察到 500ms 之后：若定时器未被析构摘除（bug），
         // 它会在此窗口触发，命中已释放连接的悬垂 this（ASan 下报 UAF）
-        std::thread rerun_thread([&] { client_loop.Run(50); });
+        std::thread rerun_thread([&] { (void)client_loop.Run(50); });
         std::this_thread::sleep_for(std::chrono::milliseconds(1000));
         client_loop.Stop();
         rerun_thread.join();

@@ -84,8 +84,9 @@ int main()
         return 1;
 
     // 定时发送 ClientMsg
-    int tick = 0;
-    loop.AddTimer(kTimerIntervalMs, [&](int tfd, short) {
+    int tick     = 0;
+    int timer_fd = 0;
+    shm::ErrorCode ec = loop.AddTimer(kTimerIntervalMs, [&](int tfd, short) {
         shm::EventLoop::DrainTimerfd(tfd);
 
         if (++tick > kMaxTicks)
@@ -104,11 +105,23 @@ int main()
 
         if (!client.SendCmd(msg))
             std::fprintf(stderr, "client: [tick=%d] send failed\n", tick);
-    });
+    }, &timer_fd);
+    if (ec != shm::ErrorCode::kOk)
+    {
+        std::fprintf(stderr, "client: AddTimer failed: %s\n",
+                     shm::ErrorCodeName(ec));
+        return 1;
+    }
 
     std::printf("client: timer=%dms, max_ticks=%d\n", kTimerIntervalMs,
                 kMaxTicks);
-    loop.Run();
+    ec = loop.Run();
+    if (ec != shm::ErrorCode::kOk)
+    {
+        std::fprintf(stderr, "client: event loop failed: %s\n",
+                     shm::ErrorCodeName(ec));
+        return 1;
+    }
 
     std::printf("client: bye\n");
     return 0;

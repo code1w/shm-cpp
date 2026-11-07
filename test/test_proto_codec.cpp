@@ -24,6 +24,21 @@ namespace {
 
 using Channel = shm::DefaultRingChannel;
 
+/// 测试辅助：握手失败直接 abort
+template <typename Ch>
+Ch CreateChannelOrAbort(int fd, shm::ChannelRole role)
+{
+    Ch ch;
+    shm::ErrorCode ec = Ch::CreateRingChannel(fd, role, &ch);
+    if (ec != shm::ErrorCode::kOk)
+    {
+        std::fprintf(stderr, "FAIL: CreateRingChannel: %s\n",
+                     shm::ErrorCodeName(ec));
+        std::abort();
+    }
+    return ch;
+}
+
 /// 测试 1：EncodeProto / DecodeProtoHeader / DecodeProto 纯缓冲区编解码
 void TestEncodeDecodeBuffer()
 {
@@ -131,7 +146,7 @@ void TestSendRecvViaRing()
     {
         // 子进程：writer
         ::close(sv[0]);
-        auto ch = Channel::CreateRingChannel(sv[1], shm::ChannelRole::kClient);
+        auto ch = CreateChannelOrAbort<Channel>(sv[1], shm::ChannelRole::kClient);
 
         shm_ipc::HeartbeatProto hb;
         hb.set_client_id(1);
@@ -157,7 +172,7 @@ void TestSendRecvViaRing()
 
     // 父进程：reader
     ::close(sv[1]);
-    auto ch = Channel::CreateRingChannel(sv[0], shm::ChannelRole::kServer);
+    auto ch = CreateChannelOrAbort<Channel>(sv[0], shm::ChannelRole::kServer);
 
     shm::FrameReader<> reader;
 

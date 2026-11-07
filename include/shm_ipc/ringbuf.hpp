@@ -146,6 +146,9 @@ class BatchWriter
  public:
     static constexpr std::size_t max_write_size = Capacity / 2;
 
+    /** @brief 构造惰性写入器（未绑定共享内存；所有写操作返回 -1） */
+    BatchWriter() = default;
+
     /**
      * @brief 构造批量写入器，快照当前 write_pos 和 read_pos
      * @param shm 共享内存指针
@@ -175,7 +178,34 @@ class BatchWriter
         o.reserved_len_ = 0;
     }
 
-    BatchWriter &operator=(BatchWriter &&)      = delete;
+    /**
+     * @brief 移动赋值：先丢弃目标对象未发布的数据，再接管源对象
+     *
+     * 选择 Cancel 而不是 Flush：赋值语义不应隐式向对端发布半成品批次。
+     */
+    BatchWriter &operator=(BatchWriter &&o) noexcept
+    {
+        if (this != &o)
+        {
+            Cancel();
+            hdr_          = o.hdr_;
+            base_         = o.base_;
+            w_            = o.w_;
+            r_            = o.r_;
+            w_start_      = o.w_start_;
+            count_        = o.count_;
+            reserved_     = o.reserved_;
+            reserved_len_ = o.reserved_len_;
+
+            o.hdr_          = nullptr;
+            o.base_         = nullptr;
+            o.w_ = o.r_ = o.w_start_ = 0;
+            o.count_        = 0;
+            o.reserved_     = nullptr;
+            o.reserved_len_ = 0;
+        }
+        return *this;
+    }
     BatchWriter(const BatchWriter &)            = delete;
     BatchWriter &operator=(const BatchWriter &) = delete;
 
@@ -334,12 +364,12 @@ class BatchWriter
     }
 
  private:
-    RingHeader *hdr_;
-    char *base_;
-    uint64_t w_;        ///< 本地追踪的写位置（不触发原子 store）
-    uint64_t r_;        ///< 快照的读位置（整批只读一次 acquire）
-    uint64_t w_start_;  ///< Flush 前的写位置，用于判断是否有新数据
-    int count_ = 0;     ///< 自上次 Flush 以来已写入次数计数
+    RingHeader *hdr_    = nullptr;  ///< 为空表示惰性写入器
+    char *base_         = nullptr;  ///< 数据区起始指针
+    uint64_t w_         = 0;        ///< 本地追踪的写位置（不触发原子 store）
+    uint64_t r_         = 0;        ///< 快照的读位置（整批只读一次 acquire）
+    uint64_t w_start_   = 0;        ///< Flush 前的写位置，用于判断是否有新数据
+    int count_          = 0;        ///< 自上次 Flush 以来已写入次数计数
 
     // Reserve/CommitReserve 配对校验（release 下也生效）
     char *reserved_        = nullptr;  ///< 当前未提交的预留区起始指针

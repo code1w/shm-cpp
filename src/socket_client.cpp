@@ -40,25 +40,24 @@ void WriteAll(int fd, const void *buf, std::size_t len)
     }
 }
 
-shm::UniqueFd ConnectToServer(const char *path)
+bool ConnectToServer(const char *path, shm::UniqueFd *out)
 {
-    shm::UniqueFd sfd{::socket(AF_UNIX, SOCK_STREAM, 0)};
-    if (!sfd)
-        throw std::runtime_error(std::string("socket: ") + std::strerror(errno));
-
-    sockaddr_un addr{};
-    addr.sun_family = AF_UNIX;
-    std::strncpy(addr.sun_path, path, sizeof(addr.sun_path) - 1);
-
-    if (::connect(sfd.Get(), reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) < 0)
-        throw std::runtime_error(std::string("connect: ") + std::strerror(errno));
-
-    return sfd;
+    int sys_errno = 0;
+    shm::ErrorCode ec = shm::ConnectUnixSocket(path, out, &sys_errno);
+    if (ec != shm::ErrorCode::kOk)
+    {
+        std::fprintf(stderr, "socket_client: connect failed: %s\n",
+                     shm::ErrorCodeMessage(ec, sys_errno).c_str());
+        return false;
+    }
+    return true;
 }
 
-void RunBench()
+bool RunBench()
 {
-    auto sfd = ConnectToServer(kSocketPath);
+    shm::UniqueFd sfd;
+    if (!ConnectToServer(kSocketPath, &sfd))
+        return false;
     std::printf("socket_client(bench): connected\n\n");
 
     // 扩大 socket 缓冲区
@@ -121,6 +120,7 @@ void RunBench()
     WriteAll(sfd.Get(), &end, sizeof(end));
 
     std::printf("\nsocket_client(bench): done\n");
+    return true;
 }
 
 }  // anonymous namespace
@@ -130,14 +130,5 @@ int main()
     // 对端中途退出时 write 会触发 SIGPIPE，忽略之以走 EPIPE 错误路径
     ::signal(SIGPIPE, SIG_IGN);
 
-    try
-    {
-        RunBench();
-    }
-    catch (const std::exception &e)
-    {
-        std::fprintf(stderr, "socket_client: error: %s\n", e.what());
-        return EXIT_FAILURE;
-    }
-    return 0;
+    return RunBench() ? 0 : EXIT_FAILURE;
 }

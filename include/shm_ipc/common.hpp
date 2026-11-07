@@ -1,6 +1,9 @@
 /**
  * @file common.hpp
  * @brief RAII 封装与 IPC 辅助工具（C++17，纯头文件）
+ *
+ * 本文件所有接口均不抛显式异常：失败时返回 shm::ErrorCode，系统调用
+ * 的 errno 通过可选的 int* sys_errno 出参返回。
  */
 
 #ifndef SHM_IPC_COMMON_HPP_
@@ -19,10 +22,10 @@
 #include <cerrno>
 #include <cstdint>
 #include <cstring>
-#include <stdexcept>
-#include <string>
 #include <string_view>
 #include <utility>
+
+#include "error.hpp"
 
 namespace shm {
 
@@ -86,17 +89,11 @@ class [[nodiscard]] UniqueFd
 // MmapRegion — 移动语义 RAII mmap 区域包装
 // ---------------------------------------------------------------------------
 
-/** @brief 移动语义 RAII mmap 区域包装，禁止复制 */
+/** @brief 移动语义 RAII mmap 区域包装，禁止复制；通过 Map() 建立映射 */
 class MmapRegion
 {
  public:
     MmapRegion() = default;
-    MmapRegion(int fd, std::size_t size, int prot, int flags) : size_(size)
-    {
-        addr_ = ::mmap(nullptr, size, prot, flags, fd, 0);
-        if (addr_ == MAP_FAILED)
-            throw std::runtime_error(std::string("mmap: ") + std::strerror(errno));
-    }
     ~MmapRegion()
     {
         if (addr_ != MAP_FAILED)
@@ -118,6 +115,31 @@ class MmapRegion
     }
     MmapRegion(const MmapRegion &)            = delete;
     MmapRegion &operator=(const MmapRegion &) = delete;
+
+    /**
+     * @brief 建立映射（替换已有映射；失败时保留原映射不变）
+     * @return kOk 成功；kInvalidArgument 参数非法；否则映射失败（errno 出参）
+     */
+    [[nodiscard]]
+    ErrorCode Map(int fd, std::size_t size, int prot, int flags,
+                  int *sys_errno = nullptr) noexcept
+    {
+        if (fd < 0 || size == 0)
+            return ErrorCode::kInvalidArgument;
+
+        void *addr = ::mmap(nullptr, size, prot, flags, fd, 0);
+        if (addr == MAP_FAILED)
+        {
+            if (sys_errno)
+                *sys_errno = errno;
+            return ErrnoToErrorCode(errno);
+        }
+        if (addr_ != MAP_FAILED)
+            ::munmap(addr_, size_);
+        addr_ = addr;
+        size_ = size;
+        return ErrorCode::kOk;
+    }
 
     [[nodiscard]]
     void *Get() const noexcept
@@ -166,13 +188,18 @@ struct TaggedFd
  * 防止恶意对端握手后缩小文件使接收方映射读越界（SIGBUS）。
  * seal 不影响已建立的可写映射，本库创建后也不再改文件大小。
  *
- * @param name  memfd 名称（调试用）
- * @param size  文件大小（字节）
- * @return 持有 memfd 的 UniqueFd
+ * @param name       memfd 名称（调试用，需 NUL 结尾）
+ * @param size       文件大小（字节）
+ * @param out        成功时写入持有 memfd 的 UniqueFd
+ * @param sys_errno  可选：失败时的 errno
  */
 [[nodiscard]]
-inline UniqueFd CreateMemfd(const char *name, std::size_t size)
+inline ErrorCode CreateMemfd(const char *name, std::size_t size,
+                             UniqueFd *out, int *sys_errno = nullptr) noexcept
 {
+    if (!out || !name || size == 0)
+        return ErrorCode::kInvalidArgument;
+
     // MFD_ALLOW_SEALING 允许随后 fcntl(F_ADD_SEALS)；内核不识别该标志
     // （EINVAL）时退化为普通 memfd，仅失去防 truncate 硬化
     int fd = static_cast<int>(::syscall(
@@ -182,26 +209,39 @@ inline UniqueFd CreateMemfd(const char *name, std::size_t size)
         fd = static_cast<int>(
             ::syscall(__NR_memfd_create, name, static_cast<unsigned>(MFD_CLOEXEC)));
     if (fd < 0)
-        throw std::runtime_error(std::string("memfd_create: ") +
-                                 std::strerror(errno));
+    {
+        if (sys_errno)
+            *sys_errno = errno;
+        return ErrnoToErrorCode(errno);
+    }
     if (::ftruncate(fd, static_cast<off_t>(size)) < 0)
     {
+        const int err = errno;
         ::close(fd);
-        throw std::runtime_error(std::string("ftruncate: ") + std::strerror(errno));
+        if (sys_errno)
+            *sys_errno = err;
+        return ErrnoToErrorCode(err);
     }
     // 封印尺寸（尽力而为：不支持 seal 的内核静默跳过，与历史行为一致）
     (void)::fcntl(fd, F_ADD_SEALS, F_SEAL_SHRINK | F_SEAL_GROW);
-    return UniqueFd{fd};
+    *out = UniqueFd{fd};
+    return ErrorCode::kOk;
 }
 
 /**
  * @brief 通过 Unix socket 发送文件描述符（SCM_RIGHTS）
- * @param socket  Unix socket fd
- * @param fd      待发送的文件描述符
- * @param tag     描述 fd 类型的标签，随 iovec 一并传送
+ * @param socket    Unix socket fd
+ * @param fd        待发送的文件描述符
+ * @param tag       描述 fd 类型的标签，随 iovec 一并传送
+ * @param sys_errno 可选：失败时的 errno
  */
-inline void SendFd(int socket, int fd, FdTag tag)
+[[nodiscard]]
+inline ErrorCode SendFd(int socket, int fd, FdTag tag,
+                        int *sys_errno = nullptr) noexcept
 {
+    if (socket < 0 || fd < 0)
+        return ErrorCode::kInvalidArgument;
+
     std::array<char, 256> dummy{};
     auto tag_val = static_cast<uint32_t>(tag);
     std::memcpy(dummy.data(), &tag_val, sizeof(tag_val));
@@ -235,28 +275,41 @@ inline void SendFd(int socket, int fd, FdTag tag)
         } while (n < 0 && errno == EINTR);
 
         if (n < 0)
-            throw std::runtime_error(std::string("sendmsg: ") +
-                                     std::strerror(errno));
+        {
+            if (sys_errno)
+                *sys_errno = errno;
+            return ErrnoToErrorCode(errno);
+        }
         if (n == 0)
-            throw std::runtime_error("sendmsg: peer closed during fd transfer");
+            return ErrorCode::kPeerClosed;
         sent += static_cast<std::size_t>(n);
     }
+    return ErrorCode::kOk;
 }
 
 /**
  * @brief 通过 Unix socket 接收带类型标签的文件描述符（SCM_RIGHTS）
- * @param socket  Unix socket fd
- * @return 包含 fd 与 FdTag 的 TaggedFd
+ *
+ * 控制消息解析成功后用 UniqueFd 立即接管 fd：任何后续短读/错误返回都会
+ * 自动关闭已收到的 fd，不会泄漏。
+ *
+ * @param socket    Unix socket fd
+ * @param out       成功时写入 TaggedFd
+ * @param sys_errno 可选：失败时的 errno
  */
 [[nodiscard]]
-inline TaggedFd RecvFd(int socket)
+inline ErrorCode RecvFd(int socket, TaggedFd *out,
+                        int *sys_errno = nullptr) noexcept
 {
+    if (socket < 0 || !out)
+        return ErrorCode::kInvalidArgument;
+
     std::array<char, 256> data{};
     alignas(cmsghdr) std::array<char, CMSG_SPACE(sizeof(int))> ctrl{};
 
-    int fd           = -1;
-    bool have_cmsg   = false;
-    std::size_t got  = 0;
+    UniqueFd owned;
+    bool have_cmsg  = false;
+    std::size_t got = 0;
 
     // SOCK_STREAM 可能短读。必须收满整条固定长度载荷，否则残留的
     // dummy 字节会被下一次 RecvFd 当成数据部分读取，导致后续消息的
@@ -280,27 +333,28 @@ inline TaggedFd RecvFd(int socket)
         } while (n < 0 && errno == EINTR);
 
         if (n < 0)
-            throw std::runtime_error(std::string("recvmsg: ") +
-                                     std::strerror(errno));
+        {
+            if (sys_errno)
+                *sys_errno = errno;
+            return ErrnoToErrorCode(errno);
+        }
         if (n == 0)
-            throw std::runtime_error(
-                "recvmsg: connection closed during fd transfer");
+            return ErrorCode::kPeerClosed;
 
         if (!have_cmsg)
         {
             // 控制消息被截断（对端一次发送了多个 fd 或缓冲区不足）时
             // 静默继续会导致 fd 泄漏或标签错位，必须显式报错
             if (msg.msg_flags & MSG_CTRUNC)
-                throw std::runtime_error("recvmsg: control message truncated");
+                return ErrorCode::kProtocol;
 
             auto *cmsg = CMSG_FIRSTHDR(&msg);
             if (!cmsg || cmsg->cmsg_level != SOL_SOCKET ||
                 cmsg->cmsg_type != SCM_RIGHTS)
-                throw std::runtime_error(
-                    "RecvFd: no SCM_RIGHTS in control message");
+                return ErrorCode::kProtocol;
             if (cmsg->cmsg_len < CMSG_LEN(sizeof(int)))
-                throw std::runtime_error(
-                    "RecvFd: control message too short for fd");
+                return ErrorCode::kProtocol;
+
             // 对端一条消息携带多个 fd 时只取第一个会造成其余 fd 泄漏，
             // 属协议违规：关闭全部并报错
             if (cmsg->cmsg_len > CMSG_LEN(sizeof(int)))
@@ -315,9 +369,12 @@ inline TaggedFd RecvFd(int socket)
                     if (extra >= 0)
                         ::close(extra);
                 }
-                throw std::runtime_error("RecvFd: multiple fds in one message");
+                return ErrorCode::kMultipleFds;
             }
+
+            int fd = -1;
             std::memcpy(&fd, CMSG_DATA(cmsg), sizeof(int));
+            owned.Reset(fd);
             have_cmsg = true;
         }
         got += static_cast<std::size_t>(n);
@@ -325,115 +382,194 @@ inline TaggedFd RecvFd(int socket)
 
     uint32_t tag_val = 0;
     std::memcpy(&tag_val, data.data(), sizeof(tag_val));
-
-    return TaggedFd{UniqueFd{fd}, static_cast<FdTag>(tag_val)};
+    *out = TaggedFd{std::move(owned), static_cast<FdTag>(tag_val)};
+    return ErrorCode::kOk;
 }
 
 /**
  * @brief 接收文件描述符并校验类型标签
  * @param socket    Unix socket fd
  * @param expected  期望的 FdTag 类型
- * @return 校验通过后的 UniqueFd
- * @see RecvFd
+ * @param out       成功时写入 UniqueFd
+ * @param sys_errno 可选：失败时的 errno
  */
 [[nodiscard]]
-inline UniqueFd RecvFdExpect(int socket, FdTag expected)
+inline ErrorCode RecvFdExpect(int socket, FdTag expected, UniqueFd *out,
+                              int *sys_errno = nullptr) noexcept
 {
-    auto [fd, tag] = RecvFd(socket);
-    if (tag != expected)
-    {
-        const char *exp = (expected == FdTag::kMemfd) ? "memfd" : "eventfd";
-        const char *got = (tag == FdTag::kMemfd)     ? "memfd"
-                          : (tag == FdTag::kEventfd) ? "eventfd"
-                                                     : "unknown";
-        throw std::runtime_error(std::string("recv_fd: expected ") + exp +
-                                 " but got " + got);
-    }
-    return std::move(fd);
+    if (!out)
+        return ErrorCode::kInvalidArgument;
+
+    TaggedFd tagged{};
+    ErrorCode ec = RecvFd(socket, &tagged, sys_errno);
+    if (ec != ErrorCode::kOk)
+        return ec;
+    if (tagged.tag != expected)
+        return ErrorCode::kProtocol;  // tagged.fd 由 RAII 关闭
+
+    *out = std::move(tagged.fd);
+    return ErrorCode::kOk;
 }
 
 /**
  * @brief 创建用于跨进程通知的非阻塞 eventfd
- * @return 持有 eventfd 的 UniqueFd
+ * @param out       成功时写入 UniqueFd
+ * @param sys_errno 可选：失败时的 errno
  */
 [[nodiscard]]
-inline UniqueFd CreateEventfd()
+inline ErrorCode CreateEventfd(UniqueFd *out, int *sys_errno = nullptr) noexcept
 {
+    if (!out)
+        return ErrorCode::kInvalidArgument;
+
     int fd = ::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
     if (fd < 0)
-        throw std::runtime_error(std::string("eventfd: ") + std::strerror(errno));
-    return UniqueFd{fd};
+    {
+        if (sys_errno)
+            *sys_errno = errno;
+        return ErrnoToErrorCode(errno);
+    }
+    *out = UniqueFd{fd};
+    return ErrorCode::kOk;
 }
 
 /**
  * @brief 从 uri 中提取 Unix socket 路径
  *
  * 支持 "shm:///path"、"uds:///path"、"unix:///path" 形式，无 scheme 时原样返回。
+ * 返回 view，不分配内存；调用方需保证 uri 在 view 使用期间有效。
  */
 [[nodiscard]]
-inline std::string UriToPath(std::string_view uri)
+inline std::string_view UriToPath(std::string_view uri) noexcept
 {
     auto pos = uri.find("://");
     if (pos == std::string_view::npos)
-        return std::string(uri);
-    return std::string(uri.substr(pos + 3));
+        return uri;
+    return uri.substr(pos + 3);
+}
+
+/**
+ * @brief 路径写入栈上的 NUL 结尾缓冲区
+ * @return false 表示路径过长或为空
+ */
+inline bool CopyUnixPath(std::string_view path, char *buf,
+                         std::size_t buf_size) noexcept
+{
+    if (path.empty() || path.size() >= buf_size)
+        return false;
+    std::memcpy(buf, path.data(), path.size());
+    buf[path.size()] = '\0';
+    return true;
 }
 
 /**
  * @brief 创建并绑定 Unix domain socket 监听端
- * @param path    socket 文件路径（已存在则先 unlink）
- * @param backlog listen 积压队列长度
- * @return 持有监听 socket 的 UniqueFd
+ * @param path       socket 文件路径（已存在则先 unlink）
+ * @param out        成功时写入监听 socket
+ * @param backlog    listen 积压队列长度
+ * @param sys_errno  可选：失败时的 errno
  */
 [[nodiscard]]
-inline UniqueFd ListenUnixSocket(const char *path, int backlog = 16)
+inline ErrorCode ListenUnixSocket(std::string_view path, UniqueFd *out,
+                                  int backlog = 16,
+                                  int *sys_errno = nullptr) noexcept
 {
-    // strncpy 超长会静默截断到错误路径，必须显式拒绝
-    if (std::strlen(path) >= sizeof(sockaddr_un::sun_path))
-        throw std::runtime_error(std::string("unix socket path too long: ") + path);
+    if (!out)
+        return ErrorCode::kInvalidArgument;
+
+    char cpath[sizeof(sockaddr_un::sun_path)];
+    if (!CopyUnixPath(path, cpath, sizeof(cpath)))
+    {
+        if (sys_errno)
+            *sys_errno = ENAMETOOLONG;
+        return ErrorCode::kInvalidArgument;
+    }
 
     UniqueFd sfd{::socket(AF_UNIX, SOCK_STREAM, 0)};
     if (!sfd)
-        throw std::runtime_error(std::string("socket: ") + std::strerror(errno));
+    {
+        if (sys_errno)
+            *sys_errno = errno;
+        return ErrnoToErrorCode(errno);
+    }
 
-    ::unlink(path);
+    ::unlink(cpath);
 
     sockaddr_un addr{};
     addr.sun_family = AF_UNIX;
-    std::strncpy(addr.sun_path, path, sizeof(addr.sun_path) - 1);
+    std::memcpy(addr.sun_path, cpath, std::strlen(cpath));
 
     if (::bind(sfd.Get(), reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) < 0)
-        throw std::runtime_error(std::string("bind: ") + std::strerror(errno));
+    {
+        if (sys_errno)
+            *sys_errno = errno;
+        return ErrnoToErrorCode(errno);
+    }
     if (::listen(sfd.Get(), backlog) < 0)
-        throw std::runtime_error(std::string("listen: ") + std::strerror(errno));
+    {
+        if (sys_errno)
+            *sys_errno = errno;
+        return ErrnoToErrorCode(errno);
+    }
 
-    return sfd;
+    *out = std::move(sfd);
+    return ErrorCode::kOk;
 }
 
 /**
  * @brief 连接到指定路径的 Unix domain socket
- * @param path socket 文件路径
- * @return 已连接的 UniqueFd
+ * @param path       socket 文件路径
+ * @param out        成功时写入已连接的 socket
+ * @param sys_errno  可选：失败时的 errno
  */
 [[nodiscard]]
-inline UniqueFd ConnectUnixSocket(const char *path)
+inline ErrorCode ConnectUnixSocket(std::string_view path, UniqueFd *out,
+                                   int *sys_errno = nullptr) noexcept
 {
-    // 同 ListenUnixSocket：超长路径静默截断会连到错误地址
-    if (std::strlen(path) >= sizeof(sockaddr_un::sun_path))
-        throw std::runtime_error(std::string("unix socket path too long: ") + path);
+    if (!out)
+        return ErrorCode::kInvalidArgument;
+
+    char cpath[sizeof(sockaddr_un::sun_path)];
+    if (!CopyUnixPath(path, cpath, sizeof(cpath)))
+    {
+        if (sys_errno)
+            *sys_errno = ENAMETOOLONG;
+        return ErrorCode::kInvalidArgument;
+    }
 
     UniqueFd sfd{::socket(AF_UNIX, SOCK_STREAM, 0)};
     if (!sfd)
-        throw std::runtime_error(std::string("socket: ") + std::strerror(errno));
+    {
+        if (sys_errno)
+            *sys_errno = errno;
+        return ErrnoToErrorCode(errno);
+    }
 
     sockaddr_un addr{};
     addr.sun_family = AF_UNIX;
-    std::strncpy(addr.sun_path, path, sizeof(addr.sun_path) - 1);
+    std::memcpy(addr.sun_path, cpath, std::strlen(cpath));
 
     if (::connect(sfd.Get(), reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) < 0)
-        throw std::runtime_error(std::string("connect: ") + std::strerror(errno));
+    {
+        if (sys_errno)
+            *sys_errno = errno;
+        return ErrnoToErrorCode(errno);
+    }
 
-    return sfd;
+    *out = std::move(sfd);
+    return ErrorCode::kOk;
+}
+
+/**
+ * @brief 删除 Unix socket 路径（栈缓冲拷贝，不分配内存）
+ * @return true 成功或路径本就不存在；false 路径非法或 unlink 失败
+ */
+inline bool UnlinkUnixSocket(std::string_view path) noexcept
+{
+    char cpath[sizeof(sockaddr_un::sun_path)];
+    if (!CopyUnixPath(path, cpath, sizeof(cpath)))
+        return false;
+    return ::unlink(cpath) == 0 || errno == ENOENT;
 }
 
 }  // namespace shm

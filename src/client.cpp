@@ -225,10 +225,27 @@ void OnServerSocket(int fd, short revents, shm::ClientState & /*cs*/,
 
 void RunBench()
 {
-    auto sfd = shm::ConnectUnixSocket(shm::kDefaultSocketPath);
+    shm::UniqueFd sfd;
+    int sys_errno = 0;
+    shm::ErrorCode ec = shm::ConnectUnixSocket(shm::kDefaultSocketPath, &sfd,
+                                               &sys_errno);
+    if (ec != shm::ErrorCode::kOk)
+    {
+        std::fprintf(stderr, "client(bench): connect failed: %s\n",
+                     shm::ErrorCodeMessage(ec, sys_errno).c_str());
+        return;
+    }
     std::printf("client(bench): connected\n");
 
-    auto ch = Channel::CreateRingChannel(sfd.Get(), shm::ChannelRole::kClient);
+    Channel ch;
+    ec = Channel::CreateRingChannel(sfd.Get(), shm::ChannelRole::kClient, &ch,
+                                    &sys_errno);
+    if (ec != shm::ErrorCode::kOk)
+    {
+        std::fprintf(stderr, "client(bench): handshake failed: %s\n",
+                     shm::ErrorCodeMessage(ec, sys_errno).c_str());
+        return;
+    }
     std::printf("client(bench): ring established\n\n");
 
     shm::PrintBenchHeader();
@@ -257,7 +274,12 @@ void RunBench()
         uint64_t t0 = shm::NowNs();
         for (int32_t i = 0; i < tc.rounds; )
         {
-            auto batch = ch.StartBatch();
+            Channel::ChannelBatchWriter batch;
+            if (ch.StartBatch(&batch) != shm::ErrorCode::kOk)
+            {
+                std::fprintf(stderr, "client(bench): StartBatch failed\n");
+                return;
+            }
             while (i < tc.rounds)
             {
                 shm::BenchPayloadHeader hdr{i};
@@ -308,7 +330,6 @@ int main(int argc, char *argv[])
     // 忽略之，让 write 返回 EPIPE 由调用方处理
     ::signal(SIGPIPE, SIG_IGN);
 
-    try
     {
         for (int i = 1; i < argc; ++i)
         {
@@ -333,10 +354,26 @@ int main(int argc, char *argv[])
         ::sigaction(SIGTERM, &sa, nullptr);
 
         shm::ClientState cs;
-        cs.socket_fd = shm::ConnectUnixSocket(shm::kDefaultSocketPath);
+        int sys_errno = 0;
+        shm::ErrorCode ec = shm::ConnectUnixSocket(shm::kDefaultSocketPath,
+                                                   &cs.socket_fd, &sys_errno);
+        if (ec != shm::ErrorCode::kOk)
+        {
+            std::fprintf(stderr, "client: connect failed: %s\n",
+                         shm::ErrorCodeMessage(ec, sys_errno).c_str());
+            return EXIT_FAILURE;
+        }
         std::printf("client: connected to %s\n", shm::kDefaultSocketPath);
 
-        cs.channel    = Channel::CreateRingChannel(cs.socket_fd.Get(), shm::ChannelRole::kClient);
+        ec = Channel::CreateRingChannel(cs.socket_fd.Get(),
+                                        shm::ChannelRole::kClient,
+                                        &cs.channel, &sys_errno);
+        if (ec != shm::ErrorCode::kOk)
+        {
+            std::fprintf(stderr, "client: handshake failed: %s\n",
+                         shm::ErrorCodeMessage(ec, sys_errno).c_str());
+            return EXIT_FAILURE;
+        }
         cs.notify_efd = cs.channel.NotifyReadFd();
 
 #ifdef SHM_IPC_HAS_PROTOBUF
@@ -360,10 +397,18 @@ int main(int argc, char *argv[])
             16, sizeof(ClientMsg::payload));
 
         // 注册定时器
-        loop.AddTimer(kTimerIntervalMs,
+        int timer_fd = 0;
+        ec = loop.AddTimer(kTimerIntervalMs,
             std::bind(OnWriteTimer, std::placeholders::_1,
                       std::ref(cs), std::ref(loop), std::ref(stats),
-                      std::ref(rng), std::ref(len_dist)));
+                      std::ref(rng), std::ref(len_dist)),
+            &timer_fd, &sys_errno);
+        if (ec != shm::ErrorCode::kOk)
+        {
+            std::fprintf(stderr, "client: AddTimer failed: %s\n",
+                         shm::ErrorCodeMessage(ec, sys_errno).c_str());
+            return EXIT_FAILURE;
+        }
 
         // 注册 eventfd 读取心跳
         loop.AddFd(cs.notify_efd,
@@ -378,7 +423,13 @@ int main(int argc, char *argv[])
         std::printf("client: timer=%dms, max_ticks=%d, codec=%s\n\n",
                     kTimerIntervalMs, kMaxTicks,
                     gUseProto ? "proto" : "pod");
-        loop.Run();
+        ec = loop.Run();
+        if (ec != shm::ErrorCode::kOk)
+        {
+            std::fprintf(stderr, "client: event loop failed: %s\n",
+                         shm::ErrorCodeName(ec));
+            return EXIT_FAILURE;
+        }
 
         std::printf("\nclient: done. ok=%d full=%d total_read=%d\n", stats.ok,
                     stats.full, cs.total_read);
@@ -387,11 +438,6 @@ int main(int argc, char *argv[])
         char end = 0;
         (void)::write(cs.socket_fd.Get(), &end, 1);
         ::usleep(100000);
-    }
-    catch (const std::exception &e)
-    {
-        std::fprintf(stderr, "client: error: %s\n", e.what());
-        return EXIT_FAILURE;
     }
     return 0;
 }

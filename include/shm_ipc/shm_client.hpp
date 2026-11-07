@@ -77,17 +77,28 @@ class ShmClient : public comm::ITcpClient
         // ReadMessage（Close 唤醒后其立即返回）
         channel_   = DefaultRingChannel{};
         socket_fd_.Reset();
-        try
+        last_error_     = ErrorCode::kOk;
+        last_sys_errno_ = 0;
+
+        UniqueFd sock;
+        ErrorCode ec = ConnectUnixSocket(UriToPath(uri), &sock, &last_sys_errno_);
+        if (ec != ErrorCode::kOk)
         {
-            socket_fd_ = ConnectUnixSocket(UriToPath(uri).c_str());
-            channel_   = DefaultRingChannel::CreateRingChannel(socket_fd_.Get(),
-                                                               ChannelRole::kClient);
-        }
-        catch (const std::exception &)
-        {
-            socket_fd_.Reset();
+            last_error_ = ec;
             return false;
         }
+
+        DefaultRingChannel channel;
+        ec = DefaultRingChannel::CreateRingChannel(sock.Get(), ChannelRole::kClient,
+                                                   &channel, &last_sys_errno_);
+        if (ec != ErrorCode::kOk)
+        {
+            last_error_ = ec;
+            return false;
+        }
+
+        socket_fd_ = std::move(sock);
+        channel_   = std::move(channel);
         closed_.store(false, std::memory_order_release);
         return true;
     }
@@ -237,6 +248,12 @@ class ShmClient : public comm::ITcpClient
         }
     }
 
+    /// @brief 最近一次 Connect 的错误码（扩展接口）
+    ErrorCode LastError() const noexcept { return last_error_; }
+
+    /// @brief 最近一次 Connect 失败时的 errno（扩展接口）
+    int LastSysErrno() const noexcept { return last_sys_errno_; }
+
     /// @brief 底层 socket fd（扩展接口，调试/集成用）
     int GetSockFd() const { return socket_fd_.Get(); }
 
@@ -247,6 +264,8 @@ class ShmClient : public comm::ITcpClient
     UniqueFd socket_fd_;          ///< 连接 socket（断连检测）
     DefaultRingChannel channel_;  ///< 双向共享内存通道
     std::atomic<bool> closed_{true};  ///< 本端已关闭标志（Close/读线程跨线程通信）
+    ErrorCode last_error_ = ErrorCode::kOk;  ///< 最近一次 Connect 错误码
+    int last_sys_errno_   = 0;               ///< 最近一次 Connect 的 errno
 };
 
 }  // namespace shm

@@ -97,28 +97,36 @@ class ShmConnection : public comm::ITcpConnection,
         if (!codec_)
             return false;
 
-        for (;;)
+        try
         {
-            size_t out  = 0;
-            int32_t len = codec_->Encode(
-                pkg, reinterpret_cast<comm::byte *>(encode_buf_.data()),
-                encode_buf_.size(), &out);
-            if (len == comm::kCodecSkipPackage)
-                return true;  // 丢包（同框架）
-            if (len == comm::kCodecDisconnect)
+            for (;;)
             {
-                Close();
-                return false;
-            }
-            if (len == comm::kCodecNeedMoreBuffer)
-            {
-                // out 为所需大小：为 0（内部错误）或不超过现有缓冲仍要求
-                // 扩容（codec 违约）时放弃，避免无限重试
-                if (out == 0 || out <= encode_buf_.size() || !GrowEncodeBuffer(out))
+                size_t out  = 0;
+                int32_t len = codec_->Encode(
+                    pkg, reinterpret_cast<comm::byte *>(encode_buf_.data()),
+                    encode_buf_.size(), &out);
+                if (len == comm::kCodecSkipPackage)
+                    return true;  // 丢包（同框架）
+                if (len == comm::kCodecDisconnect)
+                {
+                    Close();
                     return false;
-                continue;
+                }
+                if (len == comm::kCodecNeedMoreBuffer)
+                {
+                    // out 为所需大小：为 0（内部错误）或不超过现有缓冲仍要求
+                    // 扩容（codec 违约）时放弃，避免无限重试
+                    if (out == 0 || out <= encode_buf_.size() ||
+                        !GrowEncodeBuffer(out))
+                        return false;
+                    continue;
+                }
+                return WriteRaw(encode_buf_.data(), static_cast<uint32_t>(len));
             }
-            return WriteRaw(encode_buf_.data(), static_cast<uint32_t>(len));
+        }
+        catch (const std::bad_alloc &)
+        {
+            return false;  // 编码缓冲扩容失败：本包发送失败
         }
     }
 
@@ -176,12 +184,19 @@ class ShmConnection : public comm::ITcpConnection,
         if (verify_timer_)
             return;
         (void)interval_ms;  // 一次性定时器，不支持重复触发
-        verify_timer_ = loop_->AddOneShotTimer(
+
+        int tfd = 0;
+        ErrorCode ec = loop_->AddOneShotTimer(
             static_cast<int>(expired_ms),
             [this, action = std::move(action)](int, short) mutable {
                 verify_timer_ = 0;  // 定时器已自行移除
                 action(0);
-            });
+            },
+            &tfd);
+        if (ec == ErrorCode::kOk)
+            verify_timer_ = tfd;
+        else
+            Close();  // 无法挂载超时定时器：fail-closed（避免验证永不超时）
     }
 
     /**
@@ -316,8 +331,15 @@ class ShmConnection : public comm::ITcpConnection,
             {
                 // 数据跨环尾：线性化到内部缓冲后再解码
                 uint32_t total = seg1_len + seg2_len;
-                if (staging_.size() < total)
-                    staging_.resize(total);
+                try
+                {
+                    if (staging_.size() < total)
+                        staging_.resize(total);
+                }
+                catch (const std::bad_alloc &)
+                {
+                    return -1;  // 线性化缓冲分配失败：视为不可恢复错误
+                }
                 std::memcpy(staging_.data(), seg1, seg1_len);
                 std::memcpy(staging_.data() + seg1_len, seg2, seg2_len);
                 buf    = reinterpret_cast<const comm::byte *>(staging_.data());
@@ -393,24 +415,32 @@ class ShmConnection : public comm::ITcpConnection,
     {
         if (!codec_)
             return;
-        for (;;)
+        try
         {
-            size_t size = 0;
-            int32_t len = codec_->SendKeepAlive(
-                reinterpret_cast<comm::byte *>(encode_buf_.data()), encode_buf_.size(),
-                &size);
-            if (len > 0)
+            for (;;)
             {
-                WriteRaw(encode_buf_.data(), static_cast<uint32_t>(len));
-                return;
+                size_t size = 0;
+                int32_t len = codec_->SendKeepAlive(
+                    reinterpret_cast<comm::byte *>(encode_buf_.data()),
+                    encode_buf_.size(), &size);
+                if (len > 0)
+                {
+                    WriteRaw(encode_buf_.data(), static_cast<uint32_t>(len));
+                    return;
+                }
+                if (len != comm::kCodecNeedMoreBuffer)
+                    return;  // -1/-2：无法生成响应，放弃
+                // 缓冲不足：扩容后重试。所需大小为 0（内部错误）或不超过现有
+                // 缓冲仍要求扩容（codec 违约）时放弃——绝不能把 encode_buf_ 中
+                // 上一条消息的残留字节当作响应发给对端
+                if (size == 0 || size <= encode_buf_.size() ||
+                    !GrowEncodeBuffer(size))
+                    return;
             }
-            if (len != comm::kCodecNeedMoreBuffer)
-                return;  // -1/-2：无法生成响应，放弃
-            // 缓冲不足：扩容后重试。所需大小为 0（内部错误）或不超过现有
-            // 缓冲仍要求扩容（codec 违约）时放弃——绝不能把 encode_buf_ 中
-            // 上一条消息的残留字节当作响应发给对端
-            if (size == 0 || size <= encode_buf_.size() || !GrowEncodeBuffer(size))
-                return;
+        }
+        catch (const std::bad_alloc &)
+        {
+            // 分配失败：放弃本次心跳响应（不影响连接）
         }
     }
 

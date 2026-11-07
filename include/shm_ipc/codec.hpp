@@ -147,7 +147,9 @@ int SendFrame(RingChannel<Cap> &ch, uint32_t payload_len, uint32_t seq,
         return -1;
     uint32_t frame_size = static_cast<uint32_t>(frame_size64);  // 已 <= Capacity
 
-    auto batch = ch.StartBatch();
+    typename RingChannel<Cap>::ChannelBatchWriter batch;
+    if (ch.StartBatch(&batch) != ErrorCode::kOk)
+        return -1;
 
     MsgHeader hdr{};
     hdr.len = payload_len;

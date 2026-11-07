@@ -31,7 +31,7 @@
 
 #include <any>
 #include <cstdint>
-#include <stdexcept>
+#include <new>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -119,17 +119,36 @@ class ShmAsyncClient : public comm::ITcpAsyncClient
             state_ == comm::TcpClientStates::established)
             return;
 
-        state_ = comm::TcpClientStates::connecting;
+        state_           = comm::TcpClientStates::connecting;
+        last_error_      = ErrorCode::kOk;
+        last_sys_errno_  = 0;
+
+        UniqueFd sock;
+        ErrorCode ec = ConnectUnixSocket(UriToPath(uri), &sock, &last_sys_errno_);
+        if (ec != ErrorCode::kOk)
+        {
+            FailConnect(uri, ec);
+            return;
+        }
+
+        DefaultRingChannel channel;
+        ec = DefaultRingChannel::CreateRingChannel(sock.Get(), ChannelRole::kClient,
+                                                   &channel, &last_sys_errno_);
+        if (ec != ErrorCode::kOk)
+        {
+            FailConnect(uri, ec);
+            return;
+        }
+
+        auto codec = codec_factory_ ? codec_factory_() : nullptr;
+        if (!codec)
+        {
+            FailConnect(uri, ErrorCode::kInvalidArgument);
+            return;
+        }
+
         try
         {
-            auto sock = ConnectUnixSocket(UriToPath(uri).c_str());
-            auto channel = DefaultRingChannel::CreateRingChannel(sock.Get(),
-                                                                 ChannelRole::kClient);
-
-            auto codec = codec_factory_();
-            if (!codec)
-                throw std::runtime_error("shm client codec factory return null");
-
             uint64_t id = 1;
             auto conn   = std::make_shared<ShmConnection>(loop_, id, std::move(sock),
                                                           std::move(channel));
@@ -153,11 +172,16 @@ class ShmAsyncClient : public comm::ITcpAsyncClient
             state_ = comm::TcpClientStates::established;
             conn->OnConnection();
         }
-        catch (const std::exception &)
+        catch (const std::bad_alloc &)
         {
-            state_ = comm::TcpClientStates::close;
-            if (errorcb_)
-                errorcb_(autoreconnect_, std::string(uri));
+            // 分配失败：清理已注册的 fd/连接，按连接失败处理
+            if (conn_)
+            {
+                loop_->RemoveFd(conn_->NotifyFd());
+                loop_->RemoveFd(conn_->SocketFd());
+                conn_.reset();
+            }
+            FailConnect(uri, ErrorCode::kNoMemory);
             // TODO 自动重连（与框架一致，暂未实现）
         }
     }
@@ -196,7 +220,30 @@ class ShmAsyncClient : public comm::ITcpAsyncClient
     /// @brief 当前连接对象（未连接返回 nullptr）
     ShmConnPtr Conn() const { return conn_; }
 
+    /// @brief 最近一次 Connect 的错误码（扩展接口）
+    ErrorCode LastError() const noexcept { return last_error_; }
+
+    /// @brief 最近一次 Connect 失败时的 errno（扩展接口）
+    int LastSysErrno() const noexcept { return last_sys_errno_; }
+
  private:
+    /// @brief 连接失败收尾：记录错误码并触发 error 回调
+    void FailConnect(const std::string_view &uri, ErrorCode ec)
+    {
+        last_error_ = ec;
+        state_      = comm::TcpClientStates::close;
+        if (!errorcb_)
+            return;
+        try
+        {
+            errorcb_(autoreconnect_, std::string(uri));
+        }
+        catch (const std::bad_alloc &)
+        {
+            // 无法构造回调参数字符串：错误码已通过 LastError() 暴露
+        }
+    }
+
     /// @brief eventfd 回调：对端写入新数据，立即消费并解码分发
     void OnNotify(int efd, short /*revents*/)
     {
@@ -258,6 +305,8 @@ class ShmAsyncClient : public comm::ITcpAsyncClient
     comm::codec::CodecFactoryCallback codec_factory_;  ///< codec 工厂
     std::any context_;                 ///< 用户上下文（建连时同步到连接）
     bool autoreconnect_{false};        ///< 自动重连标志（透传给 error 回调）
+    ErrorCode last_error_ = ErrorCode::kOk;  ///< 最近一次 Connect 错误码
+    int last_sys_errno_   = 0;               ///< 最近一次 Connect 的 errno
     uint32_t init_buffer_size_{128 * 1024};    ///< 编码缓冲初始大小（同框架默认）
     uint32_t max_buffer_size_{1024 * 1024};    ///< 编码缓冲上限（同框架默认）
 };

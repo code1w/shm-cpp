@@ -41,6 +41,20 @@ inline void DoNotOptimize(T const &val)
 
 using Channel = shm::DefaultRingChannel;
 
+/// 握手失败直接退出（fork 子进程/父进程均适用）
+Channel CreateChannelOrExit(int fd, shm::ChannelRole role)
+{
+    Channel ch;
+    shm::ErrorCode ec = Channel::CreateRingChannel(fd, role, &ch);
+    if (ec != shm::ErrorCode::kOk)
+    {
+        std::fprintf(stderr, "CreateRingChannel failed: %s\n",
+                     shm::ErrorCodeName(ec));
+        std::_Exit(1);
+    }
+    return ch;
+}
+
 // ---------------------------------------------------------------------------
 // 工具
 // ---------------------------------------------------------------------------
@@ -234,7 +248,7 @@ struct ReadCmd
 
 void RunReader(int socket_fd, int ctrl_fd)
 {
-    auto ch  = Channel::CreateRingChannel(socket_fd, shm::ChannelRole::kServer);
+    auto ch  = CreateChannelOrExit(socket_fd, shm::ChannelRole::kServer);
     auto raw_buf = std::make_unique<char[]>(Channel::max_write_size);
 
     shm::FrameReader<> reader;
@@ -305,7 +319,7 @@ struct RingResult
 
 void RunWriter(int socket_fd, int ctrl_fd)
 {
-    auto ch = Channel::CreateRingChannel(socket_fd, shm::ChannelRole::kClient);
+    auto ch = CreateChannelOrExit(socket_fd, shm::ChannelRole::kClient);
     // payload_with_tag = [tag u32][payload data...]
     uint32_t max_payload_with_tag = shm::kTagSize + Channel::max_write_size;
     auto payload_with_tag = std::make_unique<char[]>(max_payload_with_tag);

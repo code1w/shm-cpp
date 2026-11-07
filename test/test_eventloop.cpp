@@ -24,6 +24,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <utility>
 
 namespace {
 
@@ -34,6 +35,29 @@ namespace {
             std::abort();                                             \
         }                                                             \
     } while (0)
+
+void AddTimerOrAbort(shm::EventLoop &loop, int ms, shm::EventLoop::Callback cb)
+{
+    int tfd = 0;
+    if (loop.AddTimer(ms, std::move(cb), &tfd) != shm::ErrorCode::kOk)
+    {
+        std::fprintf(stderr, "FAIL: AddTimer\n");
+        std::abort();
+    }
+}
+
+void AddOneShotOrAbort(shm::EventLoop &loop, int ms,
+                       shm::EventLoop::Callback cb, int *out = nullptr)
+{
+    int tfd = 0;
+    if (loop.AddOneShotTimer(ms, std::move(cb), &tfd) != shm::ErrorCode::kOk)
+    {
+        std::fprintf(stderr, "FAIL: AddOneShotTimer\n");
+        std::abort();
+    }
+    if (out)
+        *out = tfd;
+}
 
 }  // anonymous namespace
 
@@ -48,7 +72,7 @@ static void TestFdReuseOrdering()
     bool reused_cb_fired = false;
 
     // 看门狗：500ms 后强制停止，修复失效（回调永不触发）时避免测试挂死
-    loop.AddTimer(500, [&](int tfd, short) {
+    AddTimerOrAbort(loop, 500, [&](int tfd, short) {
         shm::EventLoop::DrainTimerfd(tfd);
         loop.Stop();
     });
@@ -83,7 +107,7 @@ static void TestFdReuseOrdering()
     uint64_t one = 1;
     CHECK(::write(efd1, &one, sizeof(one)) == 8, "write efd1");
 
-    loop.Run(100);
+    (void)loop.Run(100);
 
     CHECK(reused_cb_fired, "reused-fd callback never fired");
     std::printf("  PASS: fd reused during dispatch, new entry survives\n\n");
@@ -103,7 +127,7 @@ static void TestSameBatchAddRemove()
     int stale_dispatch = 0;
     bool armed = false;
     int ticks  = 0;
-    loop.AddTimer(20, [&](int tfd, short) {
+    AddTimerOrAbort(loop, 20, [&](int tfd, short) {
         shm::EventLoop::DrainTimerfd(tfd);
         if (++ticks == 1)
         {
@@ -120,8 +144,8 @@ static void TestSameBatchAddRemove()
             ::close(pfd[0]);
         }
     });
-    loop.AddOneShotTimer(300, [&](int, short) { loop.Stop(); });
-    loop.Run();
+    AddOneShotOrAbort(loop, 300, [&](int, short) { loop.Stop(); });
+    (void)loop.Run();
     ::close(pfd[1]);
 
     CHECK(armed, "timer never fired");
@@ -149,18 +173,18 @@ static void TestCancelledTimerSilenced()
         (void)::read(fd, &v, sizeof(v));
         loop.RemoveTimer(timer_fd);
     });
-    timer_fd = loop.AddOneShotTimer(
-        60, [&](int, short) { action_fired = true; });
+    AddOneShotOrAbort(
+        loop, 60, [&](int, short) { action_fired = true; }, &timer_fd);
 
     // t=25ms 的一次性定时器睡过 t=60ms 再点亮 A，
     // 确保 A 与目标定时器（60ms）在同一 poll 批次就绪
-    loop.AddOneShotTimer(25, [&](int, short) {
+    AddOneShotOrAbort(loop, 25, [&](int, short) {
         ::usleep(45 * 1000);
         uint64_t v = 1;
         CHECK(::write(efd, &v, sizeof(v)) == 8, "write efd");
     });
-    loop.AddOneShotTimer(300, [&](int, short) { loop.Stop(); });
-    loop.Run();
+    AddOneShotOrAbort(loop, 300, [&](int, short) { loop.Stop(); });
+    (void)loop.Run();
     ::close(efd);
 
     CHECK(!action_fired, "cancelled timer action still fired");

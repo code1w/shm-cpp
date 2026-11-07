@@ -40,6 +40,7 @@ No test framework — tests use `assert()` and print `=== TEST PASSED ===` on su
 
 ```
 include/shm_ipc/
+  error.hpp           — 统一错误码 ErrorCode + errno 归类（公共 API 不抛显式异常）
   ringbuf.hpp         — Lock-free SPSC byte ring buffer (template, all static methods on raw shm pointer)
   common.hpp          — RAII wrappers (UniqueFd, MmapRegion), fd passing (SCM_RIGHTS), memfd/eventfd creation
   ring_channel.hpp    — Bidirectional channel: two RingBufs + memfd creation + fd exchange handshake + eventfd notify
@@ -113,3 +114,6 @@ Linux system headers plus pthread (`shm_server.hpp` 内部持有握手线程，I
 - BatchWriter 契约收紧 — moved-from 对象拒绝写入；`CommitReserve` 在 release 下也校验"已 Reserve 且长度一致"；`CommitRead`/`RewindTo` 越界时 debug assert、release 钳制
 - SendFd/RecvFd 处理 SOCK_STREAM 短读短写 — SCM_RIGHTS 随首字节送达，剩余固定载荷循环补齐，避免后续握手消息流错位
 - RingBuf::Init 原地构造 RingHeader — 原子对象必须有生命周期起点（不能只对 mmap 原始内存 memset），并校验 64B 对齐
+- 公共 API 不抛显式异常 — 失败返回 `shm::ErrorCode`（`error.hpp`），系统调用 errno 通过可选的 `int* sys_errno` 出参返回；对象生产接口统一用出参（`CreateRingChannel`/`StartBatch`/`CreateMemfd`/`CreateEventfd`/`ListenUnixSocket`/`ConnectUnixSocket`/`SendFd`/`RecvFd`/`AddTimer`/`AddOneShotTimer`）
+- 标准库异常在入口转换 — `std::bad_alloc`→`kNoMemory`、`std::system_error`（线程创建）→`kSystem`，在 ShmServer/ShmAsyncClient/ShmClient/EventLoop 的公共入口 catch；用户回调异常仍按原语义传播（codec 回滚、EventLoop 回收墓碑后 rethrow）
+- `UriToPath` 返回 `std::string_view` — 握手路径不再分配 `std::string`；unlink 走栈缓冲 `UnlinkUnixSocket`

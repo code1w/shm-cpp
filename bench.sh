@@ -65,12 +65,18 @@ median_of() { sort -n | awk '{a[NR]=$1} END {print a[int((NR+1)/2)]}'; }
 # $1=dat 文件  $2=payload  $3=列号（2=msg/s 3=MB/s）→ 该档位中位数
 field_median() { awk -v p="$2" -v c="$3" '$1==p {print $c}' "$1" | median_of; }
 
-# payload 字节数 → 可读标签（64B / 1KB / 1MB）
+# payload 字节数 → 可读标签（64B / 384KB / 1.5MB）
 human_size() {
     awk -v p="$1" 'BEGIN {
-        if (p >= 1048576) printf "%dMB", p/1048576;
-        else if (p >= 1024) printf "%dKB", p/1024;
-        else printf "%dB", p;
+        if (p >= 1048576) {
+            if (p % 1048576 == 0) printf "%dMB", p/1048576;
+            else printf "%.1fMB", p/1048576;
+        } else if (p >= 1024) {
+            if (p % 1024 == 0) printf "%dKB", p/1024;
+            else printf "%.1fKB", p/1024;
+        } else {
+            printf "%dB", p;
+        }
     }'
 }
 

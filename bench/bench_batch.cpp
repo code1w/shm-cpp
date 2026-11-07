@@ -34,6 +34,20 @@ namespace {
 
 using Channel = shm::DefaultRingChannel;
 
+/// 握手失败直接退出（fork 子进程/父进程均适用）
+Channel CreateChannelOrExit(int fd, shm::ChannelRole role)
+{
+    Channel ch;
+    shm::ErrorCode ec = Channel::CreateRingChannel(fd, role, &ch);
+    if (ec != shm::ErrorCode::kOk)
+    {
+        std::fprintf(stderr, "CreateRingChannel failed: %s\n",
+                     shm::ErrorCodeName(ec));
+        std::_Exit(1);
+    }
+    return ch;
+}
+
 /** @brief 返回单调时钟的纳秒时间戳 */
 uint64_t NowNs()
 {
@@ -118,7 +132,9 @@ void WriteBatch(Channel &ch, const char *buf, uint32_t msg_len, int total,
     while (sent < total)
     {
         {
-            auto batch = ch.StartBatch();
+            Channel::ChannelBatchWriter batch;
+            if (ch.StartBatch(&batch) != shm::ErrorCode::kOk)
+                std::_Exit(1);
             for (int n = 0; n < batch_size && sent < total; ++n)
             {
                 if (batch.TryWrite(buf, msg_len) != 0)
@@ -140,7 +156,7 @@ void WriteBatch(Channel &ch, const char *buf, uint32_t msg_len, int total,
  */
 void RunReader(int socket_fd, int ctrl_fd)
 {
-    auto ch  = Channel::CreateRingChannel(socket_fd, shm::ChannelRole::kServer);
+    auto ch  = CreateChannelOrExit(socket_fd, shm::ChannelRole::kServer);
     auto buf = std::make_unique<char[]>(Channel::max_write_size);
 
     for (;;)
@@ -244,7 +260,7 @@ BenchOne(Channel &ch, int ctrl_fd, const TestParam &p, const char *buf)
 
 void RunWriter(int socket_fd, int ctrl_fd)
 {
-    auto ch  = Channel::CreateRingChannel(socket_fd, shm::ChannelRole::kClient);
+    auto ch  = CreateChannelOrExit(socket_fd, shm::ChannelRole::kClient);
     auto buf = std::make_unique<char[]>(Channel::max_write_size);
     std::memset(buf.get(), 'B', Channel::max_write_size);
 

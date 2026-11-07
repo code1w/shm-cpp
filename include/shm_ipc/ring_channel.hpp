@@ -18,10 +18,9 @@
 #include <sys/time.h>
 
 #include <cerrno>
-#include <stdexcept>
-#include <string>
 
 #include "common.hpp"
+#include "error.hpp"
 #include "ringbuf.hpp"
 
 namespace shm {
@@ -71,10 +70,13 @@ struct HandshakeGuard
  *
  * @code
  * {
- *     auto batch = channel.StartBatch();
- *     batch.TryWrite(data1, len1);
- *     batch.TryWrite(data2, len2);
- *     batch.Flush();  // store write_pos + NotifyPeer()
+ *     ChannelBatchWriter batch;
+ *     if (channel.StartBatch(&batch) == ErrorCode::kOk)
+ *     {
+ *         batch.TryWrite(data1, len1);
+ *         batch.TryWrite(data2, len2);
+ *         batch.Flush();  // store write_pos + NotifyPeer()
+ *     }
  * }
  * @endcode
  *
@@ -84,6 +86,9 @@ template <std::size_t Capacity>
 class ChannelBatchWriter
 {
  public:
+    /** @brief 构造惰性写入器（未绑定通道；Flush 不通知） */
+    ChannelBatchWriter() = default;
+
     ChannelBatchWriter(typename RingBuf<Capacity>::BatchWriter &&bw,
                        const RingChannel<Capacity> *ch)
         : batch_(std::move(bw)), channel_(ch) {}
@@ -96,7 +101,19 @@ class ChannelBatchWriter
         o.channel_ = nullptr;
     }
 
-    ChannelBatchWriter &operator=(ChannelBatchWriter &&)      = delete;
+    /** @brief 移动赋值：丢弃目标未发布数据后接管源对象 */
+    ChannelBatchWriter &operator=(ChannelBatchWriter &&o) noexcept
+    {
+        if (this != &o)
+        {
+            batch_.Cancel();
+            batch_     = std::move(o.batch_);
+            channel_   = o.channel_;
+            o.channel_ = nullptr;
+        }
+        return *this;
+    }
+
     ChannelBatchWriter(const ChannelBatchWriter &)            = delete;
     ChannelBatchWriter &operator=(const ChannelBatchWriter &) = delete;
 
@@ -149,7 +166,7 @@ class ChannelBatchWriter
 
  private:
     typename RingBuf<Capacity>::BatchWriter batch_;
-    const RingChannel<Capacity> *channel_;
+    const RingChannel<Capacity> *channel_ = nullptr;
 };
 
 }  // namespace detail
@@ -188,29 +205,55 @@ class RingChannel
      *
      * @param socket_fd 已建立连接的 Unix socket fd
      * @param role      本端角色
-     * @return 初始化完成的 RingChannel
+     * @param out       成功时写入初始化完成的 RingChannel（失败时保持原状）
+     * @param sys_errno 可选：失败时的 errno
+     * @return kOk 成功；kSizeMismatch 对端环尺寸不符；其余见 ErrorCode
      */
     [[nodiscard]]
-    static RingChannel CreateRingChannel(int socket_fd, ChannelRole role)
+    static ErrorCode CreateRingChannel(int socket_fd, ChannelRole role,
+                                       RingChannel *out,
+                                       int *sys_errno = nullptr) noexcept
     {
-        RingChannel ch;
-        detail::HandshakeGuard guard{socket_fd};  // 握手超时，返回/异常时恢复
+        if (!out || socket_fd < 0)
+            return ErrorCode::kInvalidArgument;
 
+        RingChannel ch;
+        detail::HandshakeGuard guard{socket_fd};  // 握手超时，返回时恢复
+
+        ErrorCode ec = ErrorCode::kOk;
         if (role == ChannelRole::kClient)
         {
-            ch.CreateWriteRing("client_to_server");
-            ch.notify_read_efd_ = CreateEventfd();
-            ch.SendLocalFds(socket_fd);  // 先发：memfd_c2s、efd_client
-            ch.RecvPeerFds(socket_fd);   // 后收：memfd_s2c、efd_server
+            ec = ch.CreateWriteRing("client_to_server", sys_errno);
+            if (ec != ErrorCode::kOk)
+                return ec;
+            ec = CreateEventfd(&ch.notify_read_efd_, sys_errno);
+            if (ec != ErrorCode::kOk)
+                return ec;
+            ec = ch.SendLocalFds(socket_fd, sys_errno);  // 先发：memfd_c2s、efd_client
+            if (ec != ErrorCode::kOk)
+                return ec;
+            ec = ch.RecvPeerFds(socket_fd, sys_errno);   // 后收：memfd_s2c、efd_server
+            if (ec != ErrorCode::kOk)
+                return ec;
         }
         else
         {
-            ch.RecvPeerFds(socket_fd);   // 先收：memfd_c2s、efd_client
-            ch.CreateWriteRing("server_to_client");
-            ch.notify_read_efd_ = CreateEventfd();
-            ch.SendLocalFds(socket_fd);  // 后发：memfd_s2c、efd_server
+            ec = ch.RecvPeerFds(socket_fd, sys_errno);   // 先收：memfd_c2s、efd_client
+            if (ec != ErrorCode::kOk)
+                return ec;
+            ec = ch.CreateWriteRing("server_to_client", sys_errno);
+            if (ec != ErrorCode::kOk)
+                return ec;
+            ec = CreateEventfd(&ch.notify_read_efd_, sys_errno);
+            if (ec != ErrorCode::kOk)
+                return ec;
+            ec = ch.SendLocalFds(socket_fd, sys_errno);  // 后发：memfd_s2c、efd_server
+            if (ec != ErrorCode::kOk)
+                return ec;
         }
-        return ch;
+
+        *out = std::move(ch);
+        return ErrorCode::kOk;
     }
 
     // ---- 数据操作 ----
@@ -285,15 +328,19 @@ class RingChannel
 
     /**
      * @brief 创建通道级批量写入器
-     * @return ChannelBatchWriter 实例
+     * @param out 成功时写入写入器（失败时保持原状）
+     * @return kOk 成功；kInvalidArgument 出参为空；kNotInitialized 通道未初始化
      */
     [[nodiscard]]
-    ChannelBatchWriter StartBatch()
+    ErrorCode StartBatch(ChannelBatchWriter *out) noexcept
     {
+        if (!out)
+            return ErrorCode::kInvalidArgument;
         if (!write_region_)
-            throw std::runtime_error("StartBatch on uninitialized RingChannel");
-        return ChannelBatchWriter(
+            return ErrorCode::kNotInitialized;
+        *out = ChannelBatchWriter(
             typename Ring::BatchWriter(write_region_.Get()), this);
+        return ErrorCode::kOk;
     }
 
     // ---- 状态查询 ----
@@ -356,26 +403,39 @@ class RingChannel
 
  private:
     /// @brief 创建写环：memfd + mmap + 清零初始化
-    /// @param name memfd 名称（调试用）
-    void CreateWriteRing(const char *name)
+    /// @param name      memfd 名称（调试用）
+    /// @param sys_errno 可选：失败时的 errno
+    ErrorCode CreateWriteRing(const char *name, int *sys_errno = nullptr) noexcept
     {
-        write_memfd_  = CreateMemfd(name, Ring::shm_size);
-        write_region_ = MmapRegion{write_memfd_.Get(), Ring::shm_size,
-                                   PROT_READ | PROT_WRITE, MAP_SHARED};
+        ErrorCode ec = CreateMemfd(name, Ring::shm_size, &write_memfd_, sys_errno);
+        if (ec != ErrorCode::kOk)
+            return ec;
+        ec = write_region_.Map(write_memfd_.Get(), Ring::shm_size,
+                               PROT_READ | PROT_WRITE, MAP_SHARED, sys_errno);
+        if (ec != ErrorCode::kOk)
+            return ec;
         Ring::Init(write_region_.Get());
+        return ErrorCode::kOk;
     }
 
     /// @brief 发送本端 fd：写环 memfd + "唤醒自身"的 eventfd
-    void SendLocalFds(int socket_fd) const
+    ErrorCode SendLocalFds(int socket_fd, int *sys_errno = nullptr) const noexcept
     {
-        SendFd(socket_fd, write_memfd_.Get(), FdTag::kMemfd);
-        SendFd(socket_fd, notify_read_efd_.Get(), FdTag::kEventfd);
+        ErrorCode ec = SendFd(socket_fd, write_memfd_.Get(), FdTag::kMemfd,
+                              sys_errno);
+        if (ec != ErrorCode::kOk)
+            return ec;
+        return SendFd(socket_fd, notify_read_efd_.Get(), FdTag::kEventfd,
+                      sys_errno);
     }
 
     /// @brief 接收对端 fd：读环 memfd（mmap 挂载）+ "唤醒对端"的 eventfd
-    void RecvPeerFds(int socket_fd)
+    ErrorCode RecvPeerFds(int socket_fd, int *sys_errno = nullptr) noexcept
     {
-        read_memfd_ = RecvFdExpect(socket_fd, FdTag::kMemfd);
+        ErrorCode ec = RecvFdExpect(socket_fd, FdTag::kMemfd, &read_memfd_,
+                                    sys_errno);
+        if (ec != ErrorCode::kOk)
+            return ec;
 
         // 必须先校验对端 memfd 尺寸再 mmap/访问：
         // 两端 Capacity 不一致或对端发送 0 字节/被截断的 memfd 时，
@@ -384,20 +444,22 @@ class RingChannel
         struct stat st{};
         if (::fstat(read_memfd_.Get(), &st) != 0)
         {
-            throw std::runtime_error(std::string("fstat peer memfd: ") +
-                                     std::strerror(errno));
+            if (sys_errno)
+                *sys_errno = errno;
+            return ErrnoToErrorCode(errno);
         }
         if (!S_ISREG(st.st_mode) ||
             st.st_size != static_cast<off_t>(Ring::shm_size))
         {
-            throw std::runtime_error(
-                "peer ring size mismatch: peer=" + std::to_string(st.st_size) +
-                ", local=" + std::to_string(Ring::shm_size));
+            return ErrorCode::kSizeMismatch;
         }
 
-        read_region_ = MmapRegion{read_memfd_.Get(), Ring::shm_size,
-                                  PROT_READ | PROT_WRITE, MAP_SHARED};
-        notify_write_efd_ = RecvFdExpect(socket_fd, FdTag::kEventfd);
+        ec = read_region_.Map(read_memfd_.Get(), Ring::shm_size,
+                              PROT_READ | PROT_WRITE, MAP_SHARED, sys_errno);
+        if (ec != ErrorCode::kOk)
+            return ec;
+        return RecvFdExpect(socket_fd, FdTag::kEventfd, &notify_write_efd_,
+                            sys_errno);
     }
 
     UniqueFd write_memfd_;     ///< 写环对应的 memfd

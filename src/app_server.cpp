@@ -86,7 +86,11 @@ int main()
 
     std::printf("server: listening on %s (max 16 clients)\n",
                 shm::kDefaultSocketPath);
-    loop.Run();
+    if (loop.Run() != shm::ErrorCode::kOk)
+    {
+        std::fprintf(stderr, "server: event loop failed\n");
+        return 1;
+    }
 
     std::printf("server: bye\n");
     return 0;

@@ -34,8 +34,10 @@
 #include <deque>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <thread>
 #include <unordered_map>
 #include <utility>
@@ -44,6 +46,7 @@
 #include <comm/server.h>
 
 #include "common.hpp"
+#include "error.hpp"
 #include "event_loop.hpp"
 #include "shm_connection.hpp"
 
@@ -174,7 +177,7 @@ class ShmServer : public comm::ITcpServer
             conns.push_back(conn);
         for (auto &conn : conns)
             RemoveConn(conn);
-        ::unlink(UriToPath(uri_).c_str());
+        UnlinkUnixSocket(UriToPath(uri_));
     }
 
     // ------------------------------------------------------------------
@@ -230,6 +233,12 @@ class ShmServer : public comm::ITcpServer
     const std::string &Uri() const { return uri_; }
     void ReName(const std::string &name) { name_ = name; }
 
+    /// @brief 最近一次 Start 的错误码（扩展接口）
+    ErrorCode LastError() const noexcept { return last_error_; }
+
+    /// @brief 最近一次 Start 失败时的 errno（扩展接口）
+    int LastSysErrno() const noexcept { return last_sys_errno_; }
+
  private:
     /// @brief 创建监听、握手线程与完成通知 fd，并注册 accept 回调
     bool Listen()
@@ -240,34 +249,78 @@ class ShmServer : public comm::ITcpServer
         if (started_)
             return true;
 
-        try
+        ErrorCode ec = ListenUnixSocket(UriToPath(uri_), &listen_fd_,
+                                        16, &last_sys_errno_);
+        if (ec != ErrorCode::kOk)
+            return FailStart(ec);
+
         {
-            listen_fd_ = ListenUnixSocket(UriToPath(uri_).c_str());
-            {
-                // 支持 Stop 后再次 Start：复位握手线程状态
-                std::lock_guard<std::mutex> lk(hs_mtx_);
-                hs_stopping_ = false;
-            }
-            hs_wake_fd_ = CreateEventfd();
-            hs_thread_  = std::thread([this] { HandshakeWorker(); });
+            // 支持 Stop 后再次 Start：复位握手线程状态
+            std::lock_guard<std::mutex> lk(hs_mtx_);
+            hs_stopping_ = false;
         }
-        catch (const std::exception &e)
+
+        ec = CreateEventfd(&hs_wake_fd_, &last_sys_errno_);
+        if (ec != ErrorCode::kOk)
         {
             listen_fd_.Reset();
-            if (hs_thread_.joinable())
-                hs_thread_.join();
-            if (failedcb_)
-                failedcb_(std::string("listen failed, uri: ") + uri_ + ", " + e.what());
-            return false;
+            return FailStart(ec);
         }
+
+        try
+        {
+            hs_thread_ = std::thread([this] { HandshakeWorker(); });
+        }
+        catch (const std::system_error &e)
+        {
+            listen_fd_.Reset();
+            hs_wake_fd_.Reset();
+            last_sys_errno_ = e.code().value();
+            return FailStart(ErrorCode::kSystem);
+        }
+        catch (const std::bad_alloc &)
+        {
+            listen_fd_.Reset();
+            hs_wake_fd_.Reset();
+            return FailStart(ErrorCode::kNoMemory);
+        }
+
         started_ = true;
-        loop_->AddFd(listen_fd_.Get(),
-                     [this](int fd, short revents) { OnAccept(fd, revents); });
-        loop_->AddFd(hs_wake_fd_.Get(),
-                     [this](int fd, short revents) { OnHandshakeComplete(fd, revents); });
+        try
+        {
+            loop_->AddFd(listen_fd_.Get(),
+                         [this](int fd, short revents) { OnAccept(fd, revents); });
+            loop_->AddFd(hs_wake_fd_.Get(),
+                         [this](int fd, short revents) { OnHandshakeComplete(fd, revents); });
+        }
+        catch (const std::bad_alloc &)
+        {
+            Stop();  // 回滚监听、线程与 fd 注册
+            return FailStart(ErrorCode::kNoMemory);
+        }
+
         if (successcb_)
             successcb_();
         return true;
+    }
+
+    /// @brief 启动失败收尾：记录错误码并按接口约定触发 failed 回调
+    bool FailStart(ErrorCode ec)
+    {
+        last_error_ = ec;
+        if (failedcb_)
+        {
+            try
+            {
+                failedcb_("listen failed, uri: " + uri_ + ", " +
+                          ErrorCodeMessage(ec, last_sys_errno_));
+            }
+            catch (...)
+            {
+                // Start() 为 noexcept 接口：用户回调异常不得穿出
+            }
+        }
+        return false;
     }
 
     /// @brief accept 回调：接受新连接，fd 交给握手线程（不阻塞事件循环）
@@ -312,27 +365,28 @@ class ShmServer : public comm::ITcpServer
             }
 
             DefaultRingChannel channel;
-            bool ok = false;
-            try
-            {
-                channel = DefaultRingChannel::CreateRingChannel(hs_current_.Get(),
-                                                                ChannelRole::kServer);
-                ok      = true;
-            }
-            catch (const std::exception &)
-            {
-                // 握手失败（对端超时、乱发数据或 Stop 的 shutdown 打断）：
-                // fd 与半成品通道由 RAII 释放
-            }
+            // 握手失败（对端超时、乱发数据、尺寸不符或 Stop 的 shutdown
+            // 打断）：fd 与半成品通道由 RAII 释放
+            bool ok = DefaultRingChannel::CreateRingChannel(
+                          hs_current_.Get(), ChannelRole::kServer, &channel) ==
+                      ErrorCode::kOk;
 
             bool notify = false;
             {
                 std::lock_guard<std::mutex> lk(hs_mtx_);
                 if (ok && !hs_stopping_)
                 {
-                    hs_done_.push_back(
-                        HandshakeDone{std::move(hs_current_), std::move(channel)});
-                    notify = true;
+                    try
+                    {
+                        hs_done_.push_back(HandshakeDone{
+                            std::move(hs_current_), std::move(channel)});
+                        notify = true;
+                    }
+                    catch (const std::bad_alloc &)
+                    {
+                        // 工作线程内分配失败：丢弃该连接，继续服务其他连接
+                        notify = false;
+                    }
                 }
                 hs_current_.Reset();
             }
@@ -375,30 +429,37 @@ class ShmServer : public comm::ITcpServer
         if (!codec)
             return;  // codec 工厂返回空（同框架：拒绝该连接）
 
-        uint64_t id = next_id_++;
-        auto conn   = std::make_shared<ShmConnection>(loop_, id, std::move(cfd),
-                                                      std::move(channel));
-        codec->keepalive = keepalive_;
-        codec->conn_id   = id;
-        conn->SetMessageCallback(messagecb_);
-        conn->SetCloseCallback(closecb_);
-        conn->SetConnectionCallback(connectioncb_);
-        conn->SetVerifyCallback(verifycb_);
-        conn->SetCodec(codec);
-        conn->SetKeepAlive(keepalive_);
-        conn->SetConnType(comm::TcpConnType::TcpConn_Task);
-        conn->ResizeBuffer(init_buffer_size_, max_buffer_size_);
+        try
+        {
+            uint64_t id = next_id_++;
+            auto conn   = std::make_shared<ShmConnection>(loop_, id, std::move(cfd),
+                                                          std::move(channel));
+            codec->keepalive = keepalive_;
+            codec->conn_id   = id;
+            conn->SetMessageCallback(messagecb_);
+            conn->SetCloseCallback(closecb_);
+            conn->SetConnectionCallback(connectioncb_);
+            conn->SetVerifyCallback(verifycb_);
+            conn->SetCodec(codec);
+            conn->SetKeepAlive(keepalive_);
+            conn->SetConnType(comm::TcpConnType::TcpConn_Task);
+            conn->ResizeBuffer(init_buffer_size_, max_buffer_size_);
 
-        conns_[id] = conn;
+            conns_[id] = conn;
 
-        // eventfd：对端写入新数据，实时读取
-        loop_->AddFd(conn->NotifyFd(),
-                     [this, id](int fd, short revents) { OnConnNotify(fd, revents, id); });
-        // socket：仅用于断连检测
-        loop_->AddFd(conn->SocketFd(),
-                     [this, id](int fd, short revents) { OnConnSocket(fd, revents, id); });
+            // eventfd：对端写入新数据，实时读取
+            loop_->AddFd(conn->NotifyFd(),
+                         [this, id](int fd, short revents) { OnConnNotify(fd, revents, id); });
+            // socket：仅用于断连检测
+            loop_->AddFd(conn->SocketFd(),
+                         [this, id](int fd, short revents) { OnConnSocket(fd, revents, id); });
 
-        conn->OnConnection();
+            conn->OnConnection();
+        }
+        catch (const std::bad_alloc &)
+        {
+            // 分配失败：丢弃该连接（RAII 关闭 fd/通道）
+        }
     }
 
     /// @brief eventfd 回调：对端写入新数据，立即消费并解码分发
@@ -459,6 +520,8 @@ class ShmServer : public comm::ITcpServer
     uint64_t next_id_ = 1;                            ///< 下一个连接 ID
     int max_clients_ = 16;                            ///< 最大并发客户端数
     bool started_ = false;                            ///< 是否已 Start
+    ErrorCode last_error_ = ErrorCode::kOk;           ///< 最近一次 Start 错误码
+    int last_sys_errno_   = 0;                        ///< 最近一次 Start 的 errno
 
     // ---- 异步握手（后台线程 ↔ 事件循环线程）----
     std::mutex hs_mtx_;                    ///< 保护下方队列与标志

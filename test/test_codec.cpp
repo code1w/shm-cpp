@@ -44,6 +44,21 @@ namespace {
 
 using Channel = shm::DefaultRingChannel;
 
+/// 测试辅助：握手失败直接 abort（fork 子进程/父进程均适用）
+template <typename Ch>
+Ch CreateChannelOrAbort(int fd, shm::ChannelRole role)
+{
+    Ch ch;
+    shm::ErrorCode ec = Ch::CreateRingChannel(fd, role, &ch);
+    if (ec != shm::ErrorCode::kOk)
+    {
+        std::fprintf(stderr, "FAIL: CreateRingChannel: %s\n",
+                     shm::ErrorCodeName(ec));
+        std::abort();
+    }
+    return ch;
+}
+
 constexpr uint32_t kMagicPayloadLen = 2048;
 constexpr char     kFillByte        = 'X';
 constexpr int32_t  kSeq             = 42;
@@ -198,7 +213,7 @@ void TestEncodePodDecodePod()
 
 void RunSenderBasic(int socket_fd)
 {
-    auto ch = Channel::CreateRingChannel(socket_fd, shm::ChannelRole::kServer);
+    auto ch = CreateChannelOrAbort<Channel>(socket_fd, shm::ChannelRole::kServer);
 
     ClientMsg msg = MakeTestMsg();
     if (shm::PodCodec<ClientMsg>::Send(ch, msg, kMsgSeq) != 0)
@@ -217,7 +232,7 @@ void RunSenderBasic(int socket_fd)
 
 void RunReceiverBasic(int socket_fd)
 {
-    auto ch = Channel::CreateRingChannel(socket_fd, shm::ChannelRole::kClient);
+    auto ch = CreateChannelOrAbort<Channel>(socket_fd, shm::ChannelRole::kClient);
     int efd = ch.NotifyReadFd();
 
     shm::FrameReader<> reader;
@@ -269,7 +284,7 @@ void RunReceiverBasic(int socket_fd)
 
 void RunSenderByteByByte(int socket_fd)
 {
-    auto ch = Channel::CreateRingChannel(socket_fd, shm::ChannelRole::kServer);
+    auto ch = CreateChannelOrAbort<Channel>(socket_fd, shm::ChannelRole::kServer);
 
     ClientMsg msg = MakeTestMsg();
 
@@ -303,7 +318,7 @@ void RunSenderByteByByte(int socket_fd)
 
 void RunReceiverByteByByte(int socket_fd)
 {
-    auto ch = Channel::CreateRingChannel(socket_fd, shm::ChannelRole::kClient);
+    auto ch = CreateChannelOrAbort<Channel>(socket_fd, shm::ChannelRole::kClient);
     int efd = ch.NotifyReadFd();
 
     shm::FrameReader<> reader;
@@ -362,7 +377,7 @@ constexpr uint32_t kVarSeq = 555;
 
 void RunSenderVar(int socket_fd)
 {
-    auto ch = Channel::CreateRingChannel(socket_fd, shm::ChannelRole::kServer);
+    auto ch = CreateChannelOrAbort<Channel>(socket_fd, shm::ChannelRole::kServer);
 
     const char *msgs[] = {"short", "medium length message for testing",
                           "a]longer]payload]with]various]characters]0123456789"};
@@ -386,7 +401,7 @@ void RunSenderVar(int socket_fd)
 
 void RunReceiverVar(int socket_fd)
 {
-    auto ch = Channel::CreateRingChannel(socket_fd, shm::ChannelRole::kClient);
+    auto ch = CreateChannelOrAbort<Channel>(socket_fd, shm::ChannelRole::kClient);
     int efd = ch.NotifyReadFd();
 
     shm::FrameReader<> reader;
@@ -515,7 +530,7 @@ void TestTagValidation()
 
 void RunSenderOversized(int socket_fd)
 {
-    auto ch = Channel::CreateRingChannel(socket_fd, shm::ChannelRole::kServer);
+    auto ch = CreateChannelOrAbort<Channel>(socket_fd, shm::ChannelRole::kServer);
 
     // payload 超过 max_write_size（Capacity/2）：必须返回 -1 且不写入任何数据
     std::vector<char> big(Channel::max_write_size + 1, 'B');
@@ -543,7 +558,7 @@ void RunSenderOversized(int socket_fd)
 
 void RunReceiverOversized(int socket_fd)
 {
-    auto ch = Channel::CreateRingChannel(socket_fd, shm::ChannelRole::kClient);
+    auto ch = CreateChannelOrAbort<Channel>(socket_fd, shm::ChannelRole::kClient);
     int efd = ch.NotifyReadFd();
 
     pollfd pfd{};
@@ -587,7 +602,7 @@ constexpr uint32_t kLargePayloadLen = 65536;  // 远大于下面的 BufSize=128
 
 void RunSenderLargeFrame(int socket_fd)
 {
-    auto ch = Channel::CreateRingChannel(socket_fd, shm::ChannelRole::kServer);
+    auto ch = CreateChannelOrAbort<Channel>(socket_fd, shm::ChannelRole::kServer);
 
     std::vector<char> body(kLargePayloadLen, 'L');
     if (shm::Send(ch, body.data(), kLargePayloadLen, 7) != 0)
@@ -604,7 +619,7 @@ void RunSenderLargeFrame(int socket_fd)
 
 void RunReceiverLargeFrame(int socket_fd)
 {
-    auto ch = Channel::CreateRingChannel(socket_fd, shm::ChannelRole::kClient);
+    auto ch = CreateChannelOrAbort<Channel>(socket_fd, shm::ChannelRole::kClient);
     int efd = ch.NotifyReadFd();
 
     pollfd pfd{};
@@ -660,7 +675,7 @@ constexpr uint32_t kPoisonLen = 512;   // 毒帧 payload，跨环尾且 > BufSiz
 
 void RunSenderPoison(int socket_fd)
 {
-    auto ch = SmallChannel::CreateRingChannel(socket_fd, shm::ChannelRole::kServer);
+    auto ch = CreateChannelOrAbort<SmallChannel>(socket_fd, shm::ChannelRole::kServer);
 
     // 阶段 1：两条填充帧把写位置推到环尾附近
     std::vector<char> filler(kFillerLen, 'F');
@@ -695,7 +710,7 @@ void RunSenderPoison(int socket_fd)
 
 void RunReceiverPoison(int socket_fd)
 {
-    auto ch = SmallChannel::CreateRingChannel(socket_fd, shm::ChannelRole::kClient);
+    auto ch = CreateChannelOrAbort<SmallChannel>(socket_fd, shm::ChannelRole::kClient);
     int efd = ch.NotifyReadFd();
     // 显式把回退上限设为 256B（小于毒帧 512B），使 -2 路径可被测试。
     // 默认 MaxBufSize=UINT32_MAX 时同样的帧应成功接收（见 Test 9b）。
@@ -780,7 +795,7 @@ void RunReceiverPoison(int socket_fd)
 
 void RunReceiverWrappedLarge(int socket_fd)
 {
-    auto ch = SmallChannel::CreateRingChannel(socket_fd, shm::ChannelRole::kClient);
+    auto ch = CreateChannelOrAbort<SmallChannel>(socket_fd, shm::ChannelRole::kClient);
     int efd = ch.NotifyReadFd();
     // 默认 MaxBufSize=UINT32_MAX：512B 的跨尾帧必须成功，而不是 -2 丢弃
     shm::FrameReader<128> reader;
@@ -938,7 +953,7 @@ void TestBatchRewindCount()
 
 void RunSenderBadLen(int socket_fd)
 {
-    auto ch = SmallChannel::CreateRingChannel(socket_fd, shm::ChannelRole::kServer);
+    auto ch = CreateChannelOrAbort<SmallChannel>(socket_fd, shm::ChannelRole::kServer);
 
     // 帧头声称 payload 为 0x7FFFFFFF，远超环容量，永远不可能完整到达
     shm::MsgHeader hdr{};
@@ -959,7 +974,7 @@ void RunSenderBadLen(int socket_fd)
 
 void RunReceiverBadLen(int socket_fd)
 {
-    auto ch = SmallChannel::CreateRingChannel(socket_fd, shm::ChannelRole::kClient);
+    auto ch = CreateChannelOrAbort<SmallChannel>(socket_fd, shm::ChannelRole::kClient);
     int efd = ch.NotifyReadFd();
 
     pollfd pfd{};
@@ -996,7 +1011,7 @@ void RunReceiverBadLen(int socket_fd)
 
 void RunSenderMixedTypes(int socket_fd)
 {
-    auto ch = Channel::CreateRingChannel(socket_fd, shm::ChannelRole::kServer);
+    auto ch = CreateChannelOrAbort<Channel>(socket_fd, shm::ChannelRole::kServer);
 
     // 先写一条 Heartbeat 帧（对接收方 PodCodec<ClientMsg> 而言 tag 不匹配），
     // 再写一条正常 ClientMsg 帧，同一批 Flush + 一次通知
@@ -1024,7 +1039,7 @@ void RunSenderMixedTypes(int socket_fd)
 
 void RunReceiverMixedTypes(int socket_fd)
 {
-    auto ch = Channel::CreateRingChannel(socket_fd, shm::ChannelRole::kClient);
+    auto ch = CreateChannelOrAbort<Channel>(socket_fd, shm::ChannelRole::kClient);
     int efd = ch.NotifyReadFd();
 
     pollfd pfd{};
@@ -1079,7 +1094,7 @@ char SplitByte(uint32_t i) { return static_cast<char>(i * 7 + 3); }
 
 void RunSenderSplit(int socket_fd)
 {
-    auto ch = Channel::CreateRingChannel(socket_fd, shm::ChannelRole::kServer);
+    auto ch = CreateChannelOrAbort<Channel>(socket_fd, shm::ChannelRole::kServer);
 
     // 预编码完整帧
     char payload[kSplitPayloadLen];
@@ -1139,7 +1154,7 @@ void RunSenderSplit(int socket_fd)
 
 void RunReceiverSplit(int socket_fd)
 {
-    auto ch = Channel::CreateRingChannel(socket_fd, shm::ChannelRole::kClient);
+    auto ch = CreateChannelOrAbort<Channel>(socket_fd, shm::ChannelRole::kClient);
     shm::FrameReader<> reader;
 
     constexpr uint32_t kFrameSize = shm::kMsgHeaderSize + kSplitPayloadLen;
@@ -1220,7 +1235,7 @@ char StreamMsgByte(int k, uint32_t i)
 
 void RunSenderStream(int socket_fd)
 {
-    auto ch = Channel::CreateRingChannel(socket_fd, shm::ChannelRole::kServer);
+    auto ch = CreateChannelOrAbort<Channel>(socket_fd, shm::ChannelRole::kServer);
 
     // 拼接全部帧为一条字节流
     std::vector<char> stream;
@@ -1268,7 +1283,7 @@ void RunSenderStream(int socket_fd)
 
 void RunReceiverStream(int socket_fd)
 {
-    auto ch = Channel::CreateRingChannel(socket_fd, shm::ChannelRole::kClient);
+    auto ch = CreateChannelOrAbort<Channel>(socket_fd, shm::ChannelRole::kClient);
     int efd = ch.NotifyReadFd();
     shm::FrameReader<> reader;
 
@@ -1337,7 +1352,7 @@ void RunReceiverStream(int socket_fd)
 
 void RunSenderThrow(int socket_fd)
 {
-    auto ch = SmallChannel::CreateRingChannel(socket_fd, shm::ChannelRole::kServer);
+    auto ch = CreateChannelOrAbort<SmallChannel>(socket_fd, shm::ChannelRole::kServer);
 
     char body[32] = {};
     if (shm::Send(ch, body, sizeof(body), 1) != 0)
@@ -1383,7 +1398,7 @@ void RunSenderThrow(int socket_fd)
 
 void RunReceiverThrow(int socket_fd)
 {
-    auto ch = SmallChannel::CreateRingChannel(socket_fd, shm::ChannelRole::kClient);
+    auto ch = CreateChannelOrAbort<SmallChannel>(socket_fd, shm::ChannelRole::kClient);
     int efd = ch.NotifyReadFd();
 
     pollfd pfd{};
@@ -1452,46 +1467,32 @@ void RunReceiverThrow(int socket_fd)
 
 void RunSenderCapMismatch(int socket_fd)
 {
-    bool rejected = false;
-    try
-    {
-        auto ch = shm::RingChannel<4096>::CreateRingChannel(
-            socket_fd, shm::ChannelRole::kServer);
-        (void)ch;
-    }
-    catch (const std::exception &e)
-    {
-        rejected = true;
-        std::printf("sender(mismatch): rejected as expected: %s\n", e.what());
-    }
-    if (!rejected)
+    shm::RingChannel<4096> ch;
+    shm::ErrorCode ec = shm::RingChannel<4096>::CreateRingChannel(
+        socket_fd, shm::ChannelRole::kServer, &ch);
+    if (ec == shm::ErrorCode::kOk)
     {
         std::fprintf(stderr, "FAIL: 4096 side accepted 8192 peer ring\n");
         std::abort();
     }
+    std::printf("sender(mismatch): rejected as expected: %s\n",
+                shm::ErrorCodeName(ec));
     ::close(socket_fd);
     std::_Exit(0);
 }
 
 void RunReceiverCapMismatch(int socket_fd)
 {
-    bool rejected = false;
-    try
-    {
-        auto ch = shm::RingChannel<8192>::CreateRingChannel(
-            socket_fd, shm::ChannelRole::kClient);
-        (void)ch;
-    }
-    catch (const std::exception &e)
-    {
-        rejected = true;
-        std::printf("receiver(mismatch): rejected as expected: %s\n", e.what());
-    }
-    if (!rejected)
+    shm::RingChannel<8192> ch;
+    shm::ErrorCode ec = shm::RingChannel<8192>::CreateRingChannel(
+        socket_fd, shm::ChannelRole::kClient, &ch);
+    if (ec == shm::ErrorCode::kOk)
     {
         std::fprintf(stderr, "FAIL: 8192 side accepted 4096 peer ring\n");
         std::abort();
     }
+    std::printf("receiver(mismatch): rejected as expected: %s\n",
+                shm::ErrorCodeName(ec));
     std::printf("  PASS: capacity mismatch rejected during handshake\n");
     ::close(socket_fd);
 }

@@ -24,6 +24,20 @@ namespace {
 
 using Channel = shm::DefaultRingChannel;
 
+/// 握手失败直接退出（fork 子进程/父进程均适用）
+Channel CreateChannelOrExit(int fd, shm::ChannelRole role)
+{
+    Channel ch;
+    shm::ErrorCode ec = Channel::CreateRingChannel(fd, role, &ch);
+    if (ec != shm::ErrorCode::kOk)
+    {
+        std::fprintf(stderr, "CreateRingChannel failed: %s\n",
+                     shm::ErrorCodeName(ec));
+        std::_Exit(1);
+    }
+    return ch;
+}
+
 /** @brief 返回单调时钟的纳秒时间戳 */
 uint64_t NowNs()
 {
@@ -40,12 +54,17 @@ struct TestCase
     int         rounds;   ///< 测试轮次
 };
 
-constexpr std::array<TestCase, 6> kTests = {{
+constexpr std::array<TestCase, 11> kTests = {{
     {     64, 100000},
+    {    128, 100000},
     {    256, 100000},
+    {    512,  75000},
     {   1024,  50000},
+    {   2048,  50000},
     {   4096,  50000},
+    {  16384,  20000},
     {  65536,  10000},
+    { 262144,   7000},
     { 524288,   5000},
 }};
 
@@ -57,7 +76,7 @@ constexpr int kWarmup = 1000; ///< 预热轮次
  */
 void RunServer(int socket_fd)
 {
-    auto channel = Channel::CreateRingChannel(socket_fd, shm::ChannelRole::kServer);
+    auto channel = CreateChannelOrExit(socket_fd, shm::ChannelRole::kServer);
     auto buf     = std::make_unique<char[]>(Channel::max_write_size);
 
     for (auto& tc : kTests)
@@ -88,7 +107,7 @@ void RunServer(int socket_fd)
  */
 void RunClient(int socket_fd)
 {
-    auto channel  = Channel::CreateRingChannel(socket_fd, shm::ChannelRole::kClient);
+    auto channel  = CreateChannelOrExit(socket_fd, shm::ChannelRole::kClient);
     auto send_buf = std::make_unique<char[]>(Channel::max_write_size);
     auto recv_buf = std::make_unique<char[]>(Channel::max_write_size);
     std::memset(send_buf.get(), 'B', Channel::max_write_size);

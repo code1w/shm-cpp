@@ -27,11 +27,11 @@
 #include <cstring>
 #include <deque>
 #include <functional>
-#include <stdexcept>
-#include <string>
+#include <new>
 #include <vector>
 
 #include "common.hpp"
+#include "error.hpp"
 
 namespace shm {
 
@@ -85,46 +85,104 @@ class EventLoop
      * 调用方无需自行关闭 fd，EventLoop 持有其所有权。
      * @param interval_ms 定时间隔（毫秒）
      * @param cb          定时器触发时的回调
-     * @return timerfd 文件描述符
+     * @param out_tfd     成功时写入 timerfd
+     * @param sys_errno   可选：失败时的 errno
+     * @return kOk 成功；kNoMemory 回调注册分配失败；其余见 ErrorCode
      */
-    int AddTimer(int interval_ms, Callback cb)
+    [[nodiscard]]
+    ErrorCode AddTimer(int interval_ms, Callback cb, int *out_tfd,
+                       int *sys_errno = nullptr)
     {
-        int tfd = CreateTimerfd(interval_ms, interval_ms);
-        owned_timerfds_.emplace_back(tfd);
-        AddFd(tfd, std::move(cb));
-        return tfd;
+        if (!out_tfd)
+            return ErrorCode::kInvalidArgument;
+
+        int tfd = -1;
+        ErrorCode ec = CreateTimerfd(interval_ms, interval_ms, &tfd, sys_errno);
+        if (ec != ErrorCode::kOk)
+            return ec;
+
+        try
+        {
+            owned_timerfds_.emplace_back(tfd);
+        }
+        catch (const std::bad_alloc &)
+        {
+            ::close(tfd);  // 尚未被 UniqueFd 接管
+            return ErrorCode::kNoMemory;
+        }
+        try
+        {
+            AddFd(tfd, std::move(cb));
+        }
+        catch (const std::bad_alloc &)
+        {
+            CloseOwnedTimer(tfd);
+            return ErrorCode::kNoMemory;
+        }
+
+        *out_tfd = tfd;
+        return ErrorCode::kOk;
     }
 
     /**
      * @brief 创建一次性定时器，触发后自动从事件循环移除并关闭 fd
      *
-     * @param delay_ms 延迟（毫秒），<=0 视为立即触发
-     * @param cb       触发时的回调
-     * @return timerfd 文件描述符（触发前可用 RemoveTimer 取消，
-     *         取消后回调保证不再触发）
+     * @param delay_ms  延迟（毫秒），<=0 视为立即触发
+     * @param cb        触发时的回调
+     * @param out_tfd   成功时写入 timerfd（触发前可用 RemoveTimer 取消，
+     *                  取消后回调保证不再触发）
+     * @param sys_errno 可选：失败时的 errno
      */
-    int AddOneShotTimer(int delay_ms, Callback cb)
+    [[nodiscard]]
+    ErrorCode AddOneShotTimer(int delay_ms, Callback cb, int *out_tfd,
+                              int *sys_errno = nullptr)
     {
-        int tfd = CreateTimerfd(delay_ms, 0);
-        owned_timerfds_.emplace_back(tfd);
-        AddFd(tfd, [this, tfd, cb = std::move(cb)](int fd, short revents) {
-            DrainTimerfd(fd);
-            // 先打墓碑（本轮不再补触发），但延迟 close：回调拿到的 fd
-            // 仍有效（旧实现先 RemoveTimer 关闭 fd 再回调，回调内
-            // fstat/read 该 fd 会 EBADF）
-            RemoveFd(tfd);
-            try
-            {
-                cb(fd, revents);
-            }
-            catch (...)
-            {
+        if (!out_tfd)
+            return ErrorCode::kInvalidArgument;
+
+        int tfd = -1;
+        ErrorCode ec = CreateTimerfd(delay_ms, 0, &tfd, sys_errno);
+        if (ec != ErrorCode::kOk)
+            return ec;
+
+        try
+        {
+            owned_timerfds_.emplace_back(tfd);
+        }
+        catch (const std::bad_alloc &)
+        {
+            ::close(tfd);  // 尚未被 UniqueFd 接管
+            return ErrorCode::kNoMemory;
+        }
+
+        try
+        {
+            AddFd(tfd, [this, tfd, cb = std::move(cb)](int fd, short revents) {
+                DrainTimerfd(fd);
+                // 先打墓碑（本轮不再补触发），但延迟 close：回调拿到的 fd
+                // 仍有效（旧实现先 RemoveTimer 关闭 fd 再回调，回调内
+                // fstat/read 该 fd 会 EBADF）
+                RemoveFd(tfd);
+                try
+                {
+                    cb(fd, revents);
+                }
+                catch (...)
+                {
+                    CloseOwnedTimer(tfd);
+                    throw;
+                }
                 CloseOwnedTimer(tfd);
-                throw;
-            }
+            });
+        }
+        catch (const std::bad_alloc &)
+        {
             CloseOwnedTimer(tfd);
-        });
-        return tfd;
+            return ErrorCode::kNoMemory;
+        }
+
+        *out_tfd = tfd;
+        return ErrorCode::kOk;
     }
 
     /**
@@ -144,8 +202,12 @@ class EventLoop
     /**
      * @brief 运行事件循环，直到 Stop() 被调用
      * @param poll_timeout_ms poll 超时（毫秒），-1 表示阻塞等待
+     * @param sys_errno       可选：poll 失败时的 errno
+     * @return kOk 正常停止；kNoMemory 构建 pollfd 数组失败；
+     *         kSystem/kTimeout poll 失败；用户回调异常仍向外传播
      */
-    void Run(int poll_timeout_ms = 500)
+    [[nodiscard]]
+    ErrorCode Run(int poll_timeout_ms = 500, int *sys_errno = nullptr)
     {
         running_.store(true, std::memory_order_relaxed);
         while (running_.load(std::memory_order_relaxed))
@@ -153,14 +215,22 @@ class EventLoop
             // 构建 pollfd 数组（跳过墓碑条目；idx 记录 pfds → entries 下标映射）
             std::vector<pollfd> pfds;
             std::vector<std::size_t> idx;
-            pfds.reserve(entries_.size());
-            idx.reserve(entries_.size());
-            for (std::size_t k = 0; k < entries_.size(); ++k)
+            try
             {
-                if (entries_[k].dead)
-                    continue;
-                pfds.push_back({entries_[k].fd, entries_[k].events, 0});
-                idx.push_back(k);
+                pfds.reserve(entries_.size());
+                idx.reserve(entries_.size());
+                for (std::size_t k = 0; k < entries_.size(); ++k)
+                {
+                    if (entries_[k].dead)
+                        continue;
+                    pfds.push_back({entries_[k].fd, entries_[k].events, 0});
+                    idx.push_back(k);
+                }
+            }
+            catch (const std::bad_alloc &)
+            {
+                running_.store(false, std::memory_order_relaxed);
+                return ErrorCode::kNoMemory;
             }
 
             int ret = ::poll(pfds.data(), static_cast<nfds_t>(pfds.size()),
@@ -169,7 +239,10 @@ class EventLoop
             {
                 if (errno == EINTR)
                     continue;
-                throw std::runtime_error(std::string("poll: ") + std::strerror(errno));
+                if (sys_errno)
+                    *sys_errno = errno;
+                running_.store(false, std::memory_order_relaxed);
+                return ErrnoToErrorCode(errno);
             }
 
             // 分发事件。分发期间 AddFd 只追加（deque 追加不失效既有元素引用）、
@@ -184,9 +257,16 @@ class EventLoop
                         e.cb(pfds[i].fd, pfds[i].revents);
                 }
             }
+            catch (const std::bad_alloc &)
+            {
+                // 回调内部（如 AddFd）分配失败：回收墓碑后转错误码
+                CompactDead();
+                running_.store(false, std::memory_order_relaxed);
+                return ErrorCode::kNoMemory;
+            }
             catch (...)
             {
-                // 回调抛异常也先回收墓碑，保持状态一致，随后向外传播
+                // 用户回调抛异常也先回收墓碑，保持状态一致，随后向外传播
                 CompactDead();
                 throw;
             }
@@ -194,6 +274,7 @@ class EventLoop
             // 回收墓碑条目
             CompactDead();
         }
+        return ErrorCode::kOk;
     }
 
     /** @brief 停止事件循环（线程安全、信号安全） */
@@ -217,13 +298,22 @@ class EventLoop
  private:
     /**
      * @brief 创建 timerfd（initial_ms 后首次触发，interval_ms 为 0 表示一次性）
+     * @param out_fd 成功时写入 timerfd
      */
-    static int CreateTimerfd(int initial_ms, int interval_ms)
+    [[nodiscard]]
+    static ErrorCode CreateTimerfd(int initial_ms, int interval_ms,
+                                   int *out_fd, int *sys_errno) noexcept
     {
+        if (!out_fd)
+            return ErrorCode::kInvalidArgument;
+
         int tfd = ::timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC);
         if (tfd < 0)
-            throw std::runtime_error(std::string("timerfd_create: ") +
-                                     std::strerror(errno));
+        {
+            if (sys_errno)
+                *sys_errno = errno;
+            return ErrnoToErrorCode(errno);
+        }
 
         itimerspec ts{};
         // it_value 全零会被内核解释为"解除定时"（永不触发）：
@@ -246,11 +336,14 @@ class EventLoop
 
         if (::timerfd_settime(tfd, 0, &ts, nullptr) < 0)
         {
+            const int err = errno;
             ::close(tfd);
-            throw std::runtime_error(std::string("timerfd_settime: ") +
-                                     std::strerror(errno));
+            if (sys_errno)
+                *sys_errno = err;
+            return ErrnoToErrorCode(err);
         }
-        return tfd;
+        *out_fd = tfd;
+        return ErrorCode::kOk;
     }
 
     /** @brief fd 监听条目 */
