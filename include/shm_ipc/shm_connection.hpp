@@ -99,6 +99,47 @@ class ShmConnection : public comm::ITcpConnection,
 
         try
         {
+            // 快速路径：codec 能报告精确编码长度时，直接在 ring 中预留
+            // 空间并编码，把 "any → encode_buf_ → ring" 两次拷贝降为一次。
+            // 小消息继续走 encode_buf_（缓存命中，避免 Reserve/Commit 开销）。
+            const int32_t need = codec_->EncodedSize(pkg);
+            if (need >= static_cast<int32_t>(kDirectEncodeMinBytes) &&
+                static_cast<uint32_t>(need) <= DefaultRingChannel::max_write_size)
+            {
+                DefaultRingChannel::ChannelBatchWriter batch;
+                if (channel_.StartBatch(&batch) == ErrorCode::kOk)
+                {
+                    char *dst = batch.Reserve(static_cast<uint32_t>(need));
+                    if (!dst)
+                        return false;  // 环空间不足（与 WriteRaw 预检一致）
+
+                    size_t  out = 0;
+                    int32_t len = codec_->Encode(
+                        pkg, reinterpret_cast<comm::byte *>(dst),
+                        static_cast<size_t>(need), &out);
+                    if (len == need)
+                    {
+                        batch.CommitReserve(static_cast<uint32_t>(len));
+                        batch.FlushNoNotify();  // 通知由下方策略统一处理
+                        if (defer_notify_)
+                            notify_pending_ = true;
+                        else
+                            channel_.NotifyPeer();
+                        return true;
+                    }
+
+                    // 预留不足/长度不符：回滚后走原有 encode_buf_ 路径
+                    batch.Cancel();
+                    if (len == comm::kCodecSkipPackage)
+                        return true;
+                    if (len == comm::kCodecDisconnect)
+                    {
+                        Close();
+                        return false;
+                    }
+                }
+            }
+
             for (;;)
             {
                 size_t out  = 0;
@@ -139,6 +180,8 @@ class ShmConnection : public comm::ITcpConnection,
      */
     void Close() override
     {
+        // 关闭前把延迟通知发出去，避免已写入环中的数据静默滞留
+        FlushNotify();
         if (state_ == comm::TcpConnStates::established ||
             state_ == comm::TcpConnStates::verifing)
         {
@@ -239,6 +282,26 @@ class ShmConnection : public comm::ITcpConnection,
     /// @brief 访问底层通道（批量写入等高级用法）
     DefaultRingChannel &Channel() noexcept { return channel_; }
 
+    /**
+     * @brief 开启/关闭延迟通知（由 owner 在注册 post-dispatch 钩子后开启）
+     *
+     * 开启后，SendCmd 在事件循环分发批次内只标记 pending，由 owner 在
+     * 批次结束时调用 FlushNotify() 合并为一次 eventfd 通知。首条消息
+     * 的延迟上限为"当前分发批次剩余时间"，不会跨越 poll 等待。
+     */
+    void SetDeferNotify(bool on) noexcept { defer_notify_ = on; }
+
+    /**
+     * @brief 立即发送待处理的合并通知（幂等；无线程安全问题）
+     */
+    void FlushNotify() noexcept
+    {
+        if (!notify_pending_)
+            return;
+        notify_pending_ = false;
+        channel_.NotifyPeer();
+    }
+
     // ------------------------------------------------------------------
     // owner 驱动接口（ShmServer / ShmAsyncClient 调用，应用层勿直接调用）
     // ------------------------------------------------------------------
@@ -291,6 +354,7 @@ class ShmConnection : public comm::ITcpConnection,
      */
     void OnClose()
     {
+        FlushNotify();
         if (state_ != comm::TcpConnStates::closeed)
         {
             state_ = comm::TcpConnStates::closeed;
@@ -317,6 +381,10 @@ class ShmConnection : public comm::ITcpConnection,
         if (!codec_)
             return -1;
         int count = 0;
+        // 跨消息复用同一个 std::any：同类型消息解码时原地覆盖，避免
+        // 每条消息重新分配（大对象收益明显）。回调只在本次调用期间有效。
+        std::any pkg;
+
         for (;;)
         {
             const void *seg1     = nullptr;
@@ -327,55 +395,140 @@ class ShmConnection : public comm::ITcpConnection,
 
             const comm::byte *buf = static_cast<const comm::byte *>(seg1);
             uint32_t buflen       = seg1_len;
+            bool     partial_view = false;
+
             if (seg2_len > 0)
             {
-                // 数据跨环尾：线性化到内部缓冲后再解码
-                uint32_t total = seg1_len + seg2_len;
-                try
+                // 数据跨环尾：只线性化"当前帧"而不是全部可读数据。
+                // 先探测首帧大小；codec 未报告时退化为线性化全部。
+                const uint32_t total = seg1_len + seg2_len;
+                uint32_t want        = total;
+
+                size_t need = 0;
+                int32_t rc  = codec_->Decode(
+                    static_cast<const comm::byte *>(seg1), seg1_len, pkg, &need);
+                if (rc == comm::kCodecDisconnect)
+                    return -1;
+                if (rc > 0)
+                    want = static_cast<uint32_t>(rc);  // 首帧完全在 seg1
+                else if (rc == comm::kCodecSkipPackage && need > 0 &&
+                         need <= seg1_len)
+                    want = static_cast<uint32_t>(need);  // 心跳消费长度
+                else if (rc == comm::kCodecNeedMoreBuffer && need > seg1_len &&
+                         need <= total)
+                    want = static_cast<uint32_t>(need);  // 首帧跨尾，按需复制
+                // 其他情况（codec 未报告 need 等）退化为 total
+
+                if (want > total)
+                    want = total;
+
+                // 拷贝 want 字节；若 codec 需要更多（例如 seg1 连 tag 都不完整），
+                // 按它报告的 need 再增长，最多 3 次，避免死循环
+                for (int attempt = 0; attempt < 3; ++attempt)
                 {
-                    if (staging_.size() < total)
-                        staging_.resize(total);
+                    try
+                    {
+                        if (staging_.size() < want)
+                            staging_.resize(want);
+                    }
+                    catch (const std::bad_alloc &)
+                    {
+                        return -1;  // 线性化缓冲分配失败
+                    }
+                    // want 可能小于 seg1_len（只复制首帧），必须按
+                    // min(seg1_len, want) 截断，否则会越界写 staging_
+                    const uint32_t first =
+                        (seg1_len < want) ? seg1_len : want;
+                    std::memcpy(staging_.data(), seg1, first);
+                    if (want > first)
+                        std::memcpy(staging_.data() + first, seg2,
+                                    want - first);
+
+                    size_t more = 0;
+                    int32_t probe2 = codec_->Decode(
+                        reinterpret_cast<const comm::byte *>(staging_.data()),
+                        want, pkg, &more);
+                    if (probe2 == comm::kCodecNeedMoreBuffer &&
+                        more > want && more <= total)
+                    {
+                        want = static_cast<uint32_t>(more);
+                        continue;
+                    }
+                    break;
                 }
-                catch (const std::bad_alloc &)
-                {
-                    return -1;  // 线性化缓冲分配失败：视为不可恢复错误
-                }
-                std::memcpy(staging_.data(), seg1, seg1_len);
-                std::memcpy(staging_.data() + seg1_len, seg2, seg2_len);
-                buf    = reinterpret_cast<const comm::byte *>(staging_.data());
-                buflen = total;
+
+                buf          = reinterpret_cast<const comm::byte *>(staging_.data());
+                buflen       = want;
+                partial_view = (want < total);
             }
 
-            std::any pkg;
-            size_t out  = 0;
-            int32_t len = codec_->Decode(buf, buflen, pkg, &out);
-            if (len == comm::kCodecDisconnect)
-                return -1;
-            if (len == comm::kCodecNeedMoreBuffer)
-                break;  // 数据不完整，等待对端续写
-            if (len == comm::kCodecSkipPackage)
+            // 在连续视图上批量解码：整个批次只 CommitRead 一次
+            uint32_t off = 0;
+            for (;;)
             {
-                // 解码方向的 -2：心跳包，out 为消费字节数
-                if (out == 0 || out > buflen)
-                    return -1;  // 防御：非法消耗长度
-                channel_.CommitRead(static_cast<uint32_t>(out));
-                if (keepalive_)
-                    SendKeepaliveResponse();
-                continue;
+                size_t out  = 0;
+                int32_t len = codec_->Decode(buf + off, buflen - off, pkg, &out);
+                if (len == comm::kCodecDisconnect)
+                {
+                    if (off)
+                        channel_.CommitRead(off);
+                    return -1;
+                }
+                if (len == comm::kCodecNeedMoreBuffer)
+                    break;  // 数据不完整，等待对端续写
+                if (len == comm::kCodecSkipPackage)
+                {
+                    // 解码方向的 -2：心跳包，out 为消费字节数
+                    if (out == 0 || out > buflen - off)
+                    {
+                        if (off)
+                            channel_.CommitRead(off);
+                        return -1;  // 防御：非法消耗长度
+                    }
+                    off += static_cast<uint32_t>(out);
+                    if (keepalive_)
+                        SendKeepaliveResponse();
+                    if (off == buflen)
+                        break;
+                    continue;
+                }
+                if (len < 0)
+                {
+                    if (off)
+                        channel_.CommitRead(off);
+                    return -1;  // 未知负值同样视为协议错误
+                }
+                // len > 0：成功解码一包
+                if (static_cast<uint32_t>(len) > buflen - off)
+                {
+                    if (off)
+                        channel_.CommitRead(off);
+                    return -1;  // 防御：codec 消耗长度越界
+                }
+                off += static_cast<uint32_t>(len);
+                OnMessage(pkg);
+                ++count;
+                if (off == buflen)
+                    break;
             }
-            if (len < 0)
-                return -1;  // 未知负值同样视为协议错误
-            // len > 0：成功解码一包
-            if (static_cast<uint32_t>(len) > buflen)
-                return -1;  // 防御：codec 消耗长度越界
-            channel_.CommitRead(static_cast<uint32_t>(len));
-            OnMessage(pkg);
-            ++count;
+
+            if (off > 0)
+                channel_.CommitRead(off);
+
+            if (off == 0)
+                break;  // 没有进展：等待更多数据/通知
+
+            if (partial_view || off < buflen)
+                continue;  // 还有数据（或未完整帧）跨尾，重新 Peek
+            // off == buflen 且整段已消费：继续 Peek 下一批
         }
         return count;
     }
 
  private:
+    /// @brief 启用"直接写 ring"的最小编码长度（小消息留在 encode_buf_）
+    static constexpr uint32_t kDirectEncodeMinBytes = 256;
+
     /// @brief 编码缓冲按需扩容，超过上限返回 false
     bool GrowEncodeBuffer(size_t need)
     {
@@ -406,7 +559,10 @@ class ShmConnection : public comm::ITcpConnection,
             p += chunk;
             left -= chunk;
         }
-        channel_.NotifyPeer();
+        if (defer_notify_)
+            notify_pending_ = true;  // 由 owner 的 post-dispatch 钩子合并发出
+        else
+            channel_.NotifyPeer();
         return true;
     }
 
@@ -469,6 +625,8 @@ class ShmConnection : public comm::ITcpConnection,
     comm::CloseType close_type_{comm::CloseType::Passive};    ///< 关闭类型
     comm::TcpConnType conntype_{comm::TcpConnType::Unknown};  ///< 连接类型
     bool keepalive_{false};          ///< 是否自动响应心跳包
+    bool defer_notify_{false};       ///< 是否把通知延迟到事件循环批次末尾
+    bool notify_pending_{false};     ///< 是否存在待发送的合并通知
     std::vector<char> encode_buf_;   ///< 编码缓冲区
     std::vector<char> staging_;      ///< 跨环尾解码线性化缓冲（惰性分配）
     size_t max_buffer_size_ = 1024 * 1024;  ///< 编码缓冲上限

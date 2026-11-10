@@ -1,0 +1,40 @@
+running 4 codec ring benchmarks, 3 repeats ...
+  payload=   64B  raw=     65 ns  Send=    912 ns  SendPod=    977 ns
+  payload=  256B  raw=    197 ns  Send=    915 ns  SendPod=    981 ns
+  payload= 1024B  raw=    266 ns  Send=    860 ns  SendPod=    995 ns
+  payload= 4096B  raw=    954 ns  Send=   1091 ns  SendPod=      0 ns
+=== Bench 1 & 2: Encode/Decode in-memory ===
+
+     payload     rounds   Encode(ns)   Decode(ns)  EncodePod(ns)  DecodePod(ns)
+          64     500000         13.2          2.9           62.7           65.0
+         256     500000         12.0          1.0           62.5           50.2
+        1024     200000         12.6          1.0           44.6           61.9
+        4096     100000         57.3          1.1              -              -
+       65536      20000       1487.2          1.1              -              -
+
+=== Bench 3 & 4 & 5: Send/SendPod + FrameReader cross-process ===
+
+### 每次操作平均延迟
+
+     payload     rounds      raw(ns)     Send(ns)    SendPod(ns)   overhead(ns)
+          64     500000           65          912            977            847
+         256     500000          197          915            981            718
+        1024     200000          266          860            995            593
+        4096      50000          954         1091              -            137
+
+### 吞吐量
+
+     payload      raw(MB/s)     Send(MB/s)  SendPod(MB/s)
+          64           1110             79           4017
+         256           1296            279           4002
+        1024           3709           1149           3944
+        4096           4107           3590              -
+
+### Codec 开销占比（Send vs 裸 TryWrite）
+
+     payload        raw(ns)       Send(ns)     overhead%%
+          64             65            912        1297.4%
+         256            197            915         364.0%
+        1024            266            860         222.7%
+        4096            954           1091          14.4%
+

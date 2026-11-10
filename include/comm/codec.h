@@ -54,6 +54,16 @@ class Codec
         return 0;
     }
 
+    /**
+     * @brief 预估编码后的字节数（可选优化钩子）
+     *
+     * 返回 >0 时，传输层可据此直接在 ring 中预留精确空间并调用
+     * Encode()，避免"先编码到中间缓冲、再拷贝到 ring"的双拷贝。
+     * 返回 -1 表示未知（默认），传输层走原有缓冲路径。
+     * 返回值必须与实际 Encode() 成功时的返回值一致。
+     */
+    virtual int32_t EncodedSize(const std::any & /*pkg*/) const { return -1; }
+
     /// @brief 生成心跳响应包写入 buf，返回写入字节数
     virtual int32_t SendKeepAlive(byte * /*buf*/, size_t /*buflen*/,
                                   size_t * /*size*/)

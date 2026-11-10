@@ -117,3 +117,10 @@ Linux system headers plus pthread (`shm_server.hpp` 内部持有握手线程，I
 - 公共 API 不抛显式异常 — 失败返回 `shm::ErrorCode`（`error.hpp`），系统调用 errno 通过可选的 `int* sys_errno` 出参返回；对象生产接口统一用出参（`CreateRingChannel`/`StartBatch`/`CreateMemfd`/`CreateEventfd`/`ListenUnixSocket`/`ConnectUnixSocket`/`SendFd`/`RecvFd`/`AddTimer`/`AddOneShotTimer`）
 - 标准库异常在入口转换 — `std::bad_alloc`→`kNoMemory`、`std::system_error`（线程创建）→`kSystem`，在 ShmServer/ShmAsyncClient/ShmClient/EventLoop 的公共入口 catch；用户回调异常仍按原语义传播（codec 回滚、EventLoop 回收墓碑后 rethrow）
 - `UriToPath` 返回 `std::string_view` — 握手路径不再分配 `std::string`；unlink 走栈缓冲 `UnlinkUnixSocket`
+- 数据区页对齐 + 镜像映射 — `kRingDataOffset=4096`，`RingChannel` 通过 `MmapRegion::MapMirrored` 把数据区连续映射两圈；跨环尾读写单次 memcpy、`Peek` 永远单段。镜像失败时自动退化为普通映射，两段路径保持可用
+- 通知合并可选 — `ShmServer/ShmAsyncClient::SetDeferredNotify(true)` 后，同一事件循环分发批次内的多次 `SendCmd` 合并为一次 eventfd（默认关闭，保持逐条通知的低延迟语义）
+- `ShmClient::PeekMessage/CommitMessage` — 同步客户端的零拷贝读取；指针在 Commit/下一次 Peek/Close 前有效
+- `SimplePodCodec` 热路径 — 扁平注册表 + 普通函数指针，避免 `unordered_map`×2 + `std::function`；`Decode` 在数据不足时通过 `size` 出参报告当前帧所需长度
+- 同类型消息复用 `std::any` — `Decode` 写入已有 any（同类型原地覆盖）；`ShmConnection::DrainRing` 在整个 drain 中复用同一个 any，避免每条消息构造/析构与堆分配（大对象受益；回调内引用不得外存）
+- `SendCmd` 直写 ring — `comm::codec::Codec::EncodedSize` 报告精确长度时，`SendCmd` 对 ≥256B 消息直接 `Reserve + Encode` 写入 ring（单次拷贝），并支持到 `max_write_size`（默认 4MB）；未知长度的 codec 回退 `encode_buf_`
+- `ChannelBatchWriter::FlushNoNotify` — 发布 write_pos 但不通知，供 `SendCmd` 保留延迟通知合并语义

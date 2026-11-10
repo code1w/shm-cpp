@@ -1,0 +1,7 @@
+PASS test_ringbuf_wrap
+PASS test_ringbuf_boundary
+PASS test_codec
+PASS test_eventloop
+PASS test_proto_codec
+PASS test_proto_wrap
+PASS test_shm_app

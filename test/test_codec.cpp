@@ -11,7 +11,7 @@
  * 6. 类型标签校验 + Decode 长度溢出防护（回归）
  * 7. 超大 payload Send 拒绝且不损坏字节流（回归）
  * 8. FrameReader 大帧零拷贝不受回退缓冲区限制（回归）
- * 9. 跨环尾超大帧返回 -2 后自动丢弃自愈（回归）
+ * 9. 镜像映射下跨环尾大帧单段零拷贝（MaxBufSize 不参与）
  * 10. SendFrameBatch 回滚同时恢复 Count（回归）
  * 11. 非法帧头长度返回 -3 协议错误而非永久等待（回归）
  * 12. PodCodec 毒帧立即丢弃并自动跳过（回归）
@@ -758,32 +758,43 @@ void RunReceiverPoison(int socket_fd)
     char ack = 1;
     ::write(socket_fd, &ack, 1);
 
-    // 阶段 2：毒帧跨环尾且超过 BufSize，应返回 -2
-    int rc = recv_wait("poison");
-    if (rc != -2)
+    // 阶段 2：镜像映射下跨尾大帧永远是单段零拷贝，MaxBufSize 不参与
+    if (!ch.ReadMirrored())
     {
-        std::fprintf(stderr, "FAIL: expected -2 for wrapped oversized frame, got %d\n", rc);
+        std::fprintf(stderr, "FAIL: ring is not mirrored\n");
+        std::abort();
+    }
+    int rc = recv_wait("wrapped large");
+    if (rc != 0)
+    {
+        std::fprintf(stderr,
+                     "FAIL: mirrored wrapped frame should be zero-copy, got %d\n",
+                     rc);
+        std::abort();
+    }
+    if (payload_len != kPoisonLen ||
+        std::memcmp(payload, std::string(kPoisonLen, 'P').data(),
+                    kPoisonLen) != 0)
+    {
+        std::fprintf(stderr, "FAIL: wrapped large frame content\n");
         std::abort();
     }
 
-    // 自愈：下一次 TryRecv 自动丢弃毒帧，读到后续正常帧
-    if (recv_wait("heal") != 0)
+    // 后续帧仍按序到达
+    if (recv_wait("after") != 0 || payload_len != 5 ||
+        std::memcmp(payload, "after", 5) != 0)
     {
-        std::fprintf(stderr, "FAIL: poisoned frame not auto-discarded\n");
-        std::abort();
-    }
-    if (payload_len != 5 || std::memcmp(payload, "after", 5) != 0)
-    {
-        std::fprintf(stderr, "FAIL: wrong frame after poison discard\n");
+        std::fprintf(stderr, "FAIL: frame after wrapped large\n");
         std::abort();
     }
     if (reader.LastSeq() != 4)
     {
-        std::fprintf(stderr, "FAIL: seq after poison = %u\n", reader.LastSeq());
+        std::fprintf(stderr, "FAIL: seq after wrapped large = %u\n",
+                     reader.LastSeq());
         std::abort();
     }
 
-    std::printf("  PASS: -2 poisoned frame auto-discarded, stream recovered\n");
+    std::printf("  PASS: mirrored wrap is single-segment zero-copy\n");
 
     ::write(socket_fd, &ack, 1);
     ::close(socket_fd);
@@ -1579,7 +1590,7 @@ int main()
                 RunSenderLargeFrame, RunReceiverLargeFrame);
     std::printf("\n");
 
-    RunForkTest("Test 9: explicit MaxBufSize -> -2 auto-discard",
+    RunForkTest("Test 9: mirrored wrap ignores MaxBufSize",
                 RunSenderPoison, RunReceiverPoison);
     std::printf("\n");
 

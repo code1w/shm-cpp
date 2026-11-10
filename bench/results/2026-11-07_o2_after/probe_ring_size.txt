@@ -1,0 +1,9 @@
+1MB messages:
+  cap=  8MB msg=1048576B msgs= 2000  4.84 GB/s (201.7 us/msg)
+  cap= 16MB msg=1048576B msgs= 2000  4.88 GB/s (200.0 us/msg)
+  cap= 32MB msg=1048576B msgs= 2000  4.89 GB/s (199.7 us/msg)
+  cap= 64MB msg=1048576B msgs= 2000  4.93 GB/s (198.2 us/msg)
+
+16KB messages:
+  cap=  8MB msg= 16384B msgs=200000  11.45 GB/s (1.3 us/msg)
+  cap= 32MB msg= 16384B msgs=200000  7.29 GB/s (2.1 us/msg)

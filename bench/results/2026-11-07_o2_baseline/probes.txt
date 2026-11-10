@@ -1,0 +1,39 @@
+=== eventfd / ring batch probe ===
+eventfd write: 472.2 ns/op
+
+msg_len=64 (ns/msg):
+  TryWrite only          : 32.4
+  TryWrite + eventfd     : 512.7
+  Batch100 + 1 eventfd   : 18.9
+msg_len=1024 (ns/msg):
+  TryWrite only          : 99.1
+  TryWrite + eventfd     : 597.0
+  Batch100 + 1 eventfd   : 92.3
+
+SimplePodCodec (encode/decode in-memory):
+  16B POD    encode=  35.1 ns  decode=  28.1 ns  (frame=20 B)
+  4096B POD  encode=  77.6 ns  decode= 169.8 ns  (frame=4100 B)
+
+=== ring capacity probe ===
+1MB messages:
+  cap=  8MB msg=1048576B msgs= 2000  4.86 GB/s (201.0 us/msg)
+  cap= 16MB msg=1048576B msgs= 2000  4.90 GB/s (199.4 us/msg)
+  cap= 32MB msg=1048576B msgs= 2000  4.91 GB/s (198.8 us/msg)
+  cap= 64MB msg=1048576B msgs= 2000  4.95 GB/s (197.5 us/msg)
+
+16KB messages:
+  cap=  8MB msg= 16384B msgs=200000  11.23 GB/s (1.4 us/msg)
+  cap= 32MB msg= 16384B msgs=200000  7.10 GB/s (2.1 us/msg)
+
+=== zero-copy consumer probe ===
+cap=8MB
+  msg= 16384B  ReadExact copy :  12.58 GB/s  (   1.30 us/msg)
+  msg= 16384B  Peek zero-copy :  24.29 GB/s  (   0.67 us/msg)
+  msg=1048576B  ReadExact copy :   5.24 GB/s  ( 200.30 us/msg)
+  msg=1048576B  Peek zero-copy :   5.94 GB/s  ( 176.51 us/msg)
+
+=== nontemporal store probe ===
+    16KB  memcpy=  7.0 GB/s   nt-store=  6.9 GB/s
+   256KB  memcpy=  7.0 GB/s   nt-store=  5.6 GB/s
+  1024KB  memcpy=  5.9 GB/s   nt-store=  5.5 GB/s
+  2048KB  memcpy=  5.8 GB/s   nt-store=  5.4 GB/s

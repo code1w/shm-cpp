@@ -39,6 +39,10 @@ target_link_libraries(bench_batch PRIVATE shm_ipc)
 add_executable(bench_codec bench/bench_codec.cpp)
 target_link_libraries(bench_codec PRIVATE shm_ipc)
 
+# 上层接口吞吐（ShmServer + ShmAsyncClient + SimplePodCodec）
+add_executable(bench_app bench/bench_app.cpp)
+target_link_libraries(bench_app PRIVATE shm_ipc)
+
 add_executable(test_codec test/test_codec.cpp)
 target_link_libraries(test_codec PRIVATE shm_ipc)
 

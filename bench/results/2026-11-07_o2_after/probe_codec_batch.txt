@@ -1,0 +1,14 @@
+eventfd write: 439.8 ns/op
+
+msg_len=64 (ns/msg):
+  TryWrite only          : 35.0
+  TryWrite + eventfd     : 570.7
+  Batch100 + 1 eventfd   : 21.3
+msg_len=1024 (ns/msg):
+  TryWrite only          : 99.3
+  TryWrite + eventfd     : 622.9
+  Batch100 + 1 eventfd   : 96.7
+
+SimplePodCodec (encode/decode in-memory):
+  16B POD    encode=   6.8 ns  decode=  20.5 ns  (frame=20 B)
+  4096B POD  encode=  92.6 ns  decode= 168.8 ns  (frame=4100 B)

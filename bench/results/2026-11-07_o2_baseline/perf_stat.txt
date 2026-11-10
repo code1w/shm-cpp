@@ -1,0 +1,16 @@
+
+ Performance counter stats for './build/bench_shm':
+
+    34,037,403,944      cycles:u                                                      (66.66%)
+    78,385,068,407      instructions:u            #    2.30  insn per cycle           (83.34%)
+       294,133,019      cache-references:u                                            (83.34%)
+       216,970,495      cache-misses:u            #   73.766 % of all cache refs      (83.33%)
+    22,333,341,786      branches:u                                                    (83.33%)
+         1,664,450      branch-misses:u           #    0.01% of all branches          (83.33%)
+
+       5.010782412 seconds time elapsed
+
+       9.839193000 seconds user
+       0.128715000 seconds sys
+
+

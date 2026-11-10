@@ -1,0 +1,3 @@
+SimplePodCodec decode any reuse:
+  16B POD    fresh=  31.2 ns  reused=   9.5 ns  (sink=4938000000)
+  4096B POD  fresh= 111.0 ns  reused= 106.4 ns  (sink=4938000000)

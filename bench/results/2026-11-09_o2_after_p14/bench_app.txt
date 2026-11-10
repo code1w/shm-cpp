@@ -1,0 +1,20 @@
+--- small deferred ---
+type=small batch=   1 mode=deferred  total=1000000 time= 10.428s rate=    95897 msg/s       1.5 MB/s
+type=small batch=   8 mode=deferred  total=1000000 time=  1.438s rate=   695174 msg/s      10.6 MB/s
+type=small batch=  64 mode=deferred  total=1000000 time=  0.301s rate=  3318082 msg/s      50.6 MB/s
+type=small batch= 256 mode=deferred  total=1000000 time=  0.169s rate=  5920317 msg/s      90.3 MB/s
+--- small immediate ---
+type=small batch=   1 mode=immediate total=1000000 time= 10.318s rate=    96915 msg/s       1.5 MB/s
+type=small batch=   8 mode=immediate total=1000000 time=  0.791s rate=  1263456 msg/s      19.3 MB/s
+type=small batch=  64 mode=immediate total=1000000 time=  0.577s rate=  1731693 msg/s      26.4 MB/s
+type=small batch= 256 mode=immediate total=1000000 time=  0.527s rate=  1895836 msg/s      28.9 MB/s
+--- big deferred ---
+type=big  batch=   1 mode=deferred  total=200000 time=  2.530s rate=    79066 msg/s     310.1 MB/s
+type=big  batch=   8 mode=deferred  total=200000 time=  0.628s rate=   318680 msg/s    1249.7 MB/s
+type=big  batch=  64 mode=deferred  total=200000 time=  0.377s rate=   531173 msg/s    2083.0 MB/s
+type=big  batch= 256 mode=deferred  total=200000 time=  0.362s rate=   552523 msg/s    2166.7 MB/s
+--- big immediate ---
+type=big  batch=   1 mode=immediate total=200000 time=  2.527s rate=    79139 msg/s     310.3 MB/s
+type=big  batch=   8 mode=immediate total=200000 time=  0.348s rate=   574041 msg/s    2251.1 MB/s
+type=big  batch=  64 mode=immediate total=200000 time=  0.288s rate=   693292 msg/s    2718.7 MB/s
+type=big  batch= 256 mode=immediate total=200000 time=  0.279s rate=   716563 msg/s    2810.0 MB/s

@@ -1,0 +1,10 @@
+--- deferred ---
+batch=   1 mode=deferred  total=1000000 time= 10.504s rate=    95201 msg/s
+batch=   8 mode=deferred  total=1000000 time=  1.540s rate=   649248 msg/s
+batch=  64 mode=deferred  total=1000000 time=  0.363s rate=  2753125 msg/s
+batch= 256 mode=deferred  total=1000000 time=  0.231s rate=  4337310 msg/s
+--- immediate ---
+batch=   1 mode=immediate total=1000000 time= 10.467s rate=    95540 msg/s
+batch=   8 mode=immediate total=1000000 time=  0.833s rate=  1200243 msg/s
+batch=  64 mode=immediate total=1000000 time=  0.605s rate=  1653658 msg/s
+batch= 256 mode=immediate total=1000000 time=  0.562s rate=  1779804 msg/s

@@ -101,15 +101,24 @@ class MmapRegion
     }
 
     MmapRegion(MmapRegion &&o) noexcept
-        : addr_(std::exchange(o.addr_, MAP_FAILED)), size_(o.size_) {}
+        : addr_(std::exchange(o.addr_, MAP_FAILED)), size_(o.size_),
+          mirrored_(o.mirrored_), data_offset_(o.data_offset_)
+    {
+        o.mirrored_    = false;
+        o.data_offset_ = 0;
+    }
     MmapRegion &operator=(MmapRegion &&o) noexcept
     {
         if (this != &o)
         {
             if (addr_ != MAP_FAILED)
                 ::munmap(addr_, size_);
-            addr_ = std::exchange(o.addr_, MAP_FAILED);
-            size_ = std::exchange(o.size_, 0);
+            addr_        = std::exchange(o.addr_, MAP_FAILED);
+            size_        = std::exchange(o.size_, 0);
+            mirrored_    = o.mirrored_;
+            data_offset_ = o.data_offset_;
+            o.mirrored_    = false;
+            o.data_offset_ = 0;
         }
         return *this;
     }
@@ -136,8 +145,83 @@ class MmapRegion
         }
         if (addr_ != MAP_FAILED)
             ::munmap(addr_, size_);
-        addr_ = addr;
-        size_ = size;
+        addr_        = addr;
+        size_        = size;
+        mirrored_    = false;
+        data_offset_ = 0;
+        return ErrorCode::kOk;
+    }
+
+    /**
+     * @brief 建立"数据区镜像"映射：同一 memfd 的 data 区连续映射两圈
+     *
+     * 文件布局要求：[0, data_offset) 为 header/填充页，data_offset 页对齐；
+     * [data_offset, data_offset+capacity) 为数据区。映射后：
+     *   base            → 文件 [0, file_size)
+     *   base + file_size → 文件 [data_offset, data_offset+capacity)
+     * 因此 data 区在 VA 上连续两圈，任何不超过 capacity 的窗口都连续，
+     * 跨环尾的读写可用单次 memcpy。
+     *
+     * @param fd           memfd
+     * @param file_size    文件大小（= data_offset + capacity）
+     * @param data_offset  数据区在文件中的页对齐偏移
+     * @param capacity     数据区大小（= 环容量，建议页对齐）
+     * @param sys_errno    可选：失败时的 errno
+     */
+    [[nodiscard]]
+    ErrorCode MapMirrored(int fd, std::size_t file_size,
+                          std::size_t data_offset, std::size_t capacity,
+                          int prot, int flags,
+                          int *sys_errno = nullptr) noexcept
+    {
+        if (fd < 0 || capacity == 0 ||
+            data_offset + capacity != file_size)
+            return ErrorCode::kInvalidArgument;
+
+        const long page = ::sysconf(_SC_PAGESIZE);
+        const std::size_t page_size =
+            (page > 0) ? static_cast<std::size_t>(page) : 4096u;
+        if (data_offset % page_size != 0)
+            return ErrorCode::kInvalidArgument;
+
+        // VA 预留：header 页 + 两圈 data
+        const std::size_t reserve = file_size + capacity;
+        void *base = ::mmap(nullptr, reserve, PROT_NONE,
+                            MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (base == MAP_FAILED)
+        {
+            if (sys_errno)
+                *sys_errno = errno;
+            return ErrnoToErrorCode(errno);
+        }
+
+        // 第一圈：完整文件（header + data）
+        if (::mmap(base, file_size, prot, flags | MAP_FIXED, fd, 0) == MAP_FAILED)
+        {
+            const int err = errno;
+            ::munmap(base, reserve);
+            if (sys_errno)
+                *sys_errno = err;
+            return ErrnoToErrorCode(err);
+        }
+        // 第二圈：仅 data 区，紧接在第一圈 data 末尾
+        void *second = static_cast<char *>(base) + file_size;
+        if (::mmap(second, capacity, prot, flags | MAP_FIXED, fd,
+                   static_cast<off_t>(data_offset)) == MAP_FAILED)
+        {
+            const int err = errno;
+            ::munmap(base, reserve);
+            if (sys_errno)
+                *sys_errno = err;
+            return ErrnoToErrorCode(err);
+        }
+
+        if (addr_ != MAP_FAILED)
+            ::munmap(addr_, size_);
+        addr_        = base;
+        size_        = reserve;
+        mirrored_    = true;
+        data_offset_ = data_offset;
         return ErrorCode::kOk;
     }
 
@@ -151,11 +235,25 @@ class MmapRegion
     {
         return size_;
     }
+    /// @brief 是否建立了数据区镜像映射
+    [[nodiscard]]
+    bool Mirrored() const noexcept
+    {
+        return mirrored_;
+    }
+    /// @brief 数据区起始指针（仅镜像映射有效）
+    [[nodiscard]]
+    char *DataBase() const noexcept
+    {
+        return static_cast<char *>(addr_) + data_offset_;
+    }
     explicit operator bool() const noexcept { return addr_ != MAP_FAILED; }
 
  private:
-    void *addr_       = MAP_FAILED;  ///< mmap 起始地址
-    std::size_t size_ = 0;           ///< 映射长度（字节）
+    void *addr_       = MAP_FAILED;  ///< mmap 起始地址（镜像时为 VA 预留起点）
+    std::size_t size_ = 0;           ///< munmap 长度（镜像时为 VA 预留长度）
+    bool mirrored_    = false;       ///< 数据区是否两圈镜像
+    std::size_t data_offset_ = 0;    ///< 数据区在文件中的偏移
 };
 
 // ---------------------------------------------------------------------------

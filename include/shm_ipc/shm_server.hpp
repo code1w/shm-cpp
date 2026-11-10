@@ -151,7 +151,9 @@ class ShmServer : public comm::ITcpServer
         if (hs_thread_.joinable())
             hs_thread_.join();
 
-        // 2) 注销监听与握手完成通知 fd
+        // 2) 注销 post-dispatch 钩子、监听与握手完成通知 fd
+        loop_->RemovePostDispatchHook(post_hook_);
+        post_hook_ = 0;
         if (listen_fd_)
         {
             loop_->RemoveFd(listen_fd_.Get());
@@ -188,6 +190,15 @@ class ShmServer : public comm::ITcpServer
      * @brief 最大并发客户端数（含握手中的连接，超出后直接拒绝，默认 16）
      */
     void SetMaxClients(int n) { max_clients_ = n; }
+
+    /**
+     * @brief 是否把每个连接的通知合并到事件循环批次末尾（默认关闭）
+     *
+     * 关闭：每条 SendCmd 立即 eventfd 通知（低延迟，逐条 syscall）。
+     * 开启：同一分发批次内的多次发送合并为一次通知（高吞吐；首条
+     * 消息延迟上限为本批次剩余执行时间）。必须在 Start() 前设置。
+     */
+    void SetDeferredNotify(bool on) { deferred_notify_ = on; }
 
     /**
      * @brief 向指定连接发送消息（扩展接口；接口等价写法为 FindConn(id)->SendCmd(msg)）
@@ -299,9 +310,27 @@ class ShmServer : public comm::ITcpServer
             return FailStart(ErrorCode::kNoMemory);
         }
 
+        // 每轮分发结束后统一 flush 各连接的延迟通知（每连接最多一次 eventfd 写）
+        if (deferred_notify_)
+        {
+            ec = loop_->AddPostDispatchHook([this] { FlushAllNotify(); }, &post_hook_);
+            if (ec != ErrorCode::kOk)
+            {
+                Stop();
+                return FailStart(ec);
+            }
+        }
+
         if (successcb_)
             successcb_();
         return true;
+    }
+
+    /// @brief 事件循环批次结束：合并发送所有连接的 pending 通知
+    void FlushAllNotify() noexcept
+    {
+        for (auto &[id, conn] : conns_)
+            conn->FlushNotify();
     }
 
     /// @brief 启动失败收尾：记录错误码并按接口约定触发 failed 回调
@@ -444,6 +473,7 @@ class ShmServer : public comm::ITcpServer
             conn->SetKeepAlive(keepalive_);
             conn->SetConnType(comm::TcpConnType::TcpConn_Task);
             conn->ResizeBuffer(init_buffer_size_, max_buffer_size_);
+            conn->SetDeferNotify(deferred_notify_);
 
             conns_[id] = conn;
 
@@ -519,7 +549,9 @@ class ShmServer : public comm::ITcpServer
     std::unordered_map<uint64_t, ShmConnPtr> conns_;  ///< 连接表（id -> conn）
     uint64_t next_id_ = 1;                            ///< 下一个连接 ID
     int max_clients_ = 16;                            ///< 最大并发客户端数
+    bool deferred_notify_ = false;                    ///< 是否合并批次通知
     bool started_ = false;                            ///< 是否已 Start
+    EventLoop::HookId post_hook_ = 0;                 ///< 延迟通知钩子 ID
     ErrorCode last_error_ = ErrorCode::kOk;           ///< 最近一次 Start 错误码
     int last_sys_errno_   = 0;                        ///< 最近一次 Start 的 errno
 

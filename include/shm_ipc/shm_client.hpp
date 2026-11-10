@@ -181,21 +181,11 @@ class ShmClient : public comm::ITcpClient
         if (!Connected())
             return -1;
 
-        timespec deadline{};
-        if (timeout_ms >= 0)
-        {
-            ::clock_gettime(CLOCK_MONOTONIC, &deadline);
-            deadline.tv_sec  += timeout_ms / 1000;
-            deadline.tv_nsec += (timeout_ms % 1000) * 1000000L;
-            deadline.tv_sec  += deadline.tv_nsec / 1000000000L;
-            deadline.tv_nsec %= 1000000000L;
-        }
-
-        int efd = channel_.NotifyReadFd();
+        timespec  deadline{};
+        timespec *dl = InitDeadline(timeout_ms, &deadline);
         for (;;)
         {
-            // 本端 Close()：立即退出，不再等待（close 唤醒的 poll 走这里
-            // 或下方 socket 分支，两处都检查）
+            // 本端 Close()：立即退出，不再等待
             if (closed_.load(std::memory_order_acquire))
                 return -1;
 
@@ -204,49 +194,71 @@ class ShmClient : public comm::ITcpClient
             if (n > 0)
                 return static_cast<int>(n);
 
-            int wait_ms = timeout_ms;
-            if (timeout_ms >= 0)
+            int wr = WaitForReadable(dl);
+            if (wr < 0)
+                return wr;  // -1 本端关闭/错误；-2 超时
+            if (wr == 0)
             {
-                timespec now{};
-                ::clock_gettime(CLOCK_MONOTONIC, &now);
-                int64_t ms = (deadline.tv_sec - now.tv_sec) * 1000 +
-                             (deadline.tv_nsec - now.tv_nsec) / 1000000;
-                if (ms <= 0)
-                    return -2;  // 超时
-                wait_ms = static_cast<int>(ms);
+                // 对端关闭：最后再读一次环中残留数据
+                n = channel_.TryRead(buf, static_cast<uint32_t>(bsize));
+                return n > 0 ? static_cast<int>(n) : 0;
             }
-
-            pollfd pfds[2] = {{efd, POLLIN, 0}, {socket_fd_.Get(), POLLIN, 0}};
-            int pr = ::poll(pfds, 2, wait_ms);
-            if (pr < 0)
-            {
-                if (errno == EINTR)
-                    continue;
-                return -1;
-            }
-            if (pr == 0)
-                return -2;  // 超时
-
-            // socket 可读 = 对端关闭或本端 Close() 的 shutdown 唤醒
-            if (pfds[1].revents & (POLLHUP | POLLERR | POLLIN))
-            {
-                if (closed_.load(std::memory_order_acquire))
-                    return -1;  // 本端 Close()
-                char b{};
-                if (::read(socket_fd_.Get(), &b, 1) <= 0)
-                {
-                    // 最后再读一次环中残留数据
-                    n = channel_.TryRead(buf, static_cast<uint32_t>(bsize));
-                    if (n > 0)
-                        return static_cast<int>(n);
-                    socket_fd_.Reset();
-                    return 0;  // 对端关闭（同框架返回 0）
-                }
-            }
-            if (pfds[0].revents & POLLIN)
-                DefaultRingChannel::DrainNotify(efd);
         }
     }
+
+    /**
+     * @brief 零拷贝 Peek：等待数据到达，返回环内可读数据段（扩展接口）
+     *
+     * 与 ReadMessage 的等待语义一致，但不在库内拷贝：返回的指针直接指向
+     * ring 数据区（镜像映射启用时永远是单段；否则可能分为两段）。
+     * 调用方处理完数据后必须调用 CommitMessage(total) 推进 read_pos。
+     *
+     * @param seg1      输出：第一段数据指针
+     * @param seg1_len  输出：第一段长度
+     * @param seg2      输出：第二段数据指针（未回绕时为 nullptr）
+     * @param seg2_len  输出：第二段长度（未回绕时为 0）
+     * @param timeout_ms 超时毫秒数，-1 表示无限等待
+     * @return >0 可读总字节数；0 对端关闭；-1 未连接/本端关闭；-2 超时
+     *
+     * @note 指针在 CommitMessage / 下一次 PeekMessage / Close 之前有效。
+     */
+    int PeekMessage(const void **seg1, uint32_t *seg1_len,
+                    const void **seg2, uint32_t *seg2_len,
+                    int timeout_ms = -1)
+    {
+        if (!seg1 || !seg1_len || !seg2 || !seg2_len)
+            return -1;
+        if (!Connected())
+            return -1;
+
+        timespec  deadline{};
+        timespec *dl = InitDeadline(timeout_ms, &deadline);
+        for (;;)
+        {
+            if (closed_.load(std::memory_order_acquire))
+                return -1;
+
+            if (channel_.Peek(seg1, seg1_len, seg2, seg2_len) == 0)
+                return static_cast<int>(*seg1_len + *seg2_len);
+
+            int wr = WaitForReadable(dl);
+            if (wr < 0)
+                return wr;
+            if (wr == 0)
+            {
+                // 对端关闭：返回环中残留数据（若有）
+                if (channel_.Peek(seg1, seg1_len, seg2, seg2_len) == 0)
+                    return static_cast<int>(*seg1_len + *seg2_len);
+                return 0;
+            }
+        }
+    }
+
+    /**
+     * @brief 提交 PeekMessage 读取的字节数（扩展接口）
+     * @param len 已消费的字节数（不得超过 PeekMessage 返回的总长度）
+     */
+    void CommitMessage(uint32_t len) { channel_.CommitRead(len); }
 
     /// @brief 最近一次 Connect 的错误码（扩展接口）
     ErrorCode LastError() const noexcept { return last_error_; }
@@ -261,6 +273,63 @@ class ShmClient : public comm::ITcpClient
     DefaultRingChannel &Channel() noexcept { return channel_; }
 
  private:
+    /// @brief 初始化超时 deadline；timeout_ms < 0 返回 nullptr（无限等待）
+    static timespec *InitDeadline(int timeout_ms, timespec *out) noexcept
+    {
+        if (timeout_ms < 0)
+            return nullptr;
+        ::clock_gettime(CLOCK_MONOTONIC, out);
+        out->tv_sec  += timeout_ms / 1000;
+        out->tv_nsec += (timeout_ms % 1000) * 1000000L;
+        out->tv_sec  += out->tv_nsec / 1000000000L;
+        out->tv_nsec %= 1000000000L;
+        return out;
+    }
+
+    /**
+     * @brief 等待 ring 数据/对端事件
+     * @param deadline 为空表示无限等待
+     * @return 1 需要重新检查 ring；0 对端关闭；-1 本端关闭/错误；-2 超时
+     */
+    int WaitForReadable(timespec *deadline)
+    {
+        int wait_ms = -1;
+        if (deadline)
+        {
+            timespec now{};
+            ::clock_gettime(CLOCK_MONOTONIC, &now);
+            int64_t ms = (deadline->tv_sec - now.tv_sec) * 1000 +
+                         (deadline->tv_nsec - now.tv_nsec) / 1000000;
+            if (ms <= 0)
+                return -2;
+            wait_ms = static_cast<int>(ms);
+        }
+
+        pollfd pfds[2] = {{channel_.NotifyReadFd(), POLLIN, 0},
+                          {socket_fd_.Get(), POLLIN, 0}};
+        int pr = ::poll(pfds, 2, wait_ms);
+        if (pr < 0)
+            return (errno == EINTR) ? 1 : -1;
+        if (pr == 0)
+            return -2;
+
+        // socket 可读 = 对端关闭或本端 Close() 的 shutdown 唤醒
+        if (pfds[1].revents & (POLLHUP | POLLERR | POLLIN))
+        {
+            if (closed_.load(std::memory_order_acquire))
+                return -1;
+            char b{};
+            if (::read(socket_fd_.Get(), &b, 1) <= 0)
+            {
+                socket_fd_.Reset();
+                return 0;  // 对端关闭
+            }
+        }
+        if (pfds[0].revents & POLLIN)
+            DefaultRingChannel::DrainNotify(pfds[0].fd);
+        return 1;
+    }
+
     UniqueFd socket_fd_;          ///< 连接 socket（断连检测）
     DefaultRingChannel channel_;  ///< 双向共享内存通道
     std::atomic<bool> closed_{true};  ///< 本端已关闭标志（Close/读线程跨线程通信）

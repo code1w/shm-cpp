@@ -1,0 +1,5 @@
+cap=8MB
+  msg= 16384B  ReadExact copy :  12.48 GB/s  (   1.31 us/msg)
+  msg= 16384B  Peek zero-copy :  25.91 GB/s  (   0.63 us/msg)
+  msg=1048576B  ReadExact copy :   5.21 GB/s  ( 201.23 us/msg)
+  msg=1048576B  Peek zero-copy :   5.95 GB/s  ( 176.30 us/msg)

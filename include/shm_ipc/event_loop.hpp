@@ -28,6 +28,7 @@
 #include <deque>
 #include <functional>
 #include <new>
+#include <utility>
 #include <vector>
 
 #include "common.hpp"
@@ -40,6 +41,8 @@ class EventLoop
 {
  public:
     using Callback = std::function<void(int fd, short revents)>;
+    using Hook    = std::function<void()>;
+    using HookId  = uint64_t;
 
     EventLoop()  = default;
     ~EventLoop() = default;
@@ -61,6 +64,46 @@ class EventLoop
     void AddFd(int fd, Callback cb, short events = POLLIN)
     {
         entries_.push_back({fd, events, false, std::move(cb)});
+    }
+
+    /**
+     * @brief 注册"本轮分发结束后"钩子（用于合并通知等延迟动作）
+     *
+     * 钩子在每次 poll 分发批次结束后、重新进入 poll 之前执行；Stop() 后
+     * 的最后一个批次仍会执行。钩子不得抛异常、不得在自身执行期间
+     * Add/Remove 钩子。
+     *
+     * @param hook 钩子函数
+     * @param out  成功时写入钩子 ID
+     * @return kOk 成功；kInvalidArgument 参数为空；kNoMemory 分配失败
+     */
+    [[nodiscard]]
+    ErrorCode AddPostDispatchHook(Hook hook, HookId *out)
+    {
+        if (!out || !hook)
+            return ErrorCode::kInvalidArgument;
+        HookId id = next_hook_id_++;
+        try
+        {
+            post_hooks_.push_back({id, std::move(hook)});
+        }
+        catch (const std::bad_alloc &)
+        {
+            return ErrorCode::kNoMemory;
+        }
+        *out = id;
+        return ErrorCode::kOk;
+    }
+
+    /** @brief 移除 post-dispatch 钩子（id 为 0 时忽略） */
+    void RemovePostDispatchHook(HookId id)
+    {
+        if (id == 0)
+            return;
+        auto it = std::find_if(post_hooks_.begin(), post_hooks_.end(),
+                               [id](const auto &p) { return p.first == id; });
+        if (it != post_hooks_.end())
+            post_hooks_.erase(it);
     }
 
     /**
@@ -259,18 +302,23 @@ class EventLoop
             }
             catch (const std::bad_alloc &)
             {
-                // 回调内部（如 AddFd）分配失败：回收墓碑后转错误码
+                // 回调内部（如 AddFd）分配失败：先执行延迟钩子（如通知
+                // 合并），再回收墓碑并转错误码
+                RunPostDispatchHooksNoThrow();
                 CompactDead();
                 running_.store(false, std::memory_order_relaxed);
                 return ErrorCode::kNoMemory;
             }
             catch (...)
             {
-                // 用户回调抛异常也先回收墓碑，保持状态一致，随后向外传播
+                // 用户回调抛异常：仍执行延迟钩子并回收墓碑，保持状态一致
+                RunPostDispatchHooksNoThrow();
                 CompactDead();
                 throw;
             }
 
+            // 本轮分发结束：执行延迟钩子（如合并后的对端通知）
+            RunPostDispatchHooksNoThrow();
             // 回收墓碑条目
             CompactDead();
         }
@@ -355,6 +403,20 @@ class EventLoop
         Callback cb;   ///< 事件回调
     };
 
+    /** @brief 执行 post-dispatch 钩子；钩子异常被吞掉以免破坏事件循环 */
+    void RunPostDispatchHooksNoThrow() noexcept
+    {
+        try
+        {
+            for (auto &h : post_hooks_)
+                h.second();
+        }
+        catch (...)
+        {
+            // 钩子应为内部通知逻辑，不应抛异常；吞掉以保证循环继续
+        }
+    }
+
     /** @brief 关闭并移除 EventLoop 持有的 timerfd（不处理 entries_） */
     void CloseOwnedTimer(int tfd)
     {
@@ -377,6 +439,8 @@ class EventLoop
     // 分发循环中持有的 Entry& 在回调执行期间始终有效
     std::deque<Entry> entries_;           ///< fd 监听条目列表
     std::vector<UniqueFd> owned_timerfds_;  ///< EventLoop 持有的 timerfd 列表
+    std::vector<std::pair<HookId, Hook>> post_hooks_;  ///< 分发批次结束钩子
+    HookId next_hook_id_ = 1;               ///< 下一个钩子 ID
     std::atomic<bool> running_{false};      ///< 事件循环运行标志（atomic 以支持信号处理器写入）
 };
 

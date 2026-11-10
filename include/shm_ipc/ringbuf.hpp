@@ -46,6 +46,11 @@ struct alignas(64) RingHeader
 static_assert(sizeof(RingHeader) == 128, "RingHeader must be 128 bytes (2 cache lines)");
 static_assert(alignof(RingHeader) == 64, "RingHeader must be aligned to 64 bytes");
 
+/// @brief 数据区起始偏移（页对齐，供 RingChannel 建立数据区镜像映射）
+inline constexpr std::size_t kRingDataOffset = 4096;
+static_assert(kRingDataOffset >= sizeof(RingHeader),
+              "data offset must leave room for RingHeader");
+
 // ---------------------------------------------------------------------------
 // detail — RingBuf 的内部实现组件
 // ---------------------------------------------------------------------------
@@ -67,13 +72,13 @@ inline const RingHeader *RingHdr(const void *shm)
 /// @brief 共享内存起始地址 → 数据区起始指针
 inline char *RingData(void *shm)
 {
-    return static_cast<char *>(shm) + sizeof(RingHeader);
+    return static_cast<char *>(shm) + kRingDataOffset;
 }
 
 /// @brief 共享内存起始地址 → 数据区起始指针（const 版本）
 inline const char *RingData(const void *shm)
 {
-    return static_cast<const char *>(shm) + sizeof(RingHeader);
+    return static_cast<const char *>(shm) + kRingDataOffset;
 }
 
 /// @brief 单调递增偏移 → 物理偏移（要求 Capacity 为 2 的幂）
@@ -153,8 +158,8 @@ class BatchWriter
      * @brief 构造批量写入器，快照当前 write_pos 和 read_pos
      * @param shm 共享内存指针
      */
-    explicit BatchWriter(void *shm)
-        : hdr_(RingHdr(shm)), base_(RingData(shm)),
+    explicit BatchWriter(void *shm, bool mirrored = false)
+        : hdr_(RingHdr(shm)), base_(RingData(shm)), mirrored_(mirrored),
           w_(hdr_->write_pos.load(std::memory_order_relaxed)),
           r_(hdr_->read_pos.load(std::memory_order_acquire)),
           w_start_(w_) {}
@@ -162,7 +167,7 @@ class BatchWriter
     ~BatchWriter() { Flush(); }
 
     BatchWriter(BatchWriter &&o) noexcept
-        : hdr_(o.hdr_), base_(o.base_),
+        : hdr_(o.hdr_), base_(o.base_), mirrored_(o.mirrored_),
           w_(o.w_), r_(o.r_), w_start_(o.w_start_),
           count_(o.count_),
           reserved_(o.reserved_), reserved_len_(o.reserved_len_)
@@ -190,6 +195,7 @@ class BatchWriter
             Cancel();
             hdr_          = o.hdr_;
             base_         = o.base_;
+            mirrored_     = o.mirrored_;
             w_            = o.w_;
             r_            = o.r_;
             w_start_      = o.w_start_;
@@ -231,8 +237,9 @@ class BatchWriter
         std::size_t tail   = Capacity - phys_w;
 
         auto *src = static_cast<const char *>(data);
-        if (len <= tail)
+        if (mirrored_ || len <= tail)
         {
+            // 镜像映射下数据区连续两圈，跨尾也可单次 memcpy
             std::memcpy(base_ + phys_w, src, len);
         }
         else
@@ -337,8 +344,8 @@ class BatchWriter
             return nullptr;
         std::size_t phys_w = RingPhys<Capacity>(w_);
         std::size_t tail   = Capacity - phys_w;
-        if (len > tail)
-            return nullptr;  // 跨环尾，调用者应回退
+        if (!mirrored_ && len > tail)
+            return nullptr;  // 非镜像映射跨环尾，调用者应回退
         reserved_     = base_ + phys_w;
         reserved_len_ = len;
         return reserved_;
@@ -366,6 +373,7 @@ class BatchWriter
  private:
     RingHeader *hdr_    = nullptr;  ///< 为空表示惰性写入器
     char *base_         = nullptr;  ///< 数据区起始指针
+    bool mirrored_      = false;    ///< 数据区是否做了镜像映射（可单次跨尾拷贝）
     uint64_t w_         = 0;        ///< 本地追踪的写位置（不触发原子 store）
     uint64_t r_         = 0;        ///< 快照的读位置（整批只读一次 acquire）
     uint64_t w_start_   = 0;        ///< Flush 前的写位置，用于判断是否有新数据
@@ -409,7 +417,7 @@ class RingBuf
 
  public:
     static constexpr std::size_t capacity       = Capacity;
-    static constexpr std::size_t shm_size       = sizeof(RingHeader) + Capacity;
+    static constexpr std::size_t shm_size       = kRingDataOffset + Capacity;
     static constexpr std::size_t max_write_size = Capacity / 2;
 
     /// @brief RAII 批量写入器（实现位于 detail 命名空间）
@@ -438,7 +446,9 @@ class RingBuf
         auto *hdr = new (shm) RingHeader{};
         hdr->write_pos.store(0, std::memory_order_relaxed);
         hdr->read_pos.store(0, std::memory_order_relaxed);
-        std::memset(detail::RingData(shm), 0, Capacity);
+        // 清零 header 之后的填充页与数据区
+        std::memset(static_cast<char *>(shm) + sizeof(RingHeader), 0,
+                    shm_size - sizeof(RingHeader));
     }
 
     // ---- 写入 ----
@@ -553,6 +563,91 @@ class RingBuf
         detail::RingCopyOut<Capacity>(base, detail::RingPhys<Capacity>(r), data, len);
 
         hdr->read_pos.store(r + len, std::memory_order_release);
+        return 0;
+    }
+
+    // ---- 镜像映射专用（数据区连续两圈，可单次跨尾拷贝）----
+    // 这些方法要求 shm 通过 RingChannel 的镜像映射建立；普通 mmap/
+    // 非镜像 RingBuf 请使用上面的 TryWrite/TryRead/ReadExact/Peek。
+
+    /// @brief 镜像映射下写入任意长度（单次 memcpy，可跨环尾）
+    static int TryWriteContig(void *shm, const void *data, uint32_t len)
+    {
+        if (len == 0 || len > max_write_size || data == nullptr)
+            return -1;
+
+        auto *hdr  = detail::RingHdr(shm);
+        char *base = detail::RingData(shm);
+        uint64_t w = hdr->write_pos.load(std::memory_order_relaxed);
+        uint64_t r = hdr->read_pos.load(std::memory_order_acquire);
+        if ((w + len) - r > Capacity)
+            return -1;
+
+        std::memcpy(base + detail::RingPhys<Capacity>(w), data, len);
+        hdr->write_pos.store(w + len, std::memory_order_release);
+        return 0;
+    }
+
+    /// @brief 镜像映射下读取最多 max_len 字节（单次 memcpy）
+    static uint32_t TryReadContig(void *shm, void *data, uint32_t max_len)
+    {
+        if (data == nullptr)
+            return 0;
+
+        auto *hdr        = detail::RingHdr(shm);
+        const char *base = detail::RingData(shm);
+        uint64_t r       = hdr->read_pos.load(std::memory_order_relaxed);
+        uint64_t w       = hdr->write_pos.load(std::memory_order_acquire);
+        uint64_t avail   = w - r;
+        if (avail == 0)
+            return 0;
+
+        uint32_t to_read =
+            (avail < max_len) ? static_cast<uint32_t>(avail) : max_len;
+        if (to_read == 0)
+            return 0;
+
+        std::memcpy(data, base + detail::RingPhys<Capacity>(r), to_read);
+        hdr->read_pos.store(r + to_read, std::memory_order_release);
+        return to_read;
+    }
+
+    /// @brief 镜像映射下精确读取 len 字节（单次 memcpy）
+    static int ReadExactContig(void *shm, void *data, uint32_t len)
+    {
+        if (len == 0)
+            return 0;
+        if (data == nullptr)
+            return -1;
+
+        auto *hdr        = detail::RingHdr(shm);
+        const char *base = detail::RingData(shm);
+        uint64_t r       = hdr->read_pos.load(std::memory_order_relaxed);
+        uint64_t w       = hdr->write_pos.load(std::memory_order_acquire);
+        if (w - r < len)
+            return -1;
+
+        std::memcpy(data, base + detail::RingPhys<Capacity>(r), len);
+        hdr->read_pos.store(r + len, std::memory_order_release);
+        return 0;
+    }
+
+    /// @brief 镜像映射下单段 Peek（永远返回一段，最多 Capacity 字节）
+    static int PeekContig(const void *shm, const void **data, uint32_t *len)
+    {
+        if (!data || !len)
+            return -1;
+
+        auto *hdr        = detail::RingHdr(shm);
+        const char *base = detail::RingData(shm);
+        uint64_t r       = hdr->read_pos.load(std::memory_order_relaxed);
+        uint64_t w       = hdr->write_pos.load(std::memory_order_acquire);
+        uint64_t avail   = w - r;
+        if (avail == 0)
+            return -1;
+
+        *data = base + detail::RingPhys<Capacity>(r);
+        *len  = static_cast<uint32_t>(avail);
         return 0;
     }
 

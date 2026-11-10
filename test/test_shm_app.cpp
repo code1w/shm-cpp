@@ -18,12 +18,21 @@
 #include <cstring>
 #include <memory>
 #include <thread>
+#include <vector>
 
 #include <shm_ipc/messages.hpp>
 #include <shm_ipc/shm_async_client.hpp>
 #include <shm_ipc/shm_client.hpp>
 #include <shm_ipc/shm_server.hpp>
 #include <shm_ipc/simple_pod_codec.hpp>
+
+/// 大对象 POD：验证 SimplePodCodec 的 any 原地复用
+struct TestBigPod
+{
+    uint64_t seq;
+    uint8_t  data[4096];
+};
+SHM_IPC_REGISTER_POD(TestBigPod, 0x54424750);
 
 namespace {
 
@@ -50,6 +59,28 @@ int main()
 
     shm::codec::SimplePodCodec::RegisterPod<Heartbeat>();
     shm::codec::SimplePodCodec::RegisterPod<ClientMsg>();
+    shm::codec::SimplePodCodec::RegisterPod<TestBigPod>();
+
+    // Part 0: 大对象 decode 复用 same any（不重新分配）
+    {
+        shm::codec::SimplePodCodec codec;
+        std::any src = TestBigPod{42, {}};
+        std::vector<comm::byte> buf(8192);
+        size_t sz = 0;
+        int32_t n = codec.Encode(src, buf.data(), buf.size(), &sz);
+        assert(n > 0);
+
+        std::any out;
+        assert(codec.Decode(buf.data(), static_cast<size_t>(n), out, &sz) == n);
+        auto *first = std::any_cast<TestBigPod>(&out);
+        assert(first != nullptr && first->seq == 42);
+
+        // 同类型再次解码：应复用同一块 any 存储（地址不变）
+        assert(codec.Decode(buf.data(), static_cast<size_t>(n), out, &sz) == n);
+        auto *second = std::any_cast<TestBigPod>(&out);
+        assert(second == first && second->seq == 42);
+        std::printf("part0: big-pod any reuse OK\n");
+    }
 
     // ------------------------------------------------------------------
     // 服务端：echo Heartbeat
@@ -58,6 +89,7 @@ int main()
     shm::ShmServer server(&server_loop, kTestSock, "test_server");
 
     std::atomic<int> conn_count{0};
+    server.SetDeferredNotify(true);  // 覆盖事件循环批次合并通知路径
     server.SetCodecFactory([] {
         return std::make_shared<shm::codec::SimplePodCodec>();
     });
@@ -112,6 +144,37 @@ int main()
             assert(out.client_id > 0);  // server 回填了连接 ID
         }
 
+        // Part 1b: 零拷贝 Peek/Commit 路径
+        {
+            Heartbeat hb{0, 6, 1006};
+            size_t size = 0;
+            int32_t len = codec.Encode(hb, reinterpret_cast<comm::byte *>(buf),
+                                       sizeof(buf), &size);
+            assert(len > 0);
+            assert(client.SendMessage(buf, len) == len);
+
+            const void *s1 = nullptr;
+            const void *s2 = nullptr;
+            uint32_t l1 = 0, l2 = 0;
+            int total = client.PeekMessage(&s1, &l1, &s2, &l2, 3000);
+            assert(total > 0 && static_cast<size_t>(total) <= sizeof(buf));
+
+            std::memcpy(buf, s1, l1);
+            if (l2 > 0)
+                std::memcpy(buf + l1, s2, l2);
+
+            std::any pkg;
+            size_t consumed = 0;
+            int32_t dlen = codec.Decode(
+                reinterpret_cast<const comm::byte *>(buf),
+                static_cast<size_t>(total), pkg, &consumed);
+            assert(dlen == total);
+            const auto &out = std::any_cast<const Heartbeat &>(pkg);
+            assert(out.seq == 6 && out.timestamp == 1006);
+            client.CommitMessage(static_cast<uint32_t>(total));
+            std::printf("part1b: zero-copy peek/commit OK\n");
+        }
+
         client.Close();
         assert(!client.Connected());
         std::printf("part1: sync client echo OK\n");
@@ -123,6 +186,7 @@ int main()
     {
         shm::EventLoop client_loop;
         shm::ShmAsyncClient async_client(&client_loop);
+        async_client.SetDeferredNotify(true);  // 覆盖客户端延迟通知路径
 
         std::atomic<int> client_msgs{0};
         std::atomic<bool> conn_ok{false};
