@@ -1,0 +1,14 @@
+type=small  batch=   1 mode=immediate total=1000000 time= 10.391s rate=    96238 msg/s       1.5 MB/s
+type=small  batch=   8 mode=immediate total=1000000 time=  0.873s rate=  1145304 msg/s      17.5 MB/s
+type=small  batch=  64 mode=immediate total=1000000 time=  0.668s rate=  1497768 msg/s      22.9 MB/s
+type=small  batch= 256 mode=immediate total=1000000 time=  0.662s rate=  1510501 msg/s      23.0 MB/s
+type=big4k  batch=   8 mode=immediate total=200000 time=  0.375s rate=   533132 msg/s    2090.7 MB/s
+type=big4k  batch=  64 mode=immediate total=200000 time=  0.325s rate=   615788 msg/s    2414.8 MB/s
+type=big4k  batch= 256 mode=immediate total=200000 time=  0.392s rate=   509638 msg/s    1998.6 MB/s
+type=small  batch=   1 mode=immediate total=1000000 time= 10.443s rate=    95756 msg/s       1.5 MB/s
+type=small  batch=   8 mode=immediate total=1000000 time=  0.835s rate=  1197804 msg/s      18.3 MB/s
+type=small  batch=  64 mode=immediate total=1000000 time=  0.681s rate=  1467438 msg/s      22.4 MB/s
+type=small  batch= 256 mode=immediate total=1000000 time=  0.666s rate=  1501989 msg/s      22.9 MB/s
+type=big4k  batch=   8 mode=immediate total=200000 time=  0.396s rate=   504495 msg/s    1978.4 MB/s
+type=big4k  batch=  64 mode=immediate total=200000 time=  0.319s rate=   626823 msg/s    2458.1 MB/s
+type=big4k  batch= 256 mode=immediate total=200000 time=  0.395s rate=   506574 msg/s    1986.5 MB/s

@@ -1,0 +1,26 @@
+--- small immediate ---
+type=small  batch=   1 mode=immediate total=1000000 time= 10.345s rate=    96661 msg/s       1.5 MB/s
+type=small  batch=   8 mode=immediate total=1000000 time=  0.810s rate=  1235323 msg/s      18.8 MB/s
+type=small  batch=  64 mode=immediate total=1000000 time=  0.552s rate=  1813006 msg/s      27.7 MB/s
+type=small  batch= 256 mode=immediate total=1000000 time=  0.516s rate=  1939755 msg/s      29.6 MB/s
+--- small deferred ---
+type=small  batch=   1 mode=deferred  total=1000000 time= 10.418s rate=    95989 msg/s       1.5 MB/s
+type=small  batch=   8 mode=deferred  total=1000000 time=  1.428s rate=   700298 msg/s      10.7 MB/s
+type=small  batch=  64 mode=deferred  total=1000000 time=  0.315s rate=  3177737 msg/s      48.5 MB/s
+type=small  batch= 256 mode=deferred  total=1000000 time=  0.194s rate=  5143278 msg/s      78.5 MB/s
+--- big4k immediate ---
+type=big4k  batch=   8 mode=immediate total=200000 time=  0.352s rate=   568947 msg/s    2231.1 MB/s
+type=big4k  batch=  64 mode=immediate total=200000 time=  0.256s rate=   780005 msg/s    3058.8 MB/s
+type=big4k  batch= 256 mode=immediate total=200000 time=  0.253s rate=   788987 msg/s    3094.0 MB/s
+--- big4k deferred ---
+type=big4k  batch=   8 mode=deferred  total=200000 time=  0.561s rate=   356786 msg/s    1399.1 MB/s
+type=big4k  batch=  64 mode=deferred  total=200000 time=  0.338s rate=   591899 msg/s    2321.1 MB/s
+type=big4k  batch= 256 mode=deferred  total=200000 time=  0.288s rate=   695628 msg/s    2727.9 MB/s
+--- huge1m immediate ---
+type=huge1m batch=   1 mode=immediate total=2000 time=  1.556s rate=     1285 msg/s    1285.0 MB/s
+type=huge1m batch=   2 mode=immediate total=2000 time=  1.000s rate=     2001 msg/s    2000.8 MB/s
+type=huge1m batch=   4 mode=immediate total=2000 time=  0.786s rate=     2543 msg/s    2543.0 MB/s
+--- huge1m deferred ---
+type=huge1m batch=   1 mode=deferred  total=2000 time=  1.542s rate=     1297 msg/s    1296.7 MB/s
+type=huge1m batch=   2 mode=deferred  total=2000 time=  1.329s rate=     1505 msg/s    1505.4 MB/s
+type=huge1m batch=   4 mode=deferred  total=2000 time=  1.238s rate=     1616 msg/s    1615.9 MB/s
