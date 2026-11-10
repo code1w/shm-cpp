@@ -18,10 +18,15 @@
  * 10. moved-from BatchWriter 必须惰性：拒绝写入，且不破坏活 writer 数据
  * 11. CommitReserve 校验：未 Reserve 或长度不符时不得推进写位置
  * 12. 双线程 SPSC 压测：并发生产者/消费者，校验消息顺序与内容
+ * 13. 镜像映射连续拷贝：所有关键 tail 值下跨尾写/读/Peek 内容一致
+ * 14. 镜像满环：phys 非零填满 Capacity，Peek 单段跨两圈、读回内容一致
+ * 15. 镜像 BatchWriter：Reserve 跨尾直写 + CommitReserve + Flush
+ * 16. Contig API 边界：0/超长/空指针/空环拒绝
  *
  * 无测试框架，abort() 失败，打印 "=== TEST PASSED ===" 成功。
  */
 
+#include <shm_ipc/common.hpp>
 #include <shm_ipc/ringbuf.hpp>
 
 #include <csignal>
@@ -658,6 +663,205 @@ void TestSpscStress()
                 kMsgs);
 }
 
+// =========================================================================
+// 镜像映射测试辅助（RingChannel 实际使用的数据区布局）
+// =========================================================================
+
+struct MirroredRing
+{
+    shm::UniqueFd   fd;
+    shm::MmapRegion region;
+
+    bool Init()
+    {
+        if (shm::CreateMemfd("ring-mirror-test", SmallRing::shm_size, &fd) !=
+            shm::ErrorCode::kOk)
+            return false;
+        return region.MapMirrored(fd.Get(), SmallRing::shm_size,
+                                  shm::kRingDataOffset, SmallRing::capacity,
+                                  PROT_READ | PROT_WRITE, MAP_SHARED) ==
+               shm::ErrorCode::kOk;
+    }
+    void *Get() { return region.Get(); }
+};
+
+void AdvanceMirrored(void *shm, uint32_t advance)
+{
+    char tmp[512] = {};
+    uint32_t remaining = advance;
+    while (remaining > 0)
+    {
+        uint32_t chunk = (remaining > sizeof(tmp))
+                             ? static_cast<uint32_t>(sizeof(tmp))
+                             : remaining;
+        CHECK(SmallRing::TryWriteContig(shm, tmp, chunk) == 0,
+              "AdvanceMirrored write");
+        CHECK(SmallRing::ReadExactContig(shm, tmp, chunk) == 0,
+              "AdvanceMirrored read");
+        remaining -= chunk;
+    }
+}
+
+// =========================================================================
+// 测试 13：镜像映射连续拷贝跨环尾
+// =========================================================================
+
+void TestContigWrap()
+{
+    std::printf("--- Test 13: mirrored contig wrap ---\n");
+
+    const uint32_t tails[] = {1, 2, 3, 7, 8, 15, 16, 100, 1024, 2047, 2048};
+    for (uint32_t tail : tails)
+    {
+        MirroredRing ring;
+        CHECK(ring.Init(), "mirror map");
+        void *shm = ring.Get();
+        AdvanceMirrored(shm,
+                        static_cast<uint32_t>(SmallRing::capacity - tail));
+
+        const uint32_t len = SmallRing::max_write_size;  // 2048
+        std::vector<char> wbuf(len);
+        FillPattern(wbuf.data(), len, static_cast<uint8_t>(tail & 0xFF));
+        CHECK(SmallRing::TryWriteContig(shm, wbuf.data(), len) == 0,
+              "contig write tail=%u", tail);
+
+        const void *seg = nullptr;
+        uint32_t seg_len = 0;
+        CHECK(SmallRing::PeekContig(shm, &seg, &seg_len) == 0, "peek contig");
+        CHECK(seg_len == len, "peek len tail=%u got %u", tail, seg_len);
+        VerifyPattern(static_cast<const char *>(seg), len,
+                      static_cast<uint8_t>(tail & 0xFF), "peek contig");
+
+        std::vector<char> rbuf(len);
+        CHECK(SmallRing::ReadExactContig(shm, rbuf.data(), len) == 0,
+              "read contig tail=%u", tail);
+        VerifyPattern(rbuf.data(), len, static_cast<uint8_t>(tail & 0xFF),
+                      "read contig");
+        CHECK(SmallRing::Available(shm) == 0, "empty after contig read");
+
+        const void *d = nullptr;
+        uint32_t l = 0;
+        CHECK(SmallRing::PeekContig(shm, &d, &l) == -1, "peek empty contig");
+    }
+
+    ++g_pass_count;
+    std::printf("  PASS: %zu tail offsets\n",
+                sizeof(tails) / sizeof(tails[0]));
+}
+
+// =========================================================================
+// 测试 14：镜像满环（phys 非零，Peek 单段跨两圈）
+// =========================================================================
+
+void TestContigFullRing()
+{
+    std::printf("--- Test 14: mirrored full ring across wrap ---\n");
+
+    MirroredRing ring;
+    CHECK(ring.Init(), "mirror map");
+    void *shm = ring.Get();
+    AdvanceMirrored(shm, 100);  // 非零物理起点，满环必然跨镜像边界
+
+    const uint32_t half = SmallRing::max_write_size;  // 2048
+    std::vector<char> a(half), b(half);
+    FillPattern(a.data(), half, 0x31);
+    FillPattern(b.data(), half, 0x32);
+
+    CHECK(SmallRing::TryWriteContig(shm, a.data(), half) == 0, "write a");
+    CHECK(SmallRing::TryWriteContig(shm, b.data(), half) == 0, "write b");
+    CHECK(SmallRing::Available(shm) == SmallRing::capacity, "full");
+    CHECK(SmallRing::TryWriteContig(shm, "x", 1) == -1, "full reject");
+
+    const void *seg = nullptr;
+    uint32_t seg_len = 0;
+    CHECK(SmallRing::PeekContig(shm, &seg, &seg_len) == 0, "peek full");
+    CHECK(seg_len == SmallRing::capacity, "peek full len=%u", seg_len);
+    VerifyPattern(static_cast<const char *>(seg), half, 0x31, "full a");
+    VerifyPattern(static_cast<const char *>(seg) + half, half, 0x32, "full b");
+
+    std::vector<char> out(SmallRing::capacity);
+    CHECK(SmallRing::TryReadContig(shm, out.data(), SmallRing::capacity) ==
+              SmallRing::capacity, "read full");
+    VerifyPattern(out.data(), half, 0x31, "read full a");
+    VerifyPattern(out.data() + half, half, 0x32, "read full b");
+    CHECK(SmallRing::Available(shm) == 0, "empty after full read");
+
+    ++g_pass_count;
+    std::printf("  PASS: full ring across mirror, single-segment peek\n");
+}
+
+// =========================================================================
+// 测试 15：镜像 BatchWriter 跨尾 Reserve
+// =========================================================================
+
+void TestMirroredBatchWriter()
+{
+    std::printf("--- Test 15: mirrored BatchWriter cross-tail Reserve ---\n");
+
+    MirroredRing ring;
+    CHECK(ring.Init(), "mirror map");
+    void *shm = ring.Get();
+    AdvanceMirrored(shm, static_cast<uint32_t>(SmallRing::capacity - 100));
+
+    {
+        SmallRing::BatchWriter b(shm, true);
+        char *p = b.Reserve(SmallRing::max_write_size);  // tail=100，跨尾
+        CHECK(p != nullptr, "mirrored Reserve cross tail");
+        FillPattern(p, SmallRing::max_write_size, 0x41);
+        b.CommitReserve(SmallRing::max_write_size);
+
+        char tailbuf[300];
+        FillPattern(tailbuf, sizeof(tailbuf), 0x42);
+        CHECK(b.TryWrite(tailbuf, sizeof(tailbuf)) == 0, "batch after reserve");
+        CHECK(b.Flush() == 2, "flush count");
+    }
+
+    const uint32_t total = SmallRing::max_write_size + 300;
+    std::vector<char> out(total);
+    CHECK(SmallRing::ReadExactContig(shm, out.data(), total) == 0,
+          "read reserve+write");
+    VerifyPattern(out.data(), SmallRing::max_write_size, 0x41, "reserve part");
+    VerifyPattern(out.data() + SmallRing::max_write_size, 300, 0x42,
+                  "tail part");
+    CHECK(SmallRing::Available(shm) == 0, "empty after batch");
+
+    ++g_pass_count;
+    std::printf("  PASS: mirrored Reserve/CommitReserve across tail\n");
+}
+
+// =========================================================================
+// 测试 16：Contig API 边界与空指针防护
+// =========================================================================
+
+void TestContigGuards()
+{
+    std::printf("--- Test 16: contig API guards ---\n");
+
+    MirroredRing ring;
+    CHECK(ring.Init(), "mirror map");
+    void *shm = ring.Get();
+
+    char x = 'x';
+    CHECK(SmallRing::TryWriteContig(shm, nullptr, 10) == -1, "null src");
+    CHECK(SmallRing::TryWriteContig(shm, &x, 0) == -1, "len 0");
+    CHECK(SmallRing::TryWriteContig(shm, &x,
+                                    SmallRing::max_write_size + 1) == -1,
+          "oversize");
+    CHECK(SmallRing::TryReadContig(shm, nullptr, 10) == 0, "read null");
+    CHECK(SmallRing::ReadExactContig(shm, nullptr, 10) == -1,
+          "read exact null");
+    CHECK(SmallRing::ReadExactContig(shm, nullptr, 0) == 0, "read exact 0");
+
+    const void *d = nullptr;
+    uint32_t l = 0;
+    CHECK(SmallRing::PeekContig(shm, nullptr, &l) == -1, "peek null data");
+    CHECK(SmallRing::PeekContig(shm, &d, nullptr) == -1, "peek null len");
+    CHECK(SmallRing::PeekContig(shm, &d, &l) == -1, "peek empty");
+
+    ++g_pass_count;
+    std::printf("  PASS: contig zero/oversize/null/empty rejected\n");
+}
+
 }  // anonymous namespace
 
 int main()
@@ -677,6 +881,10 @@ int main()
     TestMovedFromWriterInert();
     TestCommitReserveValidation();
     TestSpscStress();
+    TestContigWrap();
+    TestContigFullRing();
+    TestMirroredBatchWriter();
+    TestContigGuards();
 
     std::printf("\n=== TEST PASSED === (%d sub-tests)\n", g_pass_count);
     return 0;
