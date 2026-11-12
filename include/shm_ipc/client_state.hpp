@@ -24,14 +24,14 @@ namespace shm {
  */
 struct ClientState
 {
-    int id = 0;                        ///< 客户端 ID（server 端分配）
-    UniqueFd socket_fd;                ///< 连接 socket fd
-    DefaultRingChannel channel;        ///< 双向共享内存通道
-    int timer_fd   = -1;               ///< 定时器 fd（server 端使用）
-    int notify_efd = -1;               ///< 对端写入通知的 eventfd（缓存自 channel）
-    int tick       = 0;                ///< 定时器 tick 计数（server 端使用）
-    int total_read = 0;                ///< 累计读取消息数
-    std::unique_ptr<ICodec> codec;     ///< 读方向编解码器（内部持有 FrameReader）
+    int id = 0;                     ///< 客户端 ID（server 端分配）
+    UniqueFd socket_fd;             ///< 连接 socket fd
+    DefaultRingChannel channel;     ///< 双向共享内存通道
+    int timer_fd   = -1;            ///< 定时器 fd（server 端使用）
+    int notify_efd = -1;            ///< 对端写入通知的 eventfd（缓存自 channel）
+    int tick       = 0;             ///< 定时器 tick 计数（server 端使用）
+    int total_read = 0;             ///< 累计读取消息数
+    std::unique_ptr<ICodec> codec;  ///< 读方向编解码器（内部持有 FrameReader）
 };
 
 }  // namespace shm

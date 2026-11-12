@@ -22,11 +22,11 @@
 
 namespace {
 
-constexpr const char *kSocketPath = "/tmp/shm-ipc-sock-bench.socket";
+constexpr const char* kSocketPath = "/tmp/shm-ipc-sock-bench.socket";
 
-void WriteAll(int fd, const void *buf, std::size_t len)
+void WriteAll(int fd, const void* buf, std::size_t len)
 {
-    auto *p = static_cast<const char *>(buf);
+    auto* p = static_cast<const char*>(buf);
     while (len > 0)
     {
         auto n = ::write(fd, p, len);
@@ -35,19 +35,18 @@ void WriteAll(int fd, const void *buf, std::size_t len)
             std::perror("write");
             std::_Exit(1);
         }
-        p   += n;
+        p += n;
         len -= static_cast<std::size_t>(n);
     }
 }
 
-bool ConnectToServer(const char *path, shm::UniqueFd *out)
+bool ConnectToServer(const char* path, shm::UniqueFd* out)
 {
-    int sys_errno = 0;
+    int sys_errno     = 0;
     shm::ErrorCode ec = shm::ConnectUnixSocket(path, out, &sys_errno);
     if (ec != shm::ErrorCode::kOk)
     {
-        std::fprintf(stderr, "socket_client: connect failed: %s\n",
-                     shm::ErrorCodeMessage(ec, sys_errno).c_str());
+        std::fprintf(stderr, "socket_client: connect failed: %s\n", shm::ErrorCodeMessage(ec, sys_errno).c_str());
         return false;
     }
     return true;
@@ -66,21 +65,18 @@ bool RunBench()
 
     shm::PrintBenchHeader();
 
-    for (auto &tc : shm::kBenchCases)
+    for (auto& tc : shm::kBenchCases)
     {
         // 通知 server 本轮参数
         shm::BenchCmd cmd{tc.payload_size, tc.rounds};
         WriteAll(sfd.Get(), &cmd, sizeof(cmd));
 
         // 构造 payload = [tag u32] + BenchPayloadHeader + 填充字节
-        uint32_t body_len = shm::kTagSize
-                          + static_cast<uint32_t>(sizeof(shm::BenchPayloadHeader))
-                          + tc.payload_size;
+        uint32_t body_len = shm::kTagSize + static_cast<uint32_t>(sizeof(shm::BenchPayloadHeader)) + tc.payload_size;
         std::vector<char> body(body_len);
         uint32_t bench_tag = shm::kBenchTag;
         std::memcpy(body.data(), &bench_tag, shm::kTagSize);
-        std::memset(body.data() + shm::kTagSize + sizeof(shm::BenchPayloadHeader),
-                    'B', tc.payload_size);
+        std::memset(body.data() + shm::kTagSize + sizeof(shm::BenchPayloadHeader), 'B', tc.payload_size);
 
         // 编码缓冲区
         uint32_t frame_size = shm::BenchFrameSize(tc.payload_size);
@@ -91,9 +87,7 @@ bool RunBench()
         {
             shm::BenchPayloadHeader hdr{i};
             std::memcpy(body.data() + shm::kTagSize, &hdr, sizeof(hdr));
-            uint32_t n = shm::Encode(body.data(), body_len,
-                                          frame_buf.data(), frame_size,
-                                          static_cast<uint32_t>(i));
+            uint32_t n = shm::Encode(body.data(), body_len, frame_buf.data(), frame_size, static_cast<uint32_t>(i));
             WriteAll(sfd.Get(), frame_buf.data(), n);
         }
 
@@ -103,8 +97,7 @@ bool RunBench()
         shm::BenchPayloadHeader end_hdr{-1};
         std::memcpy(end_body + shm::kTagSize, &end_hdr, sizeof(end_hdr));
         char end_frame[64];
-        uint32_t n = shm::Encode(end_body, sizeof(end_body),
-                                      end_frame, sizeof(end_frame), 0);
+        uint32_t n = shm::Encode(end_body, sizeof(end_body), end_frame, sizeof(end_frame), 0);
         WriteAll(sfd.Get(), end_frame, n);
 
         // 等 server ack

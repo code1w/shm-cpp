@@ -31,7 +31,7 @@ class ITcpConnection
     // ---- 数据面 ----
 
     /// @brief 发送消息包（codec 编码后写入传输层），成功返回 true
-    virtual bool SendCmd(const std::any &pkg) = 0;
+    virtual bool SendCmd(const std::any& pkg) = 0;
 
     /// @brief 主动关闭连接（异步收尾，之后触发 close 回调）
     virtual void Close() = 0;
@@ -49,18 +49,17 @@ class ITcpConnection
 
     // ---- 上下文 ----
 
-    virtual void SetContext(std::any context)      = 0;
-    virtual const std::any &Context() const        = 0;
-    virtual void SetRpcContext(std::any context)   = 0;
-    virtual const std::any &RpcContext() const     = 0;
+    virtual void SetContext(std::any context)    = 0;
+    virtual const std::any& Context() const      = 0;
+    virtual void SetRpcContext(std::any context) = 0;
+    virtual const std::any& RpcContext() const   = 0;
 
     // ---- 验证 / 心跳 / 缓冲 ----
 
     /// @brief 启动验证超时定时器
     /// @param expired_ms  超时时间（毫秒）
     /// @param interval_ms 重复间隔（shm 实现暂按一次性处理，传 0）
-    virtual void StartVerifyTimer(int64_t expired_ms, int64_t interval_ms,
-                                  TimeAction action) = 0;
+    virtual void StartVerifyTimer(int64_t expired_ms, int64_t interval_ms, TimeAction action) = 0;
 
     /// @brief 开启/关闭应用层心跳响应
     virtual void SetKeepAlive(bool keepalive) = 0;

@@ -42,21 +42,16 @@ class ProtoCodec : public ICodec
     // ICodec 虚方法
     // -----------------------------------------------------------------------
 
-    uint32_t Encode(const void *msg, void *buf,
-                    uint32_t buf_size, uint32_t seq) override
+    uint32_t Encode(const void* msg, void* buf, uint32_t buf_size, uint32_t seq) override
     {
-        return EncodeTo(*static_cast<const T *>(msg), buf, buf_size, seq);
+        return EncodeTo(*static_cast<const T*>(msg), buf, buf_size, seq);
     }
 
-    bool Decode(const void *buf, uint32_t buf_len,
-                const void **payload, uint32_t *payload_len,
-                uint32_t *seq) override
+    bool Decode(const void* buf, uint32_t buf_len, const void** payload, uint32_t* payload_len, uint32_t* seq) override
     {
-        const char *type_name = nullptr;
+        const char* type_name  = nullptr;
         uint32_t type_name_len = 0;
-        if (!DecodeHeader(buf, buf_len,
-                          &type_name, &type_name_len,
-                          payload, payload_len, seq))
+        if (!DecodeHeader(buf, buf_len, &type_name, &type_name_len, payload, payload_len, seq))
             return false;
         // 校验 type_name，防止类型混淆
         return TypeNameMatches(type_name, type_name_len);
@@ -73,12 +68,11 @@ class ProtoCodec : public ICodec
      *
      * type_name 与 T 的实际类型名不匹配时返回 false（防止类型混淆）。
      */
-    bool DecodePayload(const void *payload, uint32_t payload_len,
-                       const void **data, uint32_t *data_len) override
+    bool DecodePayload(const void* payload, uint32_t payload_len, const void** data, uint32_t* data_len) override
     {
         if (payload_len < kTypeNameLenSize)
             return false;
-        auto *p = static_cast<const char *>(payload);
+        auto* p           = static_cast<const char*>(payload);
         uint16_t name_len = 0;
         std::memcpy(&name_len, p, kTypeNameLenSize);
         uint32_t prefix_len = kTypeNameLenSize + name_len;
@@ -92,22 +86,16 @@ class ProtoCodec : public ICodec
     }
 
     /// @brief ICodec 虚方法：从 DefaultRingChannel 读取一帧
-    int Recv(DefaultRingChannel &ch, void *out) override
-    {
-        return Recv(ch, static_cast<T *>(out));
-    }
+    int Recv(DefaultRingChannel& ch, void* out) override { return Recv(ch, static_cast<T*>(out)); }
 
     /// @brief ICodec 虚方法：编码 protobuf 并写入 DefaultRingChannel
-    int Send(DefaultRingChannel &ch, const void *msg, uint32_t seq) override
+    int Send(DefaultRingChannel& ch, const void* msg, uint32_t seq) override
     {
-        return Send(ch, *static_cast<const T *>(msg), seq);
+        return Send(ch, *static_cast<const T*>(msg), seq);
     }
 
     /// @brief ICodec 虚方法：提交上一帧读取
-    void Commit(DefaultRingChannel &ch) override
-    {
-        reader_.Commit(ch);
-    }
+    void Commit(DefaultRingChannel& ch) override { reader_.Commit(ch); }
 
     // -----------------------------------------------------------------------
     // 静态工具方法
@@ -118,15 +106,14 @@ class ProtoCodec : public ICodec
      *
      * 帧格式：[MsgHeader 8B][type_name_len u16][type_name chars][payload NB]
      */
-    static uint32_t EncodeTo(const T &msg, void *buf,
-                             uint32_t buf_size, uint32_t seq)
+    static uint32_t EncodeTo(const T& msg, void* buf, uint32_t buf_size, uint32_t seq)
     {
         std::string name = msg.GetTypeName();
-        auto name_len = static_cast<uint16_t>(name.size());
-        auto pb_len = static_cast<uint32_t>(msg.ByteSizeLong());
+        auto name_len    = static_cast<uint16_t>(name.size());
+        auto pb_len      = static_cast<uint32_t>(msg.ByteSizeLong());
 
         uint32_t payload_len = kTypeNameLenSize + name_len + pb_len;
-        char *p = EncodeFrame(buf, buf_size, payload_len, seq);
+        char* p              = EncodeFrame(buf, buf_size, payload_len, seq);
         if (!p)
             return 0;
 
@@ -143,15 +130,13 @@ class ProtoCodec : public ICodec
     /**
      * @brief 从完整字节帧中解析 protobuf 帧头，提取 type_name 和 payload 指针
      */
-    static bool DecodeHeader(const void *buf, uint32_t buf_len,
-                             const char **type_name, uint32_t *type_name_len,
-                             const void **payload, uint32_t *payload_len,
-                             uint32_t *seq = nullptr)
+    static bool DecodeHeader(const void* buf, uint32_t buf_len, const char** type_name, uint32_t* type_name_len,
+                             const void** payload, uint32_t* payload_len, uint32_t* seq = nullptr)
     {
         if (buf_len < kMsgHeaderSize + kTypeNameLenSize)
             return false;
 
-        auto *p = static_cast<const char *>(buf);
+        auto* p = static_cast<const char*>(buf);
 
         MsgHeader hdr{};
         std::memcpy(&hdr, p, kMsgHeaderSize);
@@ -180,7 +165,7 @@ class ProtoCodec : public ICodec
     /**
      * @brief 从 payload 中反序列化 protobuf Message
      */
-    static bool DecodeFrom(const void *payload, uint32_t payload_len, T *out)
+    static bool DecodeFrom(const void* payload, uint32_t payload_len, T* out)
     {
         return out->ParseFromArray(payload, static_cast<int>(payload_len));
     }
@@ -196,16 +181,16 @@ class ProtoCodec : public ICodec
      * RingBuf::max_write_size（Capacity/2），否则返回 -1 且不写入任何数据。
      */
     template <std::size_t Cap>
-    static int Send(RingChannel<Cap> &ch, const T &msg, uint32_t seq)
+    static int Send(RingChannel<Cap>& ch, const T& msg, uint32_t seq)
     {
         std::string name = msg.GetTypeName();
-        auto name_len = static_cast<uint16_t>(name.size());
-        auto pb_len = static_cast<uint32_t>(msg.ByteSizeLong());
+        auto name_len    = static_cast<uint16_t>(name.size());
+        auto pb_len      = static_cast<uint32_t>(msg.ByteSizeLong());
         if (pb_len > RingChannel<Cap>::max_write_size)
             return -1;
         uint32_t payload_len = kTypeNameLenSize + name_len + pb_len;
 
-        return SendFrame(ch, payload_len, seq, [&](auto &batch) {
+        return SendFrame(ch, payload_len, seq, [&](auto& batch) {
             batch.TryWrite(&name_len, kTypeNameLenSize);
             batch.TryWrite(name.data(), name_len);
             if (pb_len > 0)
@@ -219,17 +204,16 @@ class ProtoCodec : public ICodec
      * pb_len 限制同上单次 Send。
      */
     template <std::size_t Cap>
-    static int SendBatch(typename RingChannel<Cap>::ChannelBatchWriter &batch,
-                         const T &msg, uint32_t seq)
+    static int SendBatch(typename RingChannel<Cap>::ChannelBatchWriter& batch, const T& msg, uint32_t seq)
     {
         std::string name = msg.GetTypeName();
-        auto name_len = static_cast<uint16_t>(name.size());
-        auto pb_len = static_cast<uint32_t>(msg.ByteSizeLong());
+        auto name_len    = static_cast<uint16_t>(name.size());
+        auto pb_len      = static_cast<uint32_t>(msg.ByteSizeLong());
         if (pb_len > RingChannel<Cap>::max_write_size)
             return -1;
         uint32_t payload_len = kTypeNameLenSize + name_len + pb_len;
 
-        return SendFrameBatch<Cap>(batch, payload_len, seq, [&](auto &b) {
+        return SendFrameBatch<Cap>(batch, payload_len, seq, [&](auto& b) {
             b.TryWrite(&name_len, kTypeNameLenSize);
             b.TryWrite(name.data(), name_len);
             if (pb_len > 0)
@@ -249,16 +233,16 @@ class ProtoCodec : public ICodec
      *         （协议错误，连接应断开）
      */
     template <std::size_t Cap>
-    int Recv(RingChannel<Cap> &ch, T *out)
+    int Recv(RingChannel<Cap>& ch, T* out)
     {
         for (;;)
         {
-            const void *payload = nullptr;
+            const void* payload  = nullptr;
             uint32_t payload_len = 0;
-            int rc = reader_.TryRecv(ch, &payload, &payload_len);
+            int rc               = reader_.TryRecv(ch, &payload, &payload_len);
             if (rc == -1 || rc == -2 || rc == -3)
                 return rc;
-            const void *data = nullptr;
+            const void* data  = nullptr;
             uint32_t data_len = 0;
             if (!DecodePayload(payload, payload_len, &data, &data_len) ||
                 !out->ParseFromArray(data, static_cast<int>(data_len)))
@@ -274,11 +258,10 @@ class ProtoCodec : public ICodec
     /**
      * @brief 校验帧内 type_name 是否与 T 的实际类型名一致
      */
-    static bool TypeNameMatches(const char *type_name, uint32_t type_name_len)
+    static bool TypeNameMatches(const char* type_name, uint32_t type_name_len)
     {
         static const std::string kExpected = T{}.GetTypeName();
-        return type_name_len == kExpected.size() &&
-               std::memcmp(type_name, kExpected.data(), type_name_len) == 0;
+        return type_name_len == kExpected.size() && std::memcmp(type_name, kExpected.data(), type_name_len) == 0;
     }
 
     FrameReader<> reader_;
@@ -289,9 +272,9 @@ class ProtoCodec : public ICodec
      * 优先使用 Reserve 获取直写指针（零拷贝），跨环尾时回退到临时缓冲区。
      */
     template <typename BatchWriter>
-    static void SerializeToBatch(BatchWriter &batch, const T &msg, uint32_t pb_len)
+    static void SerializeToBatch(BatchWriter& batch, const T& msg, uint32_t pb_len)
     {
-        char *ptr = batch.Reserve(pb_len);
+        char* ptr = batch.Reserve(pb_len);
         if (ptr)
         {
             msg.SerializeToArray(ptr, static_cast<int>(pb_len));
@@ -302,7 +285,7 @@ class ProtoCodec : public ICodec
             // 跨环尾，回退到临时缓冲区
             uint8_t stack_buf[4096];
             std::vector<uint8_t> heap_buf;
-            uint8_t *buf = stack_buf;
+            uint8_t* buf = stack_buf;
             if (pb_len > sizeof(stack_buf))
             {
                 heap_buf.resize(pb_len);

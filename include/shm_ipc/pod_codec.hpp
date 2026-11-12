@@ -37,8 +37,7 @@ inline constexpr uint32_t kTagSize = sizeof(uint32_t);
 template <typename T>
 class PodCodec : public ICodec
 {
-    static_assert(std::is_trivially_copyable_v<T>,
-                  "PodCodec<T>: T must be trivially copyable");
+    static_assert(std::is_trivially_copyable_v<T>, "PodCodec<T>: T must be trivially copyable");
 
  public:
     // -----------------------------------------------------------------------
@@ -50,10 +49,9 @@ class PodCodec : public ICodec
      *
      * @param msg  指向 T 对象的指针
      */
-    uint32_t Encode(const void *msg, void *buf,
-                    uint32_t buf_size, uint32_t seq) override
+    uint32_t Encode(const void* msg, void* buf, uint32_t buf_size, uint32_t seq) override
     {
-        return EncodeTo(*static_cast<const T *>(msg), buf, buf_size, seq);
+        return EncodeTo(*static_cast<const T*>(msg), buf, buf_size, seq);
     }
 
     /**
@@ -62,18 +60,16 @@ class PodCodec : public ICodec
      * 返回的 payload 指向 T 的原始字节（跳过 tag），调用方可用 DecodeFrom 或 memcpy 还原。
      * tag 与 TypeTag<T>::value 不匹配时返回 false。
      */
-    bool Decode(const void *buf, uint32_t buf_len,
-                const void **payload, uint32_t *payload_len,
-                uint32_t *seq) override
+    bool Decode(const void* buf, uint32_t buf_len, const void** payload, uint32_t* payload_len, uint32_t* seq) override
     {
-        const void *raw_payload = nullptr;
-        uint32_t raw_len = 0;
+        const void* raw_payload = nullptr;
+        uint32_t raw_len        = 0;
         if (!shm::Decode(buf, buf_len, &raw_payload, &raw_len, seq))
             return false;
         uint32_t tag = 0;
         if (!CheckTag(raw_payload, raw_len, &tag))
             return false;
-        auto *p = static_cast<const char *>(raw_payload);
+        auto* p      = static_cast<const char*>(raw_payload);
         *payload     = p + kTagSize;
         *payload_len = raw_len - kTagSize;
         return true;
@@ -94,34 +90,27 @@ class PodCodec : public ICodec
      *
      * tag 与 TypeTag<T>::value 不匹配时返回 false（防止类型混淆）。
      */
-    bool DecodePayload(const void *payload, uint32_t payload_len,
-                       const void **data, uint32_t *data_len) override
+    bool DecodePayload(const void* payload, uint32_t payload_len, const void** data, uint32_t* data_len) override
     {
         uint32_t tag = 0;
         if (!CheckTag(payload, payload_len, &tag))
             return false;
-        *data     = static_cast<const char *>(payload) + kTagSize;
+        *data     = static_cast<const char*>(payload) + kTagSize;
         *data_len = payload_len - kTagSize;
         return true;
     }
 
     /// @brief ICodec 虚方法：从 DefaultRingChannel 读取一帧
-    int Recv(DefaultRingChannel &ch, void *out) override
-    {
-        return Recv(ch, static_cast<T *>(out));
-    }
+    int Recv(DefaultRingChannel& ch, void* out) override { return Recv(ch, static_cast<T*>(out)); }
 
     /// @brief ICodec 虚方法：编码 POD 并写入 DefaultRingChannel
-    int Send(DefaultRingChannel &ch, const void *msg, uint32_t seq) override
+    int Send(DefaultRingChannel& ch, const void* msg, uint32_t seq) override
     {
-        return Send(ch, *static_cast<const T *>(msg), seq);
+        return Send(ch, *static_cast<const T*>(msg), seq);
     }
 
     /// @brief ICodec 虚方法：提交上一帧读取
-    void Commit(DefaultRingChannel &ch) override
-    {
-        reader_.Commit(ch);
-    }
+    void Commit(DefaultRingChannel& ch) override { reader_.Commit(ch); }
 
     // -----------------------------------------------------------------------
     // 静态工具方法
@@ -132,12 +121,11 @@ class PodCodec : public ICodec
      *
      * 帧格式：[MsgHeader 8B][tag u32][T bytes]
      */
-    static uint32_t EncodeTo(const T &obj, void *buf,
-                             uint32_t buf_size, uint32_t seq)
+    static uint32_t EncodeTo(const T& obj, void* buf, uint32_t buf_size, uint32_t seq)
     {
-        uint32_t tag = TypeTag<T>::value;
+        uint32_t tag         = TypeTag<T>::value;
         uint32_t payload_len = kTagSize + sizeof(T);
-        char *p = EncodeFrame(buf, buf_size, payload_len, seq);
+        char* p              = EncodeFrame(buf, buf_size, payload_len, seq);
         if (!p)
             return 0;
         std::memcpy(p, &tag, kTagSize);
@@ -153,7 +141,7 @@ class PodCodec : public ICodec
      * @param[out] out    输出对象指针
      * @return true 解码成功，false 大小不匹配
      */
-    static bool DecodeFrom(const void *payload, uint32_t payload_len, T *out)
+    static bool DecodeFrom(const void* payload, uint32_t payload_len, T* out)
     {
         if (payload_len != sizeof(T))
             return false;
@@ -169,10 +157,10 @@ class PodCodec : public ICodec
      * @brief 编码 POD 并写入 RingChannel，成功后通知对端
      */
     template <std::size_t Cap>
-    static int Send(RingChannel<Cap> &ch, const T &obj, uint32_t seq)
+    static int Send(RingChannel<Cap>& ch, const T& obj, uint32_t seq)
     {
         uint32_t tag = TypeTag<T>::value;
-        return SendFrame(ch, kTagSize + sizeof(T), seq, [&](auto &batch) {
+        return SendFrame(ch, kTagSize + sizeof(T), seq, [&](auto& batch) {
             batch.TryWrite(&tag, kTagSize);
             batch.TryWrite(&obj, sizeof(T));
         });
@@ -182,11 +170,10 @@ class PodCodec : public ICodec
      * @brief 编码 POD 并写入批量写入器（不触发通知，由 Flush 统一通知）
      */
     template <std::size_t Cap>
-    static int SendBatch(typename RingChannel<Cap>::ChannelBatchWriter &batch,
-                         const T &obj, uint32_t seq)
+    static int SendBatch(typename RingChannel<Cap>::ChannelBatchWriter& batch, const T& obj, uint32_t seq)
     {
         uint32_t tag = TypeTag<T>::value;
-        return SendFrameBatch<Cap>(batch, kTagSize + sizeof(T), seq, [&](auto &b) {
+        return SendFrameBatch<Cap>(batch, kTagSize + sizeof(T), seq, [&](auto& b) {
             b.TryWrite(&tag, kTagSize);
             b.TryWrite(&obj, sizeof(T));
         });
@@ -204,19 +191,18 @@ class PodCodec : public ICodec
      *         （协议错误，连接应断开）
      */
     template <std::size_t Cap>
-    int Recv(RingChannel<Cap> &ch, T *out)
+    int Recv(RingChannel<Cap>& ch, T* out)
     {
         for (;;)
         {
-            const void *payload = nullptr;
+            const void* payload  = nullptr;
             uint32_t payload_len = 0;
-            int rc = reader_.TryRecv(ch, &payload, &payload_len);
+            int rc               = reader_.TryRecv(ch, &payload, &payload_len);
             if (rc == -1 || rc == -2 || rc == -3)
                 return rc;
-            const void *data = nullptr;
+            const void* data  = nullptr;
             uint32_t data_len = 0;
-            if (!DecodePayload(payload, payload_len, &data, &data_len) ||
-                data_len != sizeof(T))
+            if (!DecodePayload(payload, payload_len, &data, &data_len) || data_len != sizeof(T))
             {
                 reader_.Commit(ch);  // 毒帧立即丢弃，避免驻留环中占用空间
                 continue;
@@ -231,8 +217,7 @@ class PodCodec : public ICodec
      * @brief 校验 payload 中的类型标签
      * @return true 标签存在且与 T 注册值匹配
      */
-    static bool CheckTag(const void *payload, uint32_t payload_len,
-                         uint32_t *tag_out)
+    static bool CheckTag(const void* payload, uint32_t payload_len, uint32_t* tag_out)
     {
         if (payload_len < kTagSize)
             return false;

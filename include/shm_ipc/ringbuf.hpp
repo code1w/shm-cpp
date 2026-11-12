@@ -44,23 +44,21 @@ inline constexpr uint32_t kReaderNotifyAlways = 2;
 /** @brief 环形缓冲区控制头，写位置/读位置/读方等待标志各占独立缓存行 */
 struct alignas(64) RingHeader
 {
-    std::atomic<uint64_t> write_pos;  ///< 写位置（单调递增字节偏移）
+    std::atomic<uint64_t> write_pos;                ///< 写位置（单调递增字节偏移）
     char pad1[64 - sizeof(std::atomic<uint64_t>)];  ///< 填充至 64 字节（一个缓存行）
-    std::atomic<uint64_t> read_pos;   ///< 读位置（单调递增字节偏移）
+    std::atomic<uint64_t> read_pos;                 ///< 读位置（单调递增字节偏移）
     char pad2[64 - sizeof(std::atomic<uint64_t>)];  ///< 填充至 64 字节
-    std::atomic<uint32_t> reader_wait;  ///< 读方等待标志（kReader*），读方置位、写方清零
+    std::atomic<uint32_t> reader_wait;              ///< 读方等待标志（kReader*），读方置位、写方清零
     char pad3[64 - sizeof(std::atomic<uint32_t>)];  ///< 填充至 64 字节
 };
 
 static_assert(sizeof(RingHeader) == 192, "RingHeader must be 192 bytes (3 cache lines)");
 static_assert(alignof(RingHeader) == 64, "RingHeader must be aligned to 64 bytes");
-static_assert(std::atomic<uint32_t>::is_always_lock_free,
-              "lock-free atomics are required for cross-process shm");
+static_assert(std::atomic<uint32_t>::is_always_lock_free, "lock-free atomics are required for cross-process shm");
 
 /// @brief 数据区起始偏移（页对齐，供 RingChannel 建立数据区镜像映射）
 inline constexpr std::size_t kRingDataOffset = 4096;
-static_assert(kRingDataOffset >= sizeof(RingHeader),
-              "data offset must leave room for RingHeader");
+static_assert(kRingDataOffset >= sizeof(RingHeader), "data offset must leave room for RingHeader");
 
 // ---------------------------------------------------------------------------
 // detail — RingBuf 的内部实现组件
@@ -69,28 +67,16 @@ static_assert(kRingDataOffset >= sizeof(RingHeader),
 namespace detail {
 
 /// @brief 共享内存起始地址 → RingHeader 指针
-inline RingHeader *RingHdr(void *shm)
-{
-    return static_cast<RingHeader *>(shm);
-}
+inline RingHeader* RingHdr(void* shm) { return static_cast<RingHeader*>(shm); }
 
 /// @brief 共享内存起始地址 → RingHeader 指针（const 版本）
-inline const RingHeader *RingHdr(const void *shm)
-{
-    return static_cast<const RingHeader *>(shm);
-}
+inline const RingHeader* RingHdr(const void* shm) { return static_cast<const RingHeader*>(shm); }
 
 /// @brief 共享内存起始地址 → 数据区起始指针
-inline char *RingData(void *shm)
-{
-    return static_cast<char *>(shm) + kRingDataOffset;
-}
+inline char* RingData(void* shm) { return static_cast<char*>(shm) + kRingDataOffset; }
 
 /// @brief 共享内存起始地址 → 数据区起始指针（const 版本）
-inline const char *RingData(const void *shm)
-{
-    return static_cast<const char *>(shm) + kRingDataOffset;
-}
+inline const char* RingData(const void* shm) { return static_cast<const char*>(shm) + kRingDataOffset; }
 
 /// @brief 单调递增偏移 → 物理偏移（要求 Capacity 为 2 的幂）
 template <std::size_t Capacity>
@@ -107,10 +93,10 @@ constexpr std::size_t RingPhys(uint64_t pos)
  * @param len    要拷贝的字节数
  */
 template <std::size_t Capacity>
-void RingCopyOut(const char *base, std::size_t phys_r, void *dst, uint32_t len)
+void RingCopyOut(const char* base, std::size_t phys_r, void* dst, uint32_t len)
 {
     std::size_t contig = Capacity - phys_r;
-    auto *d = static_cast<char *>(dst);
+    auto* d            = static_cast<char*>(dst);
     if (len <= contig)
     {
         std::memcpy(d, base + phys_r, len);
@@ -155,8 +141,7 @@ void RingCopyOut(const char *base, std::size_t phys_r, void *dst, uint32_t len)
 template <std::size_t Capacity>
 class BatchWriter
 {
-    static_assert((Capacity & (Capacity - 1)) == 0,
-                  "Capacity must be a power of 2");
+    static_assert((Capacity & (Capacity - 1)) == 0, "Capacity must be a power of 2");
     static_assert(Capacity >= 1024, "Capacity must be at least 1024 bytes");
 
  public:
@@ -169,29 +154,37 @@ class BatchWriter
      * @brief 构造批量写入器，快照当前 write_pos 和 read_pos
      * @param shm 共享内存指针
      */
-    explicit BatchWriter(void *shm, bool mirrored = false)
-        : hdr_(RingHdr(shm)), base_(RingData(shm)), mirrored_(mirrored),
+    explicit BatchWriter(void* shm, bool mirrored = false)
+        : hdr_(RingHdr(shm)),
+          base_(RingData(shm)),
+          mirrored_(mirrored),
           w_(hdr_->write_pos.load(std::memory_order_relaxed)),
           r_(hdr_->read_pos.load(std::memory_order_acquire)),
-          w_start_(w_) {}
+          w_start_(w_)
+    {}
 
     ~BatchWriter() { Flush(); }
 
-    BatchWriter(BatchWriter &&o) noexcept
-        : hdr_(o.hdr_), base_(o.base_), mirrored_(o.mirrored_),
-          w_(o.w_), r_(o.r_), w_start_(o.w_start_),
+    BatchWriter(BatchWriter&& o) noexcept
+        : hdr_(o.hdr_),
+          base_(o.base_),
+          mirrored_(o.mirrored_),
+          w_(o.w_),
+          r_(o.r_),
+          w_start_(o.w_start_),
           count_(o.count_),
-          reserved_(o.reserved_), reserved_len_(o.reserved_len_)
+          reserved_(o.reserved_),
+          reserved_len_(o.reserved_len_)
     {
         // moved-from 必须是惰性对象：只清 hdr_ 而保留 base_/w_ 时，
         // 对其 TryWrite 会写入共享环并返回成功，但 Flush 永不发布；
         // 更糟的是它会覆写活 writer 尚未 Flush 的数据，造成静默损坏。
-        o.hdr_          = nullptr;
-        o.base_         = nullptr;
+        o.hdr_  = nullptr;
+        o.base_ = nullptr;
         o.w_ = o.r_ = o.w_start_ = 0;
-        o.count_        = 0;
-        o.reserved_     = nullptr;
-        o.reserved_len_ = 0;
+        o.count_                 = 0;
+        o.reserved_              = nullptr;
+        o.reserved_len_          = 0;
     }
 
     /**
@@ -199,7 +192,7 @@ class BatchWriter
      *
      * 选择 Cancel 而不是 Flush：赋值语义不应隐式向对端发布半成品批次。
      */
-    BatchWriter &operator=(BatchWriter &&o) noexcept
+    BatchWriter& operator=(BatchWriter&& o) noexcept
     {
         if (this != &o)
         {
@@ -214,17 +207,17 @@ class BatchWriter
             reserved_     = o.reserved_;
             reserved_len_ = o.reserved_len_;
 
-            o.hdr_          = nullptr;
-            o.base_         = nullptr;
+            o.hdr_  = nullptr;
+            o.base_ = nullptr;
             o.w_ = o.r_ = o.w_start_ = 0;
-            o.count_        = 0;
-            o.reserved_     = nullptr;
-            o.reserved_len_ = 0;
+            o.count_                 = 0;
+            o.reserved_              = nullptr;
+            o.reserved_len_          = 0;
         }
         return *this;
     }
-    BatchWriter(const BatchWriter &)            = delete;
-    BatchWriter &operator=(const BatchWriter &) = delete;
+    BatchWriter(const BatchWriter&)            = delete;
+    BatchWriter& operator=(const BatchWriter&) = delete;
 
     /**
      * @brief 尝试写入一段数据到批量缓冲区（不触发原子 store）
@@ -232,7 +225,7 @@ class BatchWriter
      * @param len  数据长度（字节）
      * @return 0 成功，-1 空间不足或数据过大
      */
-    int TryWrite(const void *data, uint32_t len)
+    int TryWrite(const void* data, uint32_t len)
     {
         if (!hdr_ || !base_)  // moved-from / 已失效：不得写入
             return -1;
@@ -247,7 +240,7 @@ class BatchWriter
         std::size_t phys_w = RingPhys<Capacity>(w_);
         std::size_t tail   = Capacity - phys_w;
 
-        auto *src = static_cast<const char *>(data);
+        auto* src = static_cast<const char*>(data);
         if (mirrored_ || len <= tail)
         {
             // 镜像映射下数据区连续两圈，跨尾也可单次 memcpy
@@ -345,7 +338,7 @@ class BatchWriter
      * @param len 请求字节数
      * @return 非空 = 可直接写入的指针；nullptr = 不可用（跨环尾或空间不足）
      */
-    char *Reserve(uint32_t len)
+    char* Reserve(uint32_t len)
     {
         if (!hdr_ || !base_)  // moved-from / 已失效
             return nullptr;
@@ -382,16 +375,16 @@ class BatchWriter
     }
 
  private:
-    RingHeader *hdr_    = nullptr;  ///< 为空表示惰性写入器
-    char *base_         = nullptr;  ///< 数据区起始指针
-    bool mirrored_      = false;    ///< 数据区是否做了镜像映射（可单次跨尾拷贝）
-    uint64_t w_         = 0;        ///< 本地追踪的写位置（不触发原子 store）
-    uint64_t r_         = 0;        ///< 快照的读位置（整批只读一次 acquire）
-    uint64_t w_start_   = 0;        ///< Flush 前的写位置，用于判断是否有新数据
-    int count_          = 0;        ///< 自上次 Flush 以来已写入次数计数
+    RingHeader* hdr_  = nullptr;  ///< 为空表示惰性写入器
+    char* base_       = nullptr;  ///< 数据区起始指针
+    bool mirrored_    = false;    ///< 数据区是否做了镜像映射（可单次跨尾拷贝）
+    uint64_t w_       = 0;        ///< 本地追踪的写位置（不触发原子 store）
+    uint64_t r_       = 0;        ///< 快照的读位置（整批只读一次 acquire）
+    uint64_t w_start_ = 0;        ///< Flush 前的写位置，用于判断是否有新数据
+    int count_        = 0;        ///< 自上次 Flush 以来已写入次数计数
 
     // Reserve/CommitReserve 配对校验（release 下也生效）
-    char *reserved_        = nullptr;  ///< 当前未提交的预留区起始指针
+    char* reserved_        = nullptr;  ///< 当前未提交的预留区起始指针
     uint32_t reserved_len_ = 0;        ///< 当前未提交的预留长度
 };
 
@@ -415,16 +408,13 @@ class BatchWriter
 template <std::size_t Capacity = 8 * 1024 * 1024>
 class RingBuf
 {
-    static_assert((Capacity & (Capacity - 1)) == 0,
-                  "Capacity must be a power of 2");
+    static_assert((Capacity & (Capacity - 1)) == 0, "Capacity must be a power of 2");
     static_assert(Capacity >= 1024, "Capacity must be at least 1024 bytes");
     // len 参数与 Peek/TryRead 返回值均为 uint32_t，超出会静默截断
-    static_assert(Capacity <= UINT32_MAX,
-                  "Capacity must fit in uint32_t (length fields are u32)");
+    static_assert(Capacity <= UINT32_MAX, "Capacity must fit in uint32_t (length fields are u32)");
     // 原子变量位于跨进程共享内存上，必须 lock-free
-    //（否则可能退化为内部互斥锁，跨进程使用即死锁）
-    static_assert(std::atomic<uint64_t>::is_always_lock_free,
-                  "lock-free atomics are required for cross-process shm");
+    // （否则可能退化为内部互斥锁，跨进程使用即死锁）
+    static_assert(std::atomic<uint64_t>::is_always_lock_free, "lock-free atomics are required for cross-process shm");
 
  public:
     static constexpr std::size_t capacity       = Capacity;
@@ -448,21 +438,20 @@ class RingBuf
      *       之前完成（见 RingChannel::CreateRingChannel 的调用顺序）。
      *       对端后续读到的 write_pos=0 即"环为空"，是安全的初态。
      */
-    static void Init(void *shm)
+    static void Init(void* shm)
     {
         // 控制头含 std::atomic：必须原地构造以开始对象生命周期，
         // 不能仅对原始 mmap 内存 memset（形式上 UB）。RingHeader{}
         // 的值初始化会把控制区清零，数据区单独清零。
         assert(reinterpret_cast<uintptr_t>(shm) % alignof(RingHeader) == 0);
-        auto *hdr = new (shm) RingHeader{};
+        auto* hdr = new (shm) RingHeader{};
         hdr->write_pos.store(0, std::memory_order_relaxed);
         hdr->read_pos.store(0, std::memory_order_relaxed);
         // 读方尚未声明支持按需通知前，写方保持"每次都通知"，兼容不调用
         // ArmReaderWait 的裸读方
         hdr->reader_wait.store(kReaderNotifyAlways, std::memory_order_relaxed);
         // 清零 header 之后的填充页与数据区
-        std::memset(static_cast<char *>(shm) + sizeof(RingHeader), 0,
-                    shm_size - sizeof(RingHeader));
+        std::memset(static_cast<char*>(shm) + sizeof(RingHeader), 0, shm_size - sizeof(RingHeader));
     }
 
     // ---- 写入 ----
@@ -477,15 +466,15 @@ class RingBuf
      * @param len  数据长度（字节）
      * @return 0 成功，-1 失败
      */
-    static int TryWrite(void *shm, const void *data, uint32_t len)
+    static int TryWrite(void* shm, const void* data, uint32_t len)
     {
         if (len == 0 || len > max_write_size)
             return -1;
         if (data == nullptr)  // memcpy(dst, nullptr, n) 是 UB，防御性拒绝
             return -1;
 
-        auto *hdr  = detail::RingHdr(shm);
-        char *base = detail::RingData(shm);
+        auto* hdr  = detail::RingHdr(shm);
+        char* base = detail::RingData(shm);
 
         uint64_t w = hdr->write_pos.load(std::memory_order_relaxed);
         uint64_t r = hdr->read_pos.load(std::memory_order_acquire);
@@ -496,7 +485,7 @@ class RingBuf
         std::size_t phys_w = detail::RingPhys<Capacity>(w);
         std::size_t tail   = Capacity - phys_w;
 
-        auto *src = static_cast<const char *>(data);
+        auto* src = static_cast<const char*>(data);
         if (len <= tail)
         {
             std::memcpy(base + phys_w, src, len);
@@ -523,14 +512,14 @@ class RingBuf
      * @param max_len 最大读取字节数
      * @return 实际读取的字节数（0 表示缓冲区为空）
      */
-    static uint32_t TryRead(void *shm, void *data, uint32_t max_len)
+    static uint32_t TryRead(void* shm, void* data, uint32_t max_len)
     {
         // memcpy(dst, src, n>0) 对空指针属 UB；与 TryWrite 的防御保持一致
         if (data == nullptr)
             return 0;
 
-        auto *hdr        = detail::RingHdr(shm);
-        const char *base = detail::RingData(shm);
+        auto* hdr        = detail::RingHdr(shm);
+        const char* base = detail::RingData(shm);
 
         uint64_t r     = hdr->read_pos.load(std::memory_order_relaxed);
         uint64_t w     = hdr->write_pos.load(std::memory_order_acquire);
@@ -556,7 +545,7 @@ class RingBuf
      * @param len  需要读取的精确字节数
      * @return 0 成功，-1 数据不足
      */
-    static int ReadExact(void *shm, void *data, uint32_t len)
+    static int ReadExact(void* shm, void* data, uint32_t len)
     {
         // 读 0 字节平凡成功；提前返回避免 memcpy(dst, src, 0) 的 UB 边界
         if (len == 0)
@@ -564,8 +553,8 @@ class RingBuf
         if (data == nullptr)  // 非零长度读入空指针：拒绝而不是崩溃
             return -1;
 
-        auto *hdr        = detail::RingHdr(shm);
-        const char *base = detail::RingData(shm);
+        auto* hdr        = detail::RingHdr(shm);
+        const char* base = detail::RingData(shm);
 
         uint64_t r     = hdr->read_pos.load(std::memory_order_relaxed);
         uint64_t w     = hdr->write_pos.load(std::memory_order_acquire);
@@ -585,13 +574,13 @@ class RingBuf
     // 非镜像 RingBuf 请使用上面的 TryWrite/TryRead/ReadExact/Peek。
 
     /// @brief 镜像映射下写入任意长度（单次 memcpy，可跨环尾）
-    static int TryWriteContig(void *shm, const void *data, uint32_t len)
+    static int TryWriteContig(void* shm, const void* data, uint32_t len)
     {
         if (len == 0 || len > max_write_size || data == nullptr)
             return -1;
 
-        auto *hdr  = detail::RingHdr(shm);
-        char *base = detail::RingData(shm);
+        auto* hdr  = detail::RingHdr(shm);
+        char* base = detail::RingData(shm);
         uint64_t w = hdr->write_pos.load(std::memory_order_relaxed);
         uint64_t r = hdr->read_pos.load(std::memory_order_acquire);
         if ((w + len) - r > Capacity)
@@ -603,21 +592,20 @@ class RingBuf
     }
 
     /// @brief 镜像映射下读取最多 max_len 字节（单次 memcpy）
-    static uint32_t TryReadContig(void *shm, void *data, uint32_t max_len)
+    static uint32_t TryReadContig(void* shm, void* data, uint32_t max_len)
     {
         if (data == nullptr)
             return 0;
 
-        auto *hdr        = detail::RingHdr(shm);
-        const char *base = detail::RingData(shm);
+        auto* hdr        = detail::RingHdr(shm);
+        const char* base = detail::RingData(shm);
         uint64_t r       = hdr->read_pos.load(std::memory_order_relaxed);
         uint64_t w       = hdr->write_pos.load(std::memory_order_acquire);
         uint64_t avail   = w - r;
         if (avail == 0)
             return 0;
 
-        uint32_t to_read =
-            (avail < max_len) ? static_cast<uint32_t>(avail) : max_len;
+        uint32_t to_read = (avail < max_len) ? static_cast<uint32_t>(avail) : max_len;
         if (to_read == 0)
             return 0;
 
@@ -627,15 +615,15 @@ class RingBuf
     }
 
     /// @brief 镜像映射下精确读取 len 字节（单次 memcpy）
-    static int ReadExactContig(void *shm, void *data, uint32_t len)
+    static int ReadExactContig(void* shm, void* data, uint32_t len)
     {
         if (len == 0)
             return 0;
         if (data == nullptr)
             return -1;
 
-        auto *hdr        = detail::RingHdr(shm);
-        const char *base = detail::RingData(shm);
+        auto* hdr        = detail::RingHdr(shm);
+        const char* base = detail::RingData(shm);
         uint64_t r       = hdr->read_pos.load(std::memory_order_relaxed);
         uint64_t w       = hdr->write_pos.load(std::memory_order_acquire);
         if (w - r < len)
@@ -647,13 +635,13 @@ class RingBuf
     }
 
     /// @brief 镜像映射下单段 Peek（永远返回一段，最多 Capacity 字节）
-    static int PeekContig(const void *shm, const void **data, uint32_t *len)
+    static int PeekContig(const void* shm, const void** data, uint32_t* len)
     {
         if (!data || !len)
             return -1;
 
-        auto *hdr        = detail::RingHdr(shm);
-        const char *base = detail::RingData(shm);
+        auto* hdr        = detail::RingHdr(shm);
+        const char* base = detail::RingData(shm);
         uint64_t r       = hdr->read_pos.load(std::memory_order_relaxed);
         uint64_t w       = hdr->write_pos.load(std::memory_order_acquire);
         uint64_t avail   = w - r;
@@ -678,15 +666,14 @@ class RingBuf
      * @param seg2_len 输出：第二段长度（可能为 0）
      * @return 0 有数据，-1 缓冲区为空
      */
-    static int Peek(const void *shm, const void **seg1, uint32_t *seg1_len,
-                    const void **seg2, uint32_t *seg2_len)
+    static int Peek(const void* shm, const void** seg1, uint32_t* seg1_len, const void** seg2, uint32_t* seg2_len)
     {
         // 输出参数为空时安全拒绝（debug/release 行为一致）
         if (!seg1 || !seg1_len || !seg2 || !seg2_len)
             return -1;
 
-        auto *hdr        = detail::RingHdr(shm);
-        const char *base = detail::RingData(shm);
+        auto* hdr        = detail::RingHdr(shm);
+        const char* base = detail::RingData(shm);
 
         uint64_t r     = hdr->read_pos.load(std::memory_order_relaxed);
         uint64_t w     = hdr->write_pos.load(std::memory_order_acquire);
@@ -723,12 +710,11 @@ class RingBuf
      * @note len 超过可读字节数会破坏 r <= w 不变式。debug 构建触发
      *       assert；release 构建钳制到实际可读字节数，避免静默损坏。
      */
-    static void CommitRead(void *shm, uint32_t len)
+    static void CommitRead(void* shm, uint32_t len)
     {
-        auto *hdr = detail::RingHdr(shm);
-        uint64_t r = hdr->read_pos.load(std::memory_order_relaxed);
-        uint64_t avail =
-            hdr->write_pos.load(std::memory_order_acquire) - r;
+        auto* hdr      = detail::RingHdr(shm);
+        uint64_t r     = hdr->read_pos.load(std::memory_order_relaxed);
+        uint64_t avail = hdr->write_pos.load(std::memory_order_acquire) - r;
         assert(static_cast<uint64_t>(len) <= avail);
         if (static_cast<uint64_t>(len) > avail)
             len = static_cast<uint32_t>(avail);  // release 防御：不越过写位置
@@ -740,25 +726,22 @@ class RingBuf
      * @param shm 共享内存指针（const）
      * @return 可读字节数
      */
-    static uint64_t Available(const void *shm)
+    static uint64_t Available(const void* shm)
     {
-        auto *hdr  = detail::RingHdr(shm);
+        auto* hdr  = detail::RingHdr(shm);
         uint64_t w = hdr->write_pos.load(std::memory_order_acquire);
         uint64_t r = hdr->read_pos.load(std::memory_order_acquire);
         return w - r;
     }
 
     /** @brief 读取 write_pos（acquire） */
-    static uint64_t WritePos(const void *shm)
+    static uint64_t WritePos(const void* shm)
     {
         return detail::RingHdr(shm)->write_pos.load(std::memory_order_acquire);
     }
 
     /** @brief 读取 read_pos（acquire） */
-    static uint64_t ReadPos(const void *shm)
-    {
-        return detail::RingHdr(shm)->read_pos.load(std::memory_order_acquire);
-    }
+    static uint64_t ReadPos(const void* shm) { return detail::RingHdr(shm)->read_pos.load(std::memory_order_acquire); }
 
     // ---- 按需通知（reader_wait）----
 
@@ -776,9 +759,9 @@ class RingBuf
      * @return true 无新数据，可以睡眠；false write_pos 已变化，
      *         已撤销标志，调用方应继续读取而不要睡眠
      */
-    static bool ArmReaderWait(void *shm, uint64_t seen_write)
+    static bool ArmReaderWait(void* shm, uint64_t seen_write)
     {
-        auto *hdr = detail::RingHdr(shm);
+        auto* hdr = detail::RingHdr(shm);
         hdr->reader_wait.store(kReaderWaiting, std::memory_order_relaxed);
         std::atomic_thread_fence(std::memory_order_seq_cst);
         if (hdr->write_pos.load(std::memory_order_acquire) != seen_write)
@@ -799,9 +782,9 @@ class RingBuf
      *
      * @param shm 写环共享内存指针
      */
-    static bool ShouldNotify(void *shm)
+    static bool ShouldNotify(void* shm)
     {
-        auto *hdr = detail::RingHdr(shm);
+        auto* hdr = detail::RingHdr(shm);
         std::atomic_thread_fence(std::memory_order_seq_cst);
         uint32_t v = hdr->reader_wait.load(std::memory_order_relaxed);
         if (v == kReaderAwake)
@@ -809,9 +792,7 @@ class RingBuf
         if (v == kReaderNotifyAlways)
             return true;
         // kReaderWaiting：抢占清零，只有抢到的一方发通知
-        return hdr->reader_wait.exchange(kReaderAwake,
-                                         std::memory_order_acq_rel) !=
-               kReaderAwake;
+        return hdr->reader_wait.exchange(kReaderAwake, std::memory_order_acq_rel) != kReaderAwake;
     }
 
     /**
@@ -819,10 +800,7 @@ class RingBuf
      * @param shm 共享内存指针（const）
      * @return 可写字节数
      */
-    static uint64_t FreeSpace(const void *shm)
-    {
-        return Capacity - Available(shm);
-    }
+    static uint64_t FreeSpace(const void* shm) { return Capacity - Available(shm); }
 };
 
 /// @brief 默认配置别名（8MB 环）

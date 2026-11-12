@@ -55,10 +55,10 @@ class ShmClient : public comm::ITcpClient
     ~ShmClient() override { Close(); }
 
     // 禁止复制和移动（持有 channel 状态）
-    ShmClient(const ShmClient &)            = delete;
-    ShmClient &operator=(const ShmClient &) = delete;
-    ShmClient(ShmClient &&)                 = delete;
-    ShmClient &operator=(ShmClient &&)      = delete;
+    ShmClient(const ShmClient&)            = delete;
+    ShmClient& operator=(const ShmClient&) = delete;
+    ShmClient(ShmClient&&)                 = delete;
+    ShmClient& operator=(ShmClient&&)      = delete;
 
     // ------------------------------------------------------------------
     // comm::ITcpClient 接口实现
@@ -70,12 +70,12 @@ class ShmClient : public comm::ITcpClient
      * uri 支持 "shm:///path"、"uds:///path" 或裸路径。
      * 同步完成 connect + 握手（5 秒超时）。
      */
-    bool Connect(const std::string_view &uri) override
+    bool Connect(const std::string_view& uri) override
     {
         Close();  // 唤醒可能阻塞的读线程（如有）
         // 旧通道与 socket 此时回收：调用方须保证没有仍在执行的
         // ReadMessage（Close 唤醒后其立即返回）
-        channel_   = DefaultRingChannel{};
+        channel_ = DefaultRingChannel{};
         socket_fd_.Reset();
         last_error_     = ErrorCode::kOk;
         last_sys_errno_ = 0;
@@ -89,8 +89,7 @@ class ShmClient : public comm::ITcpClient
         }
 
         DefaultRingChannel channel;
-        ec = DefaultRingChannel::CreateRingChannel(sock.Get(), ChannelRole::kClient,
-                                                   &channel, &last_sys_errno_);
+        ec = DefaultRingChannel::CreateRingChannel(sock.Get(), ChannelRole::kClient, &channel, &last_sys_errno_);
         if (ec != ErrorCode::kOk)
         {
             last_error_ = ec;
@@ -106,10 +105,7 @@ class ShmClient : public comm::ITcpClient
     /**
      * @brief 编译兼容占位：shm 为本地 IPC，不支持 TCP（ip, port）形式，恒返回 false
      */
-    bool Connect(const std::string_view & /*ip*/, uint16_t /*port*/) override
-    {
-        return false;
-    }
+    bool Connect(const std::string_view& /*ip*/, uint16_t /*port*/) override { return false; }
 
     bool Connected() const noexcept override
     {
@@ -134,7 +130,7 @@ class ShmClient : public comm::ITcpClient
      * @brief 发送原始字节流
      * @return 成功返回 len；未连接或环空间不足返回 -1（不阻塞、不半截写入）
      */
-    int SendMessage(const char *message, const int len) override
+    int SendMessage(const char* message, const int len) override
     {
         if (!Connected() || !message || len <= 0)
             return -1;
@@ -161,10 +157,7 @@ class ShmClient : public comm::ITcpClient
      * @return 实际读取的字节数（>0）；对端关闭返回 0；本端 Close() 或
      *         未连接返回 -1
      */
-    int ReadMessage(char *buf, size_t bsize) override
-    {
-        return ReadMessage(buf, bsize, -1);
-    }
+    int ReadMessage(char* buf, size_t bsize) override { return ReadMessage(buf, bsize, -1); }
 
     // ------------------------------------------------------------------
     // shm 扩展接口（非接口方法）
@@ -176,13 +169,13 @@ class ShmClient : public comm::ITcpClient
      * @return 实际读取的字节数（>0）；对端关闭返回 0；超时返回 -2；
      *         本端 Close() 或未连接返回 -1
      */
-    int ReadMessage(char *buf, size_t bsize, int timeout_ms)
+    int ReadMessage(char* buf, size_t bsize, int timeout_ms)
     {
         if (!Connected())
             return -1;
 
-        timespec  deadline{};
-        timespec *dl = InitDeadline(timeout_ms, &deadline);
+        timespec deadline{};
+        timespec* dl = InitDeadline(timeout_ms, &deadline);
         for (;;)
         {
             // 本端 Close()：立即退出，不再等待
@@ -191,7 +184,7 @@ class ShmClient : public comm::ITcpClient
 
             // 先试读：数据可能已在环中（基线须在读之前取，供 PrepareWait 复查）
             const uint64_t seen = channel_.WritePos();
-            uint32_t n = channel_.TryRead(buf, static_cast<uint32_t>(bsize));
+            uint32_t n          = channel_.TryRead(buf, static_cast<uint32_t>(bsize));
             if (n > 0)
                 return static_cast<int>(n);
 
@@ -223,17 +216,15 @@ class ShmClient : public comm::ITcpClient
      *
      * @note 指针在 CommitMessage / 下一次 PeekMessage / Close 之前有效。
      */
-    int PeekMessage(const void **seg1, uint32_t *seg1_len,
-                    const void **seg2, uint32_t *seg2_len,
-                    int timeout_ms = -1)
+    int PeekMessage(const void** seg1, uint32_t* seg1_len, const void** seg2, uint32_t* seg2_len, int timeout_ms = -1)
     {
         if (!seg1 || !seg1_len || !seg2 || !seg2_len)
             return -1;
         if (!Connected())
             return -1;
 
-        timespec  deadline{};
-        timespec *dl = InitDeadline(timeout_ms, &deadline);
+        timespec deadline{};
+        timespec* dl = InitDeadline(timeout_ms, &deadline);
         for (;;)
         {
             if (closed_.load(std::memory_order_acquire))
@@ -272,18 +263,18 @@ class ShmClient : public comm::ITcpClient
     int GetSockFd() const { return socket_fd_.Get(); }
 
     /// @brief 访问底层通道（批量写入等高级用法）
-    DefaultRingChannel &Channel() noexcept { return channel_; }
+    DefaultRingChannel& Channel() noexcept { return channel_; }
 
  private:
     /// @brief 初始化超时 deadline；timeout_ms < 0 返回 nullptr（无限等待）
-    static timespec *InitDeadline(int timeout_ms, timespec *out) noexcept
+    static timespec* InitDeadline(int timeout_ms, timespec* out) noexcept
     {
         if (timeout_ms < 0)
             return nullptr;
         ::clock_gettime(CLOCK_MONOTONIC, out);
-        out->tv_sec  += timeout_ms / 1000;
+        out->tv_sec += timeout_ms / 1000;
         out->tv_nsec += (timeout_ms % 1000) * 1000000L;
-        out->tv_sec  += out->tv_nsec / 1000000000L;
+        out->tv_sec += out->tv_nsec / 1000000000L;
         out->tv_nsec %= 1000000000L;
         return out;
     }
@@ -294,15 +285,14 @@ class ShmClient : public comm::ITcpClient
      * @param seen     调用方读环检查前观察到的 write_pos（用于按需通知复查）
      * @return 1 需要重新检查 ring；0 对端关闭；-1 本端关闭/错误；-2 超时
      */
-    int WaitForReadable(timespec *deadline, uint64_t seen)
+    int WaitForReadable(timespec* deadline, uint64_t seen)
     {
         int wait_ms = -1;
         if (deadline)
         {
             timespec now{};
             ::clock_gettime(CLOCK_MONOTONIC, &now);
-            int64_t ms = (deadline->tv_sec - now.tv_sec) * 1000 +
-                         (deadline->tv_nsec - now.tv_nsec) / 1000000;
+            int64_t ms = (deadline->tv_sec - now.tv_sec) * 1000 + (deadline->tv_nsec - now.tv_nsec) / 1000000;
             if (ms <= 0)
                 return -2;
             wait_ms = static_cast<int>(ms);
@@ -312,9 +302,8 @@ class ShmClient : public comm::ITcpClient
         if (!channel_.PrepareWait(seen))
             return 1;
 
-        pollfd pfds[2] = {{channel_.NotifyReadFd(), POLLIN, 0},
-                          {socket_fd_.Get(), POLLIN, 0}};
-        int pr = ::poll(pfds, 2, wait_ms);
+        pollfd pfds[2] = {{channel_.NotifyReadFd(), POLLIN, 0}, {socket_fd_.Get(), POLLIN, 0}};
+        int pr         = ::poll(pfds, 2, wait_ms);
         if (pr < 0)
             return (errno == EINTR) ? 1 : -1;
         if (pr == 0)
@@ -337,9 +326,9 @@ class ShmClient : public comm::ITcpClient
         return 1;
     }
 
-    UniqueFd socket_fd_;          ///< 连接 socket（断连检测）
-    DefaultRingChannel channel_;  ///< 双向共享内存通道
-    std::atomic<bool> closed_{true};  ///< 本端已关闭标志（Close/读线程跨线程通信）
+    UniqueFd socket_fd_;                     ///< 连接 socket（断连检测）
+    DefaultRingChannel channel_;             ///< 双向共享内存通道
+    std::atomic<bool> closed_{true};         ///< 本端已关闭标志（Close/读线程跨线程通信）
     ErrorCode last_error_ = ErrorCode::kOk;  ///< 最近一次 Connect 错误码
     int last_sys_errno_   = 0;               ///< 最近一次 Connect 的 errno
 };

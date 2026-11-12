@@ -94,13 +94,13 @@ class ITcpConnection;
 using TcpConnPtr  = std::shared_ptr<ITcpConnection>;  ///< 对应 io::TcpConnPtr
 using TcpConnWptr = std::weak_ptr<ITcpConnection>;    ///< 对应 io::TcpConnWptr
 
-using ConnectionCallback   = std::function<void(const TcpConnPtr &)>;                    ///< 对应 io::ConnectionCallback
-using CloseCallback        = std::function<void(const TcpConnPtr &)>;                    ///< 对应 io::CloseCallback
-using VerifyCallback       = std::function<void(const TcpConnPtr &)>;                    ///< 对应 io::VerifyCallback
-using AnyMessageCallback   = std::function<void(const TcpConnPtr &, const std::any &)>;  ///< 对应 io::AnyMessageCallback
-using ConnectErrorCallback = std::function<void(bool, const std::string &)>;             ///< 对应 io::ConnectErrorCallback
-using StartFailedCallback  = std::function<void(std::string)>;                           ///< 对应 io::TcpServer::StartFailedCallback
-using StartSuccessCallback = std::function<void()>;                                      ///< 对应 io::TcpServer::StartSuccessCallback
+using ConnectionCallback = std::function<void(const TcpConnPtr&)>;                   ///< 对应 io::ConnectionCallback
+using CloseCallback      = std::function<void(const TcpConnPtr&)>;                   ///< 对应 io::CloseCallback
+using VerifyCallback     = std::function<void(const TcpConnPtr&)>;                   ///< 对应 io::VerifyCallback
+using AnyMessageCallback = std::function<void(const TcpConnPtr&, const std::any&)>;  ///< 对应 io::AnyMessageCallback
+using ConnectErrorCallback = std::function<void(bool, const std::string&)>;  ///< 对应 io::ConnectErrorCallback
+using StartFailedCallback  = std::function<void(std::string)>;  ///< 对应 io::TcpServer::StartFailedCallback
+using StartSuccessCallback = std::function<void()>;             ///< 对应 io::TcpServer::StartSuccessCallback
 
 }  // namespace comm
 

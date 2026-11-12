@@ -22,11 +22,11 @@
 
 namespace {
 
-constexpr const char *kSocketPath = "/tmp/shm-ipc-sock-bench.socket";
+constexpr const char* kSocketPath = "/tmp/shm-ipc-sock-bench.socket";
 
-void ReadAll(int fd, void *buf, std::size_t len)
+void ReadAll(int fd, void* buf, std::size_t len)
 {
-    auto *p = static_cast<char *>(buf);
+    auto* p = static_cast<char*>(buf);
     while (len > 0)
     {
         auto n = ::read(fd, p, len);
@@ -35,19 +35,18 @@ void ReadAll(int fd, void *buf, std::size_t len)
             std::perror("read");
             std::_Exit(1);
         }
-        p   += n;
+        p += n;
         len -= static_cast<std::size_t>(n);
     }
 }
 
-bool CreateListenSocket(const char *path, shm::UniqueFd *out)
+bool CreateListenSocket(const char* path, shm::UniqueFd* out)
 {
-    int sys_errno = 0;
+    int sys_errno     = 0;
     shm::ErrorCode ec = shm::ListenUnixSocket(path, out, 1, &sys_errno);
     if (ec != shm::ErrorCode::kOk)
     {
-        std::fprintf(stderr, "socket_server: listen failed: %s\n",
-                     shm::ErrorCodeMessage(ec, sys_errno).c_str());
+        std::fprintf(stderr, "socket_server: listen failed: %s\n", shm::ErrorCodeMessage(ec, sys_errno).c_str());
         return false;
     }
     return true;
@@ -94,13 +93,11 @@ bool RunBench()
         }
 
         // 接收缓冲区（MsgHeader 之后的 body 部分）
-        uint32_t max_body = shm::kTagSize
-                          + static_cast<uint32_t>(sizeof(shm::BenchPayloadHeader))
-                          + cmd.payload_size;
+        uint32_t max_body = shm::kTagSize + static_cast<uint32_t>(sizeof(shm::BenchPayloadHeader)) + cmd.payload_size;
         std::vector<char> body_buf(max_body);
 
         int32_t received = 0;
-        uint64_t t0 = shm::NowNs();
+        uint64_t t0      = shm::NowNs();
 
         bool got_end = false;
         while (!got_end)

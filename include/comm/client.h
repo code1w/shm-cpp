@@ -48,9 +48,9 @@ class ITcpAsyncClient
 
     // ---- 参数 ----
 
-    virtual void SetContext(std::any context)       = 0;
-    virtual const std::any &Context() const         = 0;
-    virtual void SetAutoReconnect(bool autoreconn)  = 0;
+    virtual void SetContext(std::any context)          = 0;
+    virtual const std::any& Context() const            = 0;
+    virtual void SetAutoReconnect(bool autoreconn)     = 0;
     virtual void ResizeBuffer(size_t size, size_t max) = 0;
 
     // ---- 状态 ----
@@ -63,10 +63,10 @@ class ITcpAsyncClient
     // ---- 数据面 ----
 
     /// @brief 发起连接（结果通过 connection / error 回调通知）
-    virtual void Connect(const std::string_view &uri) = 0;
+    virtual void Connect(const std::string_view& uri) = 0;
 
     /// @brief 发送消息包，成功返回 true
-    virtual bool SendCmd(const std::any &pkg) = 0;
+    virtual bool SendCmd(const std::any& pkg) = 0;
 
     /// @brief 主动关闭连接
     virtual void Close() = 0;
@@ -84,22 +84,22 @@ class ITcpClient
     virtual ~ITcpClient() = default;
 
     /// @brief 连接服务端（同步）
-    virtual bool Connect(const std::string_view &uri) = 0;
+    virtual bool Connect(const std::string_view& uri) = 0;
 
     /// @brief 连接服务端（tcp 形式；shm 实现恒返回 false，仅作编译兼容）
-    virtual bool Connect(const std::string_view &ip, uint16_t port) = 0;
+    virtual bool Connect(const std::string_view& ip, uint16_t port) = 0;
 
     /**
      * @brief 发送原始字节流
      * @return 成功返回 len；失败返回 -1
      */
-    virtual int SendMessage(const char *message, const int len) = 0;
+    virtual int SendMessage(const char* message, const int len) = 0;
 
     /**
      * @brief 阻塞读取：直到读到数据或对端关闭
      * @return 实际读取字节数（>0）；对端关闭返回 0；未连接返回 -1
      */
-    virtual int ReadMessage(char *buf, size_t bsize) = 0;
+    virtual int ReadMessage(char* buf, size_t bsize) = 0;
 
     /// @brief 关闭连接
     virtual void Close() = 0;

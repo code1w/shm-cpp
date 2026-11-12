@@ -41,17 +41,17 @@ class EventLoop
 {
  public:
     using Callback = std::function<void(int fd, short revents)>;
-    using Hook    = std::function<void()>;
-    using HookId  = uint64_t;
+    using Hook     = std::function<void()>;
+    using HookId   = uint64_t;
 
     EventLoop()  = default;
     ~EventLoop() = default;
 
     // 禁止复制和移动（回调可能引用外部局部状态）
-    EventLoop(const EventLoop &)            = delete;
-    EventLoop &operator=(const EventLoop &) = delete;
-    EventLoop(EventLoop &&)                 = delete;
-    EventLoop &operator=(EventLoop &&)      = delete;
+    EventLoop(const EventLoop&)            = delete;
+    EventLoop& operator=(const EventLoop&) = delete;
+    EventLoop(EventLoop&&)                 = delete;
+    EventLoop& operator=(EventLoop&&)      = delete;
 
     /**
      * @brief 注册一个 fd 进行监听
@@ -61,10 +61,7 @@ class EventLoop
      *
      * 可在回调内安全调用：新条目自下一轮 poll 生效。
      */
-    void AddFd(int fd, Callback cb, short events = POLLIN)
-    {
-        entries_.push_back({fd, events, false, std::move(cb)});
-    }
+    void AddFd(int fd, Callback cb, short events = POLLIN) { entries_.push_back({fd, events, false, std::move(cb)}); }
 
     /**
      * @brief 注册"本轮分发结束后"钩子（用于合并通知等延迟动作）
@@ -78,7 +75,7 @@ class EventLoop
      * @return kOk 成功；kInvalidArgument 参数为空；kNoMemory 分配失败
      */
     [[nodiscard]]
-    ErrorCode AddPostDispatchHook(Hook hook, HookId *out)
+    ErrorCode AddPostDispatchHook(Hook hook, HookId* out)
     {
         if (!out || !hook)
             return ErrorCode::kInvalidArgument;
@@ -87,7 +84,7 @@ class EventLoop
         {
             post_hooks_.push_back({id, std::move(hook)});
         }
-        catch (const std::bad_alloc &)
+        catch (const std::bad_alloc&)
         {
             return ErrorCode::kNoMemory;
         }
@@ -100,8 +97,7 @@ class EventLoop
     {
         if (id == 0)
             return;
-        auto it = std::find_if(post_hooks_.begin(), post_hooks_.end(),
-                               [id](const auto &p) { return p.first == id; });
+        auto it = std::find_if(post_hooks_.begin(), post_hooks_.end(), [id](const auto& p) { return p.first == id; });
         if (it != post_hooks_.end())
             post_hooks_.erase(it);
     }
@@ -117,7 +113,7 @@ class EventLoop
      */
     void RemoveFd(int fd)
     {
-        for (auto &e : entries_)
+        for (auto& e : entries_)
             if (e.fd == fd)
                 e.dead = true;
     }
@@ -133,13 +129,12 @@ class EventLoop
      * @return kOk 成功；kNoMemory 回调注册分配失败；其余见 ErrorCode
      */
     [[nodiscard]]
-    ErrorCode AddTimer(int interval_ms, Callback cb, int *out_tfd,
-                       int *sys_errno = nullptr)
+    ErrorCode AddTimer(int interval_ms, Callback cb, int* out_tfd, int* sys_errno = nullptr)
     {
         if (!out_tfd)
             return ErrorCode::kInvalidArgument;
 
-        int tfd = -1;
+        int tfd      = -1;
         ErrorCode ec = CreateTimerfd(interval_ms, interval_ms, &tfd, sys_errno);
         if (ec != ErrorCode::kOk)
             return ec;
@@ -148,7 +143,7 @@ class EventLoop
         {
             owned_timerfds_.emplace_back(tfd);
         }
-        catch (const std::bad_alloc &)
+        catch (const std::bad_alloc&)
         {
             ::close(tfd);  // 尚未被 UniqueFd 接管
             return ErrorCode::kNoMemory;
@@ -157,7 +152,7 @@ class EventLoop
         {
             AddFd(tfd, std::move(cb));
         }
-        catch (const std::bad_alloc &)
+        catch (const std::bad_alloc&)
         {
             CloseOwnedTimer(tfd);
             return ErrorCode::kNoMemory;
@@ -177,13 +172,12 @@ class EventLoop
      * @param sys_errno 可选：失败时的 errno
      */
     [[nodiscard]]
-    ErrorCode AddOneShotTimer(int delay_ms, Callback cb, int *out_tfd,
-                              int *sys_errno = nullptr)
+    ErrorCode AddOneShotTimer(int delay_ms, Callback cb, int* out_tfd, int* sys_errno = nullptr)
     {
         if (!out_tfd)
             return ErrorCode::kInvalidArgument;
 
-        int tfd = -1;
+        int tfd      = -1;
         ErrorCode ec = CreateTimerfd(delay_ms, 0, &tfd, sys_errno);
         if (ec != ErrorCode::kOk)
             return ec;
@@ -192,7 +186,7 @@ class EventLoop
         {
             owned_timerfds_.emplace_back(tfd);
         }
-        catch (const std::bad_alloc &)
+        catch (const std::bad_alloc&)
         {
             ::close(tfd);  // 尚未被 UniqueFd 接管
             return ErrorCode::kNoMemory;
@@ -218,7 +212,7 @@ class EventLoop
                 CloseOwnedTimer(tfd);
             });
         }
-        catch (const std::bad_alloc &)
+        catch (const std::bad_alloc&)
         {
             CloseOwnedTimer(tfd);
             return ErrorCode::kNoMemory;
@@ -250,7 +244,7 @@ class EventLoop
      *         kSystem/kTimeout poll 失败；用户回调异常仍向外传播
      */
     [[nodiscard]]
-    ErrorCode Run(int poll_timeout_ms = 500, int *sys_errno = nullptr)
+    ErrorCode Run(int poll_timeout_ms = 500, int* sys_errno = nullptr)
     {
         running_.store(true, std::memory_order_relaxed);
         while (running_.load(std::memory_order_relaxed))
@@ -270,14 +264,13 @@ class EventLoop
                     idx.push_back(k);
                 }
             }
-            catch (const std::bad_alloc &)
+            catch (const std::bad_alloc&)
             {
                 running_.store(false, std::memory_order_relaxed);
                 return ErrorCode::kNoMemory;
             }
 
-            int ret = ::poll(pfds.data(), static_cast<nfds_t>(pfds.size()),
-                             poll_timeout_ms);
+            int ret = ::poll(pfds.data(), static_cast<nfds_t>(pfds.size()), poll_timeout_ms);
             if (ret < 0)
             {
                 if (errno == EINTR)
@@ -292,15 +285,14 @@ class EventLoop
             // RemoveFd 只打墓碑（分发前重查），下标映射保持稳定
             try
             {
-                for (std::size_t i = 0;
-                     i < pfds.size() && running_.load(std::memory_order_relaxed); ++i)
+                for (std::size_t i = 0; i < pfds.size() && running_.load(std::memory_order_relaxed); ++i)
                 {
-                    Entry &e = entries_[idx[i]];
+                    Entry& e = entries_[idx[i]];
                     if (!e.dead && pfds[i].revents != 0 && e.cb)
                         e.cb(pfds[i].fd, pfds[i].revents);
                 }
             }
-            catch (const std::bad_alloc &)
+            catch (const std::bad_alloc&)
             {
                 // 回调内部（如 AddFd）分配失败：先执行延迟钩子（如通知
                 // 合并），再回收墓碑并转错误码
@@ -337,7 +329,8 @@ class EventLoop
     {
         uint64_t expirations = 0;
         ssize_t r;
-        do {
+        do
+        {
             r = ::read(tfd, &expirations, sizeof(expirations));
         } while (r < 0 && errno == EINTR);
         return expirations;
@@ -349,8 +342,7 @@ class EventLoop
      * @param out_fd 成功时写入 timerfd
      */
     [[nodiscard]]
-    static ErrorCode CreateTimerfd(int initial_ms, int interval_ms,
-                                   int *out_fd, int *sys_errno) noexcept
+    static ErrorCode CreateTimerfd(int initial_ms, int interval_ms, int* out_fd, int* sys_errno) noexcept
     {
         if (!out_fd)
             return ErrorCode::kInvalidArgument;
@@ -408,7 +400,7 @@ class EventLoop
     {
         try
         {
-            for (auto &h : post_hooks_)
+            for (auto& h : post_hooks_)
                 h.second();
         }
         catch (...)
@@ -421,7 +413,7 @@ class EventLoop
     void CloseOwnedTimer(int tfd)
     {
         auto it = std::find_if(owned_timerfds_.begin(), owned_timerfds_.end(),
-                               [tfd](const UniqueFd &u) { return u.Get() == tfd; });
+                               [tfd](const UniqueFd& u) { return u.Get() == tfd; });
         if (it != owned_timerfds_.end())
             owned_timerfds_.erase(it);
     }
@@ -429,19 +421,17 @@ class EventLoop
     /** @brief 回收所有墓碑条目（仅在非分发阶段调用） */
     void CompactDead()
     {
-        entries_.erase(
-            std::remove_if(entries_.begin(), entries_.end(),
-                           [](const Entry &e) { return e.dead; }),
-            entries_.end());
+        entries_.erase(std::remove_if(entries_.begin(), entries_.end(), [](const Entry& e) { return e.dead; }),
+                       entries_.end());
     }
 
     // deque 而非 vector：回调内 AddFd 追加时，既有元素的引用不失效，
     // 分发循环中持有的 Entry& 在回调执行期间始终有效
-    std::deque<Entry> entries_;           ///< fd 监听条目列表
-    std::vector<UniqueFd> owned_timerfds_;  ///< EventLoop 持有的 timerfd 列表
+    std::deque<Entry> entries_;                        ///< fd 监听条目列表
+    std::vector<UniqueFd> owned_timerfds_;             ///< EventLoop 持有的 timerfd 列表
     std::vector<std::pair<HookId, Hook>> post_hooks_;  ///< 分发批次结束钩子
-    HookId next_hook_id_ = 1;               ///< 下一个钩子 ID
-    std::atomic<bool> running_{false};      ///< 事件循环运行标志（atomic 以支持信号处理器写入）
+    HookId next_hook_id_ = 1;                          ///< 下一个钩子 ID
+    std::atomic<bool> running_{false};  ///< 事件循环运行标志（atomic 以支持信号处理器写入）
 };
 
 }  // namespace shm

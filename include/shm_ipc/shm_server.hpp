@@ -67,19 +67,17 @@ class ShmServer : public comm::ITcpServer
      * @param uri  监听地址："shm:///path"、"uds:///path" 或裸 Unix socket 路径
      * @param name 服务端名称（日志用）
      */
-    ShmServer(EventLoop *loop, std::string_view uri,
-              std::string_view name = "shm_server")
+    ShmServer(EventLoop* loop, std::string_view uri, std::string_view name = "shm_server")
         : loop_(loop), uri_(std::string(uri)), name_(std::string(name))
-    {
-    }
+    {}
 
     ~ShmServer() override { Stop(); }
 
     // 禁止复制和移动（EventLoop 回调持有 this）
-    ShmServer(const ShmServer &)            = delete;
-    ShmServer &operator=(const ShmServer &) = delete;
-    ShmServer(ShmServer &&)                 = delete;
-    ShmServer &operator=(ShmServer &&)      = delete;
+    ShmServer(const ShmServer&)            = delete;
+    ShmServer& operator=(const ShmServer&) = delete;
+    ShmServer(ShmServer&&)                 = delete;
+    ShmServer& operator=(ShmServer&&)      = delete;
 
     // ------------------------------------------------------------------
     // comm::ITcpServer 接口实现
@@ -141,7 +139,7 @@ class ShmServer : public comm::ITcpServer
         {
             std::lock_guard<std::mutex> lk(hs_mtx_);
             hs_stopping_ = true;
-            for (auto &fd : hs_pending_)
+            for (auto& fd : hs_pending_)
                 if (fd.Get() >= 0)
                     ::shutdown(fd.Get(), SHUT_RDWR);
             if (hs_current_.Get() >= 0)
@@ -173,9 +171,9 @@ class ShmServer : public comm::ITcpServer
         // RemoveConn 会修改 conns_，先拷贝一份再逐个移除
         std::vector<ShmConnPtr> conns;
         conns.reserve(conns_.size());
-        for (auto &[id, conn] : conns_)
+        for (auto& [id, conn] : conns_)
             conns.push_back(conn);
-        for (auto &conn : conns)
+        for (auto& conn : conns)
             RemoveConn(conn);
         UnlinkUnixSocket(UriToPath(uri_));
     }
@@ -193,7 +191,7 @@ class ShmServer : public comm::ITcpServer
      * @brief 向指定连接发送消息（扩展接口；接口等价写法为 FindConn(id)->SendCmd(msg)）
      * @return true 成功，false 连接不存在或发送失败
      */
-    bool SendTo(uint64_t conn_id, const std::any &pkg)
+    bool SendTo(uint64_t conn_id, const std::any& pkg)
     {
         auto conn = FindConn(conn_id);
         if (!conn)
@@ -204,9 +202,9 @@ class ShmServer : public comm::ITcpServer
     /**
      * @brief 向所有连接广播消息（单条失败不影响其他连接）
      */
-    void Broadcast(const std::any &pkg)
+    void Broadcast(const std::any& pkg)
     {
-        for (auto &[id, conn] : conns_)
+        for (auto& [id, conn] : conns_)
             conn->SendCmd(pkg);
     }
 
@@ -229,9 +227,9 @@ class ShmServer : public comm::ITcpServer
     }
 
     std::size_t ConnCount() const { return conns_.size(); }
-    const std::string &Name() const { return name_; }
-    const std::string &Uri() const { return uri_; }
-    void ReName(const std::string &name) { name_ = name; }
+    const std::string& Name() const { return name_; }
+    const std::string& Uri() const { return uri_; }
+    void ReName(const std::string& name) { name_ = name; }
 
     /// @brief 最近一次 Start 的错误码（扩展接口）
     ErrorCode LastError() const noexcept { return last_error_; }
@@ -249,8 +247,7 @@ class ShmServer : public comm::ITcpServer
         if (started_)
             return true;
 
-        ErrorCode ec = ListenUnixSocket(UriToPath(uri_), &listen_fd_,
-                                        16, &last_sys_errno_);
+        ErrorCode ec = ListenUnixSocket(UriToPath(uri_), &listen_fd_, 16, &last_sys_errno_);
         if (ec != ErrorCode::kOk)
             return FailStart(ec);
 
@@ -271,14 +268,14 @@ class ShmServer : public comm::ITcpServer
         {
             hs_thread_ = std::thread([this] { HandshakeWorker(); });
         }
-        catch (const std::system_error &e)
+        catch (const std::system_error& e)
         {
             listen_fd_.Reset();
             hs_wake_fd_.Reset();
             last_sys_errno_ = e.code().value();
             return FailStart(ErrorCode::kSystem);
         }
-        catch (const std::bad_alloc &)
+        catch (const std::bad_alloc&)
         {
             listen_fd_.Reset();
             hs_wake_fd_.Reset();
@@ -288,12 +285,10 @@ class ShmServer : public comm::ITcpServer
         started_ = true;
         try
         {
-            loop_->AddFd(listen_fd_.Get(),
-                         [this](int fd, short revents) { OnAccept(fd, revents); });
-            loop_->AddFd(hs_wake_fd_.Get(),
-                         [this](int fd, short revents) { OnHandshakeComplete(fd, revents); });
+            loop_->AddFd(listen_fd_.Get(), [this](int fd, short revents) { OnAccept(fd, revents); });
+            loop_->AddFd(hs_wake_fd_.Get(), [this](int fd, short revents) { OnHandshakeComplete(fd, revents); });
         }
-        catch (const std::bad_alloc &)
+        catch (const std::bad_alloc&)
         {
             Stop();  // 回滚监听、线程与 fd 注册
             return FailStart(ErrorCode::kNoMemory);
@@ -312,8 +307,7 @@ class ShmServer : public comm::ITcpServer
         {
             try
             {
-                failedcb_("listen failed, uri: " + uri_ + ", " +
-                          ErrorCodeMessage(ec, last_sys_errno_));
+                failedcb_("listen failed, uri: " + uri_ + ", " + ErrorCodeMessage(ec, last_sys_errno_));
             }
             catch (...)
             {
@@ -329,10 +323,8 @@ class ShmServer : public comm::ITcpServer
         {
             // 上限计数含握手中的连接，防止握手期间超额
             std::lock_guard<std::mutex> lk(hs_mtx_);
-            std::size_t inflight = hs_pending_.size() + hs_done_.size()
-                                 + (hs_current_.Get() >= 0 ? 1 : 0);
-            if (max_clients_ <= 0 ||
-                conns_.size() + inflight >= static_cast<std::size_t>(max_clients_))
+            std::size_t inflight = hs_pending_.size() + hs_done_.size() + (hs_current_.Get() >= 0 ? 1 : 0);
+            if (max_clients_ <= 0 || conns_.size() + inflight >= static_cast<std::size_t>(max_clients_))
             {
                 UniqueFd rejected{::accept(lfd, nullptr, nullptr)};
                 return;  // accept 后立即关闭，对端握手时收到 EOF
@@ -367,8 +359,7 @@ class ShmServer : public comm::ITcpServer
             DefaultRingChannel channel;
             // 握手失败（对端超时、乱发数据、尺寸不符或 Stop 的 shutdown
             // 打断）：fd 与半成品通道由 RAII 释放
-            bool ok = DefaultRingChannel::CreateRingChannel(
-                          hs_current_.Get(), ChannelRole::kServer, &channel) ==
+            bool ok = DefaultRingChannel::CreateRingChannel(hs_current_.Get(), ChannelRole::kServer, &channel) ==
                       ErrorCode::kOk;
 
             bool notify = false;
@@ -378,11 +369,10 @@ class ShmServer : public comm::ITcpServer
                 {
                     try
                     {
-                        hs_done_.push_back(HandshakeDone{
-                            std::move(hs_current_), std::move(channel)});
+                        hs_done_.push_back(HandshakeDone{std::move(hs_current_), std::move(channel)});
                         notify = true;
                     }
-                    catch (const std::bad_alloc &)
+                    catch (const std::bad_alloc&)
                     {
                         // 工作线程内分配失败：丢弃该连接，继续服务其他连接
                         notify = false;
@@ -431,9 +421,8 @@ class ShmServer : public comm::ITcpServer
 
         try
         {
-            uint64_t id = next_id_++;
-            auto conn   = std::make_shared<ShmConnection>(loop_, id, std::move(cfd),
-                                                          std::move(channel));
+            uint64_t id      = next_id_++;
+            auto conn        = std::make_shared<ShmConnection>(loop_, id, std::move(cfd), std::move(channel));
             codec->keepalive = keepalive_;
             codec->conn_id   = id;
             conn->SetMessageCallback(messagecb_);
@@ -448,15 +437,13 @@ class ShmServer : public comm::ITcpServer
             conns_[id] = conn;
 
             // eventfd：对端写入新数据，实时读取
-            loop_->AddFd(conn->NotifyFd(),
-                         [this, id](int fd, short revents) { OnConnNotify(fd, revents, id); });
+            loop_->AddFd(conn->NotifyFd(), [this, id](int fd, short revents) { OnConnNotify(fd, revents, id); });
             // socket：仅用于断连检测
-            loop_->AddFd(conn->SocketFd(),
-                         [this, id](int fd, short revents) { OnConnSocket(fd, revents, id); });
+            loop_->AddFd(conn->SocketFd(), [this, id](int fd, short revents) { OnConnSocket(fd, revents, id); });
 
             conn->OnConnection();
         }
-        catch (const std::bad_alloc &)
+        catch (const std::bad_alloc&)
         {
             // 分配失败：丢弃该连接（RAII 关闭 fd/通道）
         }
@@ -497,7 +484,7 @@ class ShmServer : public comm::ITcpServer
     }
 
     /// @brief 移除连接：注销 fd、移出连接表、触发 close 回调
-    void RemoveConn(const ShmConnPtr &conn)
+    void RemoveConn(const ShmConnPtr& conn)
     {
         loop_->RemoveFd(conn->NotifyFd());
         loop_->RemoveFd(conn->SocketFd());
@@ -508,44 +495,44 @@ class ShmServer : public comm::ITcpServer
     /// @brief 握手完成待收编的连接（worker → 事件循环线程）
     struct HandshakeDone
     {
-        UniqueFd sockfd;               ///< 握手完成的连接 socket
-        DefaultRingChannel channel;    ///< 握手完成的双向通道
+        UniqueFd sockfd;             ///< 握手完成的连接 socket
+        DefaultRingChannel channel;  ///< 握手完成的双向通道
     };
 
-    EventLoop *loop_;                                 ///< 外部事件循环
+    EventLoop* loop_;                                 ///< 外部事件循环
     std::string uri_;                                 ///< 监听 uri
     std::string name_;                                ///< 服务端名称
     UniqueFd listen_fd_;                              ///< 监听 socket
     std::unordered_map<uint64_t, ShmConnPtr> conns_;  ///< 连接表（id -> conn）
-    uint64_t next_id_ = 1;                            ///< 下一个连接 ID
-    int max_clients_ = 16;                            ///< 最大并发客户端数
-    bool started_ = false;                            ///< 是否已 Start
+    uint64_t next_id_     = 1;                        ///< 下一个连接 ID
+    int max_clients_      = 16;                       ///< 最大并发客户端数
+    bool started_         = false;                    ///< 是否已 Start
     ErrorCode last_error_ = ErrorCode::kOk;           ///< 最近一次 Start 错误码
     int last_sys_errno_   = 0;                        ///< 最近一次 Start 的 errno
 
     // ---- 异步握手（后台线程 ↔ 事件循环线程）----
-    std::mutex hs_mtx_;                    ///< 保护下方队列与标志
-    std::condition_variable hs_cv_;        ///< 唤醒握手线程
-    std::deque<UniqueFd> hs_pending_;      ///< 待握手 socket（loop → worker）
-    std::deque<HandshakeDone> hs_done_;    ///< 握手完成待收编（worker → loop）
-    UniqueFd hs_current_;                  ///< worker 正在握手的 socket（Stop 时 shutdown 用）
-    UniqueFd hs_wake_fd_;                  ///< 握手完成通知 eventfd（worker → loop）
-    std::thread hs_thread_;                ///< 握手线程
-    bool hs_stopping_ = false;             ///< 握手线程停止标志
+    std::mutex hs_mtx_;                  ///< 保护下方队列与标志
+    std::condition_variable hs_cv_;      ///< 唤醒握手线程
+    std::deque<UniqueFd> hs_pending_;    ///< 待握手 socket（loop → worker）
+    std::deque<HandshakeDone> hs_done_;  ///< 握手完成待收编（worker → loop）
+    UniqueFd hs_current_;                ///< worker 正在握手的 socket（Stop 时 shutdown 用）
+    UniqueFd hs_wake_fd_;                ///< 握手完成通知 eventfd（worker → loop）
+    std::thread hs_thread_;              ///< 握手线程
+    bool hs_stopping_ = false;           ///< 握手线程停止标志
 
-    bool keepalive_{false};                           ///< 心跳开关（同框架字段）
-    uint32_t io_keepalive_timeout_{0};                ///< 心跳超时（仅记录）
-    uint32_t init_buffer_size_{128 * 1024};           ///< 编码缓冲初始大小（同框架默认）
-    uint32_t max_buffer_size_{1024 * 1024};           ///< 编码缓冲上限（同框架默认）
-    uint32_t rate_limit_{0};                          ///< 限流（仅记录）
+    bool keepalive_{false};                  ///< 心跳开关（同框架字段）
+    uint32_t io_keepalive_timeout_{0};       ///< 心跳超时（仅记录）
+    uint32_t init_buffer_size_{128 * 1024};  ///< 编码缓冲初始大小（同框架默认）
+    uint32_t max_buffer_size_{1024 * 1024};  ///< 编码缓冲上限（同框架默认）
+    uint32_t rate_limit_{0};                 ///< 限流（仅记录）
 
-    comm::ConnectionCallback connectioncb_;           ///< 连接建立回调
-    comm::CloseCallback closecb_;                     ///< 连接关闭回调
-    comm::AnyMessageCallback messagecb_;              ///< 消息回调
-    comm::VerifyCallback verifycb_;                   ///< 验证回调
-    comm::codec::CodecFactoryCallback codec_factory_; ///< codec 工厂
-    comm::StartFailedCallback failedcb_;              ///< 启动失败回调
-    comm::StartSuccessCallback successcb_;            ///< 启动成功回调
+    comm::ConnectionCallback connectioncb_;            ///< 连接建立回调
+    comm::CloseCallback closecb_;                      ///< 连接关闭回调
+    comm::AnyMessageCallback messagecb_;               ///< 消息回调
+    comm::VerifyCallback verifycb_;                    ///< 验证回调
+    comm::codec::CodecFactoryCallback codec_factory_;  ///< codec 工厂
+    comm::StartFailedCallback failedcb_;               ///< 启动失败回调
+    comm::StartSuccessCallback successcb_;             ///< 启动成功回调
 };
 
 }  // namespace shm

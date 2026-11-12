@@ -21,7 +21,7 @@ constexpr int kTimerIntervalMs = 100;  ///< 发送定时间隔（毫秒）
 constexpr int kMaxTicks        = 50;   ///< 最大 tick 数
 
 /// 全局事件循环指针，供信号处理器使用
-shm::EventLoop *gLoop = nullptr;
+shm::EventLoop* gLoop = nullptr;
 
 void SignalHandler(int /*signo*/)
 {
@@ -51,30 +51,25 @@ int main()
 
     shm::ShmAsyncClient client(&loop);
 
-    client.SetCodecFactory([] {
-        return std::make_shared<shm::codec::SimplePodCodec>();
+    client.SetCodecFactory([] { return std::make_shared<shm::codec::SimplePodCodec>(); });
+    client.SetConnectionCallback([](const comm::TcpConnPtr& conn) {
+        std::printf("client: connected (conn #%lu)\n", static_cast<unsigned long>(conn->Id()));
     });
-    client.SetConnectionCallback([](const comm::TcpConnPtr &conn) {
-        std::printf("client: connected (conn #%lu)\n",
-                    static_cast<unsigned long>(conn->Id()));
-    });
-    client.SetCloseCallback([](const comm::TcpConnPtr &) {
+    client.SetCloseCallback([](const comm::TcpConnPtr&) {
         std::printf("client: connection closed\n");
         if (gLoop)
             gLoop->Stop();
     });
-    client.SetConnectErrorCallback([](bool /*autoreconnect*/,
-                                      const std::string &uri) {
+    client.SetConnectErrorCallback([](bool /*autoreconnect*/, const std::string& uri) {
         std::fprintf(stderr, "client: connect failed: %s\n", uri.c_str());
         if (gLoop)
             gLoop->Stop();
     });
     // 消息回调：std::any 模型，与框架 AnyMessageCallback 一致
-    client.SetMessageCallback([](const comm::TcpConnPtr &, const std::any &pkg) {
-        if (const auto *hb = std::any_cast<Heartbeat>(&pkg))
+    client.SetMessageCallback([](const comm::TcpConnPtr&, const std::any& pkg) {
+        if (const auto* hb = std::any_cast<Heartbeat>(&pkg))
         {
-            std::printf("client: heartbeat [client_id=%d seq=%d ts=%ld]\n",
-                        hb->client_id, hb->seq,
+            std::printf("client: heartbeat [client_id=%d seq=%d ts=%ld]\n", hb->client_id, hb->seq,
                         static_cast<long>(hb->timestamp));
         }
     });
@@ -84,42 +79,42 @@ int main()
         return 1;
 
     // 定时发送 ClientMsg
-    int tick     = 0;
-    int timer_fd = 0;
-    shm::ErrorCode ec = loop.AddTimer(kTimerIntervalMs, [&](int tfd, short) {
-        shm::EventLoop::DrainTimerfd(tfd);
+    int tick          = 0;
+    int timer_fd      = 0;
+    shm::ErrorCode ec = loop.AddTimer(
+        kTimerIntervalMs,
+        [&](int tfd, short) {
+            shm::EventLoop::DrainTimerfd(tfd);
 
-        if (++tick > kMaxTicks)
-        {
-            client.Close();
-            loop.Stop();
-            return;
-        }
+            if (++tick > kMaxTicks)
+            {
+                client.Close();
+                loop.Stop();
+                return;
+            }
 
-        ClientMsg msg{};
-        msg.seq         = tick;
-        msg.tick        = tick;
-        msg.timestamp   = std::time(nullptr);
-        msg.payload_len = 64;
-        std::memset(msg.payload, 'C', msg.payload_len);
+            ClientMsg msg{};
+            msg.seq         = tick;
+            msg.tick        = tick;
+            msg.timestamp   = std::time(nullptr);
+            msg.payload_len = 64;
+            std::memset(msg.payload, 'C', msg.payload_len);
 
-        if (!client.SendCmd(msg))
-            std::fprintf(stderr, "client: [tick=%d] send failed\n", tick);
-    }, &timer_fd);
+            if (!client.SendCmd(msg))
+                std::fprintf(stderr, "client: [tick=%d] send failed\n", tick);
+        },
+        &timer_fd);
     if (ec != shm::ErrorCode::kOk)
     {
-        std::fprintf(stderr, "client: AddTimer failed: %s\n",
-                     shm::ErrorCodeName(ec));
+        std::fprintf(stderr, "client: AddTimer failed: %s\n", shm::ErrorCodeName(ec));
         return 1;
     }
 
-    std::printf("client: timer=%dms, max_ticks=%d\n", kTimerIntervalMs,
-                kMaxTicks);
+    std::printf("client: timer=%dms, max_ticks=%d\n", kTimerIntervalMs, kMaxTicks);
     ec = loop.Run();
     if (ec != shm::ErrorCode::kOk)
     {
-        std::fprintf(stderr, "client: event loop failed: %s\n",
-                     shm::ErrorCodeName(ec));
+        std::fprintf(stderr, "client: event loop failed: %s\n", shm::ErrorCodeName(ec));
         return 1;
     }
 

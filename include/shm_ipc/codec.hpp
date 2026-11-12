@@ -63,9 +63,7 @@ inline constexpr uint32_t kMsgHeaderSize = sizeof(MsgHeader);
 template <typename T, typename = void>
 struct TypeTag
 {
-    static_assert(
-        sizeof(T) == 0,
-        "Type not registered. Use SHM_IPC_REGISTER_POD(Type, tag_value).");
+    static_assert(sizeof(T) == 0, "Type not registered. Use SHM_IPC_REGISTER_POD(Type, tag_value).");
 };
 
 }  // namespace shm
@@ -75,15 +73,14 @@ struct TypeTag
  * @param Type      要注册的结构体类型
  * @param tag_value uint32_t 类型标签值
  */
-#define SHM_IPC_REGISTER_POD(Type, tag_value)           \
-    static_assert(std::is_trivially_copyable_v<Type>,   \
-                  #Type " must be trivially copyable"); \
-    namespace shm {                                 \
-    template <>                                         \
-    struct TypeTag<Type>                                \
-    {                                                   \
-        static constexpr uint32_t value = (tag_value);  \
-    };                                                  \
+#define SHM_IPC_REGISTER_POD(Type, tag_value)                                               \
+    static_assert(std::is_trivially_copyable_v<Type>, #Type " must be trivially copyable"); \
+    namespace shm {                                                                         \
+    template <>                                                                             \
+    struct TypeTag<Type>                                                                    \
+    {                                                                                       \
+        static constexpr uint32_t value = (tag_value);                                      \
+    };                                                                                      \
     }
 
 namespace shm {
@@ -103,8 +100,7 @@ namespace shm {
  * @param seq          消息序列号
  * @return payload 起始指针（buf + kMsgHeaderSize），空间不足返回 nullptr
  */
-inline char *EncodeFrame(void *buf, uint32_t buf_size,
-                         uint32_t payload_len, uint32_t seq)
+inline char* EncodeFrame(void* buf, uint32_t buf_size, uint32_t payload_len, uint32_t seq)
 {
     // 减法形式校验，避免 kMsgHeaderSize + payload_len 在 uint32 溢出：
     // payload_len 接近 UINT32_MAX 时 frame_size 会回绕成小数，绕过
@@ -112,7 +108,7 @@ inline char *EncodeFrame(void *buf, uint32_t buf_size,
     if (buf_size < kMsgHeaderSize || payload_len > buf_size - kMsgHeaderSize)
         return nullptr;
 
-    auto *p = static_cast<char *>(buf);
+    auto* p = static_cast<char*>(buf);
     MsgHeader hdr{};
     hdr.len = payload_len;
     hdr.seq = seq;
@@ -137,11 +133,10 @@ inline char *EncodeFrame(void *buf, uint32_t buf_size,
  *       保证不会发布残缺帧而损坏字节流。
  */
 template <std::size_t Cap, typename WriteFn>
-int SendFrame(RingChannel<Cap> &ch, uint32_t payload_len, uint32_t seq,
-              WriteFn &&write_payload)
+int SendFrame(RingChannel<Cap>& ch, uint32_t payload_len, uint32_t seq, WriteFn&& write_payload)
 {
     // 64 位计算避免 kMsgHeaderSize + payload_len 在 uint32 溢出
-    //（溢出后 frame_size 变成小数，会绕过空间检查）
+    // （溢出后 frame_size 变成小数，会绕过空间检查）
     uint64_t frame_size64 = static_cast<uint64_t>(kMsgHeaderSize) + payload_len;
     if (ch.WritableBytes() < frame_size64)
         return -1;
@@ -196,9 +191,8 @@ int SendFrame(RingChannel<Cap> &ch, uint32_t payload_len, uint32_t seq,
  *       不影响 batch 中此前已写入的其他帧。
  */
 template <std::size_t Cap, typename WriteFn>
-int SendFrameBatch(typename RingChannel<Cap>::ChannelBatchWriter &batch,
-                   uint32_t payload_len, uint32_t seq,
-                   WriteFn &&write_payload)
+int SendFrameBatch(typename RingChannel<Cap>::ChannelBatchWriter& batch, uint32_t payload_len, uint32_t seq,
+                   WriteFn&& write_payload)
 {
     // 同 SendFrame：64 位计算避免帧长在 uint32 溢出
     uint64_t frame_size64 = static_cast<uint64_t>(kMsgHeaderSize) + payload_len;
@@ -206,8 +200,8 @@ int SendFrameBatch(typename RingChannel<Cap>::ChannelBatchWriter &batch,
         return -1;
     uint32_t frame_size = static_cast<uint32_t>(frame_size64);  // 已 <= Capacity
 
-    uint64_t before       = batch.PendingBytes();
-    int      before_count = batch.Count();
+    uint64_t before  = batch.PendingBytes();
+    int before_count = batch.Count();
 
     MsgHeader hdr{};
     hdr.len = payload_len;
@@ -251,10 +245,9 @@ int SendFrameBatch(typename RingChannel<Cap>::ChannelBatchWriter &batch,
  * @param seq          消息序列号
  * @return 写入的总字节数，空间不足返回 0
  */
-inline uint32_t Encode(const void *payload, uint32_t payload_len,
-                       void *buf, uint32_t buf_size, uint32_t seq)
+inline uint32_t Encode(const void* payload, uint32_t payload_len, void* buf, uint32_t buf_size, uint32_t seq)
 {
-    char *p = EncodeFrame(buf, buf_size, payload_len, seq);
+    char* p = EncodeFrame(buf, buf_size, payload_len, seq);
     if (!p)
         return 0;
     if (payload_len > 0)
@@ -274,14 +267,13 @@ inline uint32_t Encode(const void *payload, uint32_t payload_len,
  * @param[out] seq         序列号（可为 nullptr）
  * @return true 解码成功，false 帧不完整或格式错误
  */
-inline bool Decode(const void *buf, uint32_t buf_len,
-                   const void **payload, uint32_t *payload_len,
-                   uint32_t *seq = nullptr)
+inline bool Decode(const void* buf, uint32_t buf_len, const void** payload, uint32_t* payload_len,
+                   uint32_t* seq = nullptr)
 {
     if (buf_len < kMsgHeaderSize)
         return false;
 
-    auto *p = static_cast<const char *>(buf);
+    auto* p = static_cast<const char*>(buf);
 
     MsgHeader hdr{};
     std::memcpy(&hdr, p, kMsgHeaderSize);
@@ -308,12 +300,11 @@ inline bool Decode(const void *buf, uint32_t buf_len,
  * RingBuf::max_write_size（Capacity/2），否则返回 -1 且不写入任何数据。
  */
 template <std::size_t Cap>
-int Send(RingChannel<Cap> &ch,
-         const void *payload, uint32_t payload_len, uint32_t seq)
+int Send(RingChannel<Cap>& ch, const void* payload, uint32_t payload_len, uint32_t seq)
 {
     if (payload_len > RingChannel<Cap>::max_write_size)
         return -1;
-    return SendFrame(ch, payload_len, seq, [&](auto &batch) {
+    return SendFrame(ch, payload_len, seq, [&](auto& batch) {
         if (payload_len > 0)
             batch.TryWrite(payload, payload_len);
     });
@@ -325,17 +316,15 @@ int Send(RingChannel<Cap> &ch,
  * payload_len 限制同上单次 Send。
  */
 template <std::size_t Cap>
-int Send(typename RingChannel<Cap>::ChannelBatchWriter &batch,
-         const void *payload, uint32_t payload_len, uint32_t seq)
+int Send(typename RingChannel<Cap>::ChannelBatchWriter& batch, const void* payload, uint32_t payload_len, uint32_t seq)
 {
     if (payload_len > RingChannel<Cap>::max_write_size)
         return -1;
-    return SendFrameBatch<Cap>(batch, payload_len, seq, [&](auto &b) {
+    return SendFrameBatch<Cap>(batch, payload_len, seq, [&](auto& b) {
         if (payload_len > 0)
             b.TryWrite(payload, payload_len);
     });
 }
-
 
 }  // namespace shm
 

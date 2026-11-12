@@ -41,18 +41,10 @@ class Codec
     virtual ~Codec() = default;
 
     /// @brief 将消息包编码到 buf，返回值语义见文件头注释
-    virtual int32_t Encode(const std::any & /*pkg*/, byte * /*buf*/,
-                           size_t /*buflen*/, size_t * /*size*/)
-    {
-        return 0;
-    }
+    virtual int32_t Encode(const std::any& /*pkg*/, byte* /*buf*/, size_t /*buflen*/, size_t* /*size*/) { return 0; }
 
     /// @brief 从 buf 解码一个消息包，返回值语义见文件头注释
-    virtual int32_t Decode(const byte * /*buf*/, size_t /*buflen*/,
-                           std::any & /*pkg*/, size_t * /*size*/)
-    {
-        return 0;
-    }
+    virtual int32_t Decode(const byte* /*buf*/, size_t /*buflen*/, std::any& /*pkg*/, size_t* /*size*/) { return 0; }
 
     /**
      * @brief 预估编码后的字节数（可选优化钩子）
@@ -62,24 +54,16 @@ class Codec
      * 返回 -1 表示未知（默认），传输层走原有缓冲路径。
      * 返回值必须与实际 Encode() 成功时的返回值一致。
      */
-    virtual int32_t EncodedSize(const std::any & /*pkg*/) const { return -1; }
+    virtual int32_t EncodedSize(const std::any& /*pkg*/) const { return -1; }
 
     /// @brief 生成心跳响应包写入 buf，返回写入字节数
-    virtual int32_t SendKeepAlive(byte * /*buf*/, size_t /*buflen*/,
-                                  size_t * /*size*/)
-    {
-        return 0;
-    }
+    virtual int32_t SendKeepAlive(byte* /*buf*/, size_t /*buflen*/, size_t* /*size*/) { return 0; }
 
     /// @brief 判断 buf 中的数据是否为心跳包
-    virtual bool ParseKeepAlive(const byte * /*buf*/, size_t /*buflen*/,
-                                size_t * /*size*/)
-    {
-        return false;
-    }
+    virtual bool ParseKeepAlive(const byte* /*buf*/, size_t /*buflen*/, size_t* /*size*/) { return false; }
 
-    bool keepalive{false};   ///< 是否开启心跳（与框架同名字段）
-    uint64_t conn_id{0};     ///< 所属连接 ID（与框架同名字段）
+    bool keepalive{false};  ///< 是否开启心跳（与框架同名字段）
+    uint64_t conn_id{0};    ///< 所属连接 ID（与框架同名字段）
 };
 
 using CodecPtr = std::shared_ptr<Codec>;  ///< 对应 codec::CodecPtr
@@ -95,29 +79,23 @@ namespace detail {
 
 template <typename T, typename = void>
 struct HasSendKeepAlive : std::false_type
-{
-};
+{};
 
 template <typename T>
-struct HasSendKeepAlive<
-    T, std::void_t<decltype(std::declval<T>().SendKeepAlive(
-           static_cast<byte *>(nullptr), static_cast<size_t>(0),
-           static_cast<size_t *>(nullptr)))>> : std::true_type
-{
-};
+struct HasSendKeepAlive<T, std::void_t<decltype(std::declval<T>().SendKeepAlive(
+                               static_cast<byte*>(nullptr), static_cast<size_t>(0), static_cast<size_t*>(nullptr)))>>
+    : std::true_type
+{};
 
 template <typename T, typename = void>
 struct HasParseKeepAlive : std::false_type
-{
-};
+{};
 
 template <typename T>
 struct HasParseKeepAlive<
-    T, std::void_t<decltype(std::declval<T>().ParseKeepAlive(
-           static_cast<const byte *>(nullptr), static_cast<size_t>(0),
-           static_cast<size_t *>(nullptr)))>> : std::true_type
-{
-};
+    T, std::void_t<decltype(std::declval<T>().ParseKeepAlive(static_cast<const byte*>(nullptr), static_cast<size_t>(0),
+                                                             static_cast<size_t*>(nullptr)))>> : std::true_type
+{};
 
 /**
  * @brief 把任意具有 Encode/Decode 同签名方法的 codec 包装为 comm::codec::Codec
@@ -130,17 +108,17 @@ class Adapter : public Codec
  public:
     explicit Adapter(std::shared_ptr<T> inner) : inner_(std::move(inner)) {}
 
-    int32_t Encode(const std::any &pkg, byte *buf, size_t buflen, size_t *size) override
+    int32_t Encode(const std::any& pkg, byte* buf, size_t buflen, size_t* size) override
     {
         return inner_->Encode(pkg, buf, buflen, size);
     }
 
-    int32_t Decode(const byte *buf, size_t buflen, std::any &pkg, size_t *size) override
+    int32_t Decode(const byte* buf, size_t buflen, std::any& pkg, size_t* size) override
     {
         return inner_->Decode(buf, buflen, pkg, size);
     }
 
-    int32_t SendKeepAlive(byte *buf, size_t buflen, size_t *size) override
+    int32_t SendKeepAlive(byte* buf, size_t buflen, size_t* size) override
     {
         if constexpr (HasSendKeepAlive<T>::value)
             return inner_->SendKeepAlive(buf, buflen, size);
@@ -148,7 +126,7 @@ class Adapter : public Codec
             return 0;
     }
 
-    bool ParseKeepAlive(const byte *buf, size_t buflen, size_t *size) override
+    bool ParseKeepAlive(const byte* buf, size_t buflen, size_t* size) override
     {
         if constexpr (HasParseKeepAlive<T>::value)
             return inner_->ParseKeepAlive(buf, buflen, size);

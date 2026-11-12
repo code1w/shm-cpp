@@ -60,15 +60,14 @@ class FrameReader
      *       read_pos 保持不动，调用方应当断开连接而不是继续重试。
      */
     template <std::size_t Cap>
-    int TryRecv(RingChannel<Cap> &ch,
-                const void **payload, uint32_t *payload_len)
+    int TryRecv(RingChannel<Cap>& ch, const void** payload, uint32_t* payload_len)
     {
         Commit(ch);
 
         // Peek 获取环中所有可读数据
-        const void *seg1 = nullptr;
+        const void* seg1  = nullptr;
         uint32_t seg1_len = 0;
-        const void *seg2 = nullptr;
+        const void* seg2  = nullptr;
         uint32_t seg2_len = 0;
 
         if (ch.Peek(&seg1, &seg1_len, &seg2, &seg2_len) != 0)
@@ -82,7 +81,7 @@ class FrameReader
 
         // 解析 MsgHeader（可能跨段）
         MsgHeader hdr{};
-        auto *s1 = static_cast<const char *>(seg1);
+        auto* s1 = static_cast<const char*>(seg1);
         if (seg1_len >= kMsgHeaderSize)
         {
             std::memcpy(&hdr, s1, kMsgHeaderSize);
@@ -91,8 +90,7 @@ class FrameReader
         {
             // header 跨段——极少见
             std::memcpy(&hdr, s1, seg1_len);
-            std::memcpy(reinterpret_cast<char *>(&hdr) + seg1_len,
-                        seg2, kMsgHeaderSize - seg1_len);
+            std::memcpy(reinterpret_cast<char*>(&hdr) + seg1_len, seg2, kMsgHeaderSize - seg1_len);
         }
 
         // 合理性上限检查（在完整性校验之前）：
@@ -100,7 +98,7 @@ class FrameReader
         // Cap - kMsgHeaderSize 的 hdr.len 在本环上永远不可能完整到达。
         // 这种帧头只可能来自损坏/恶意对端——若仅当"数据不足"等待会
         // 永久卡死字节流，必须立即报错。
-        //（注意不能按 max_write_size 限定：SendFrameBatch 允许分块写入
+        // （注意不能按 max_write_size 限定：SendFrameBatch 允许分块写入
         // 接近环容量的 payload，见 codec.hpp。）
         if (hdr.len > Cap - kMsgHeaderSize)
             return -3;
@@ -114,7 +112,7 @@ class FrameReader
 
         // payload 起始位置在帧头之后
         uint32_t body_offset = kMsgHeaderSize;
-        uint32_t body_len = hdr.len;
+        uint32_t body_len    = hdr.len;
 
         if (body_len == 0)
         {
@@ -141,9 +139,8 @@ class FrameReader
             // 默认上限 UINT32_MAX 下，合法的跨环尾大帧不再被丢弃。
             if (buf_.size() < body_len)
                 buf_.resize(body_len);
-            CopyFromSegments(s1, seg1_len,
-                             static_cast<const char *>(seg2), seg2_len,
-                             body_offset, buf_.data(), body_len);
+            CopyFromSegments(s1, seg1_len, static_cast<const char*>(seg2), seg2_len, body_offset, buf_.data(),
+                             body_len);
             *payload     = buf_.data();
             *payload_len = body_len;
         }
@@ -160,7 +157,7 @@ class FrameReader
      * 用于 FrameReader 销毁前或不再调用 TryRecv 时，确保 read_pos 推进。
      */
     template <std::size_t Cap>
-    void Commit(RingChannel<Cap> &ch)
+    void Commit(RingChannel<Cap>& ch)
     {
         if (pending_commit_ > 0)
         {
@@ -181,16 +178,15 @@ class FrameReader
     /**
      * @brief 从 Peek 返回的两段数据中拷贝指定偏移和长度的字节
      */
-    static void CopyFromSegments(const char *s1, uint32_t s1_len,
-                                 const char *s2, uint32_t /*s2_len*/,
-                                 uint32_t offset, char *dst, uint32_t len)
+    static void CopyFromSegments(const char* s1, uint32_t s1_len, const char* s2, uint32_t /*s2_len*/, uint32_t offset,
+                                 char* dst, uint32_t len)
     {
         uint32_t copied = 0;
         // seg1 中可用的部分
         if (offset < s1_len)
         {
             uint32_t avail = s1_len - offset;
-            uint32_t n = (avail < len) ? avail : len;
+            uint32_t n     = (avail < len) ? avail : len;
             std::memcpy(dst, s1 + offset, n);
             copied += n;
         }

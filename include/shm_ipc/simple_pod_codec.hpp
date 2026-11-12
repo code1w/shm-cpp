@@ -61,8 +61,7 @@ class SimplePodCodec : public comm::codec::Codec
     template <typename T>
     static void RegisterPod()
     {
-        static_assert(std::is_trivially_copyable_v<T>,
-                      "SimplePodCodec::RegisterPod<T>: T must be trivially copyable");
+        static_assert(std::is_trivially_copyable_v<T>, "SimplePodCodec::RegisterPod<T>: T must be trivially copyable");
         static_assert(std::is_default_constructible_v<T>,
                       "SimplePodCodec::RegisterPod<T>: T must be default constructible");
         Registry().push_back(RegistryEntry{
@@ -70,8 +69,8 @@ class SimplePodCodec : public comm::codec::Codec
             TypeTag<T>::value,
             sizeof(T),
             // encode：从 any 取出 T 的字节
-            [](const std::any &pkg, void *out) -> bool {
-                const T *p = std::any_cast<T>(&pkg);
+            [](const std::any& pkg, void* out) -> bool {
+                const T* p = std::any_cast<T>(&pkg);
                 if (!p)
                     return false;
                 std::memcpy(out, p, sizeof(T));
@@ -79,8 +78,8 @@ class SimplePodCodec : public comm::codec::Codec
             },
             // decode：直接写入 any 内部存储，避免 "栈上临时 T + 再拷贝"。
             // 同类型时复用已有存储；类型变化时原地构造一次。
-            [](const void *data, std::any &out) {
-                auto *p = std::any_cast<T>(&out);
+            [](const void* data, std::any& out) {
+                auto* p = std::any_cast<T>(&out);
                 if (!p)
                 {
                     out.emplace<T>();
@@ -95,9 +94,9 @@ class SimplePodCodec : public comm::codec::Codec
      * @brief 编码：[tag u32][T bytes]
      * @return >0 写入字节数；0 缓冲不足（*size 为所需大小）；-1 类型未注册/any 类型不符
      */
-    int32_t Encode(const std::any &pkg, comm::byte *buf, size_t buflen, size_t *size) override
+    int32_t Encode(const std::any& pkg, comm::byte* buf, size_t buflen, size_t* size) override
     {
-        const RegistryEntry *e = FindByType(pkg.type());
+        const RegistryEntry* e = FindByType(pkg.type());
         if (!e)
             return comm::kCodecDisconnect;  // 未注册类型（同框架 bad_any_cast 语义）
 
@@ -118,7 +117,7 @@ class SimplePodCodec : public comm::codec::Codec
      * @brief 解码：[tag u32][T bytes]
      * @return >0 消费字节数；0 数据不完整（*size 为当前帧所需总长）；-1 未知 tag
      */
-    int32_t Decode(const comm::byte *buf, size_t buflen, std::any &pkg, size_t *size) override
+    int32_t Decode(const comm::byte* buf, size_t buflen, std::any& pkg, size_t* size) override
     {
         if (buflen < kTagSize)
         {
@@ -128,7 +127,7 @@ class SimplePodCodec : public comm::codec::Codec
         }
         uint32_t tag = 0;
         std::memcpy(&tag, buf, kTagSize);
-        const RegistryEntry *e = FindByTag(tag);
+        const RegistryEntry* e = FindByTag(tag);
         if (!e)
             return comm::kCodecDisconnect;  // 未知 tag：协议错误（同框架：-1）
 
@@ -148,9 +147,9 @@ class SimplePodCodec : public comm::codec::Codec
      * @brief 编码后精确长度（供传输层直接写 ring，消除双拷贝）
      * @return kTagSize + sizeof(T)；类型未注册返回 -1
      */
-    int32_t EncodedSize(const std::any &pkg) const override
+    int32_t EncodedSize(const std::any& pkg) const override
     {
-        const RegistryEntry *e = FindByType(pkg.type());
+        const RegistryEntry* e = FindByType(pkg.type());
         if (!e)
             return -1;
         return static_cast<int32_t>(kTagSize + e->size);
@@ -159,39 +158,39 @@ class SimplePodCodec : public comm::codec::Codec
     static std::string Name() { return "simplepodcodec"; }
 
  private:
-    using EncodeFn = bool (*)(const std::any &, void *);
+    using EncodeFn = bool (*)(const std::any&, void*);
     /// decode 写入已有的 any：同类型时原地复用其存储
-    using DecodeFn = void (*)(const void *, std::any &);
+    using DecodeFn = void (*)(const void*, std::any&);
 
     /// @brief 每种 POD 类型的编解码操作集
     struct RegistryEntry
     {
         std::type_index type;  ///< 类型
-        uint32_t        tag;   ///< 类型标签
-        uint32_t        size;  ///< sizeof(T)
-        EncodeFn        encode;  ///< any -> 字节
-        DecodeFn        decode;  ///< 字节 -> 已有 any（原地复用）
+        uint32_t tag;          ///< 类型标签
+        uint32_t size;         ///< sizeof(T)
+        EncodeFn encode;       ///< any -> 字节
+        DecodeFn decode;       ///< 字节 -> 已有 any（原地复用）
     };
 
     /// @brief 进程级扁平注册表（启动阶段构建，之后只读）
-    static std::vector<RegistryEntry> &Registry()
+    static std::vector<RegistryEntry>& Registry()
     {
         static std::vector<RegistryEntry> entries;
         return entries;
     }
 
-    static const RegistryEntry *FindByType(const std::type_info &type) noexcept
+    static const RegistryEntry* FindByType(const std::type_info& type) noexcept
     {
         const std::type_index key(type);
-        for (const auto &e : Registry())
+        for (const auto& e : Registry())
             if (e.type == key)
                 return &e;
         return nullptr;
     }
 
-    static const RegistryEntry *FindByTag(uint32_t tag) noexcept
+    static const RegistryEntry* FindByTag(uint32_t tag) noexcept
     {
-        for (const auto &e : Registry())
+        for (const auto& e : Registry())
             if (e.tag == tag)
                 return &e;
         return nullptr;

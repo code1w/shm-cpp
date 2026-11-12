@@ -89,20 +89,19 @@ class ChannelBatchWriter
     /** @brief 构造惰性写入器（未绑定通道；Flush 不通知） */
     ChannelBatchWriter() = default;
 
-    ChannelBatchWriter(typename RingBuf<Capacity>::BatchWriter &&bw,
-                       const RingChannel<Capacity> *ch)
-        : batch_(std::move(bw)), channel_(ch) {}
+    ChannelBatchWriter(typename RingBuf<Capacity>::BatchWriter&& bw, const RingChannel<Capacity>* ch)
+        : batch_(std::move(bw)), channel_(ch)
+    {}
 
     ~ChannelBatchWriter() { Flush(); }
 
-    ChannelBatchWriter(ChannelBatchWriter &&o) noexcept
-        : batch_(std::move(o.batch_)), channel_(o.channel_)
+    ChannelBatchWriter(ChannelBatchWriter&& o) noexcept : batch_(std::move(o.batch_)), channel_(o.channel_)
     {
         o.channel_ = nullptr;
     }
 
     /** @brief 移动赋值：丢弃目标未发布数据后接管源对象 */
-    ChannelBatchWriter &operator=(ChannelBatchWriter &&o) noexcept
+    ChannelBatchWriter& operator=(ChannelBatchWriter&& o) noexcept
     {
         if (this != &o)
         {
@@ -114,8 +113,8 @@ class ChannelBatchWriter
         return *this;
     }
 
-    ChannelBatchWriter(const ChannelBatchWriter &)            = delete;
-    ChannelBatchWriter &operator=(const ChannelBatchWriter &) = delete;
+    ChannelBatchWriter(const ChannelBatchWriter&)            = delete;
+    ChannelBatchWriter& operator=(const ChannelBatchWriter&) = delete;
 
     /**
      * @brief 尝试写入一段数据（不触发原子 store 和通知）
@@ -123,10 +122,7 @@ class ChannelBatchWriter
      * @param len  数据长度（字节）
      * @return 0 成功，-1 空间不足或数据过大
      */
-    int TryWrite(const void *data, uint32_t len)
-    {
-        return batch_.TryWrite(data, len);
-    }
+    int TryWrite(const void* data, uint32_t len) { return batch_.TryWrite(data, len); }
 
     /**
      * @brief 发布所有累积写入并通知对端
@@ -150,23 +146,20 @@ class ChannelBatchWriter
     void Cancel() noexcept { batch_.Cancel(); }
 
     /** @brief 回滚到之前的 PendingBytes/Count 状态（撤销最近一次帧写入） */
-    void RewindTo(uint64_t pending, int count) noexcept
-    {
-        batch_.RewindTo(pending, count);
-    }
+    void RewindTo(uint64_t pending, int count) noexcept { batch_.RewindTo(pending, count); }
 
     /** @brief 当前可写入的剩余字节数 */
     uint64_t FreeBytes() const noexcept { return batch_.FreeBytes(); }
 
     /** @brief 预留连续写入区域，不跨环尾时返回直写指针 */
-    char *Reserve(uint32_t len) { return batch_.Reserve(len); }
+    char* Reserve(uint32_t len) { return batch_.Reserve(len); }
 
     /** @brief 提交 Reserve 预留的写入 */
     void CommitReserve(uint32_t len) { batch_.CommitReserve(len); }
 
  private:
     typename RingBuf<Capacity>::BatchWriter batch_;
-    const RingChannel<Capacity> *channel_ = nullptr;
+    const RingChannel<Capacity>* channel_ = nullptr;
 };
 
 }  // namespace detail
@@ -187,10 +180,10 @@ class RingChannel
     RingChannel() = default;
 
     // 移动语义（持有 memfd、mmap 区域、eventfd），禁止复制
-    RingChannel(RingChannel &&)                 = default;
-    RingChannel &operator=(RingChannel &&)      = default;
-    RingChannel(const RingChannel &)            = delete;
-    RingChannel &operator=(const RingChannel &) = delete;
+    RingChannel(RingChannel&&)                 = default;
+    RingChannel& operator=(RingChannel&&)      = default;
+    RingChannel(const RingChannel&)            = delete;
+    RingChannel& operator=(const RingChannel&) = delete;
 
     /**
      * @brief 创建双向环形通道（客户端/服务端统一入口）
@@ -210,9 +203,8 @@ class RingChannel
      * @return kOk 成功；kSizeMismatch 对端环尺寸不符；其余见 ErrorCode
      */
     [[nodiscard]]
-    static ErrorCode CreateRingChannel(int socket_fd, ChannelRole role,
-                                       RingChannel *out,
-                                       int *sys_errno = nullptr) noexcept
+    static ErrorCode CreateRingChannel(int socket_fd, ChannelRole role, RingChannel* out,
+                                       int* sys_errno = nullptr) noexcept
     {
         if (!out || socket_fd < 0)
             return ErrorCode::kInvalidArgument;
@@ -232,13 +224,13 @@ class RingChannel
             ec = ch.SendLocalFds(socket_fd, sys_errno);  // 先发：memfd_c2s、efd_client
             if (ec != ErrorCode::kOk)
                 return ec;
-            ec = ch.RecvPeerFds(socket_fd, sys_errno);   // 后收：memfd_s2c、efd_server
+            ec = ch.RecvPeerFds(socket_fd, sys_errno);  // 后收：memfd_s2c、efd_server
             if (ec != ErrorCode::kOk)
                 return ec;
         }
         else
         {
-            ec = ch.RecvPeerFds(socket_fd, sys_errno);   // 先收：memfd_c2s、efd_client
+            ec = ch.RecvPeerFds(socket_fd, sys_errno);  // 先收：memfd_c2s、efd_client
             if (ec != ErrorCode::kOk)
                 return ec;
             ec = ch.CreateWriteRing("server_to_client", sys_errno);
@@ -264,7 +256,7 @@ class RingChannel
      * @param len  数据长度（字节）
      * @return 0 成功，-1 缓冲区满或数据过大
      */
-    int TryWrite(const void *data, uint32_t len)
+    int TryWrite(const void* data, uint32_t len)
     {
         if (!write_region_)  // 默认构造 / moved-from：无写环
             return -1;
@@ -279,7 +271,7 @@ class RingChannel
      * @param max_len 最大读取字节数
      * @return 实际读取的字节数（0 表示缓冲区为空）
      */
-    uint32_t TryRead(void *data, uint32_t max_len)
+    uint32_t TryRead(void* data, uint32_t max_len)
     {
         if (!read_region_)
             return 0;
@@ -294,7 +286,7 @@ class RingChannel
      * @param len  需要读取的精确字节数
      * @return 0 成功，-1 数据不足
      */
-    int ReadExact(void *data, uint32_t len)
+    int ReadExact(void* data, uint32_t len)
     {
         if (!read_region_)
             return -1;
@@ -311,8 +303,7 @@ class RingChannel
      * @param seg2_len 输出：第二段长度
      * @return 0 有数据，-1 缓冲区为空
      */
-    int Peek(const void **seg1, uint32_t *seg1_len,
-             const void **seg2, uint32_t *seg2_len)
+    int Peek(const void** seg1, uint32_t* seg1_len, const void** seg2, uint32_t* seg2_len)
     {
         if (!read_region_)
             return -1;
@@ -320,7 +311,7 @@ class RingChannel
         {
             if (!seg1 || !seg1_len || !seg2 || !seg2_len)
                 return -1;
-            int rc = Ring::PeekContig(read_region_.Get(), seg1, seg1_len);
+            int rc    = Ring::PeekContig(read_region_.Get(), seg1, seg1_len);
             *seg2     = nullptr;
             *seg2_len = 0;
             return rc;
@@ -347,32 +338,23 @@ class RingChannel
      * @return kOk 成功；kInvalidArgument 出参为空；kNotInitialized 通道未初始化
      */
     [[nodiscard]]
-    ErrorCode StartBatch(ChannelBatchWriter *out) noexcept
+    ErrorCode StartBatch(ChannelBatchWriter* out) noexcept
     {
         if (!out)
             return ErrorCode::kInvalidArgument;
         if (!write_region_)
             return ErrorCode::kNotInitialized;
-        *out = ChannelBatchWriter(
-            typename Ring::BatchWriter(write_region_.Get(),
-                                       write_region_.Mirrored()),
-            this);
+        *out = ChannelBatchWriter(typename Ring::BatchWriter(write_region_.Get(), write_region_.Mirrored()), this);
         return ErrorCode::kOk;
     }
 
     // ---- 状态查询 ----
 
     /** @brief 返回读环中可读字节数（通道未初始化时为 0） */
-    uint64_t Readable() const
-    {
-        return read_region_ ? Ring::Available(read_region_.Get()) : 0;
-    }
+    uint64_t Readable() const { return read_region_ ? Ring::Available(read_region_.Get()) : 0; }
 
     /** @brief 返回写环中剩余可写字节数（通道未初始化时为 0） */
-    uint64_t WritableBytes() const
-    {
-        return write_region_ ? Ring::FreeSpace(write_region_.Get()) : 0;
-    }
+    uint64_t WritableBytes() const { return write_region_ ? Ring::FreeSpace(write_region_.Get()) : 0; }
 
     // ---- 通知 ----
 
@@ -401,7 +383,8 @@ class RingChannel
             return;
         uint64_t v = 1;
         ssize_t r;
-        do {
+        do
+        {
             r = ::write(notify_write_efd_.Get(), &v, sizeof(v));
         } while (r < 0 && errno == EINTR);
     }
@@ -425,16 +408,10 @@ class RingChannel
     }
 
     /** @brief 读环当前 write_pos（通道未初始化时为 0） */
-    uint64_t WritePos() const
-    {
-        return read_region_ ? Ring::WritePos(read_region_.Get()) : 0;
-    }
+    uint64_t WritePos() const { return read_region_ ? Ring::WritePos(read_region_.Get()) : 0; }
 
     /** @brief 读环当前 read_pos（通道未初始化时为 0） */
-    uint64_t ReadPos() const
-    {
-        return read_region_ ? Ring::ReadPos(read_region_.Get()) : 0;
-    }
+    uint64_t ReadPos() const { return read_region_ ? Ring::ReadPos(read_region_.Get()) : 0; }
 
     /**
      * @brief 排空 eventfd（在通知回调中调用）
@@ -445,7 +422,8 @@ class RingChannel
     {
         uint64_t v = 0;
         ssize_t r;
-        do {
+        do
+        {
             r = ::read(efd, &v, sizeof(v));
         } while (r < 0 && errno == EINTR);
         return v;
@@ -456,30 +434,33 @@ class RingChannel
 
     /// @brief 写环数据区是否启用镜像映射（可单次跨尾拷贝）
     [[nodiscard]]
-    bool WriteMirrored() const noexcept { return write_region_.Mirrored(); }
+    bool WriteMirrored() const noexcept
+    {
+        return write_region_.Mirrored();
+    }
 
     /// @brief 读环数据区是否启用镜像映射（Peek 永远单段）
     [[nodiscard]]
-    bool ReadMirrored() const noexcept { return read_region_.Mirrored(); }
+    bool ReadMirrored() const noexcept
+    {
+        return read_region_.Mirrored();
+    }
 
  private:
     /// @brief 创建写环：memfd + mmap + 清零初始化
     /// @param name      memfd 名称（调试用）
     /// @param sys_errno 可选：失败时的 errno
-    ErrorCode CreateWriteRing(const char *name, int *sys_errno = nullptr) noexcept
+    ErrorCode CreateWriteRing(const char* name, int* sys_errno = nullptr) noexcept
     {
         ErrorCode ec = CreateMemfd(name, Ring::shm_size, &write_memfd_, sys_errno);
         if (ec != ErrorCode::kOk)
             return ec;
-        ec = write_region_.MapMirrored(write_memfd_.Get(), Ring::shm_size,
-                                       kRingDataOffset, Ring::capacity,
-                                       PROT_READ | PROT_WRITE, MAP_SHARED,
-                                       sys_errno);
+        ec = write_region_.MapMirrored(write_memfd_.Get(), Ring::shm_size, kRingDataOffset, Ring::capacity,
+                                       PROT_READ | PROT_WRITE, MAP_SHARED, sys_errno);
         if (ec != ErrorCode::kOk)
         {
             // 镜像仅影响本地 VA 布局；失败时退化为普通单次映射
-            ec = write_region_.Map(write_memfd_.Get(), Ring::shm_size,
-                                   PROT_READ | PROT_WRITE, MAP_SHARED, sys_errno);
+            ec = write_region_.Map(write_memfd_.Get(), Ring::shm_size, PROT_READ | PROT_WRITE, MAP_SHARED, sys_errno);
             if (ec != ErrorCode::kOk)
                 return ec;
         }
@@ -488,21 +469,18 @@ class RingChannel
     }
 
     /// @brief 发送本端 fd：写环 memfd + "唤醒自身"的 eventfd
-    ErrorCode SendLocalFds(int socket_fd, int *sys_errno = nullptr) const noexcept
+    ErrorCode SendLocalFds(int socket_fd, int* sys_errno = nullptr) const noexcept
     {
-        ErrorCode ec = SendFd(socket_fd, write_memfd_.Get(), FdTag::kMemfd,
-                              sys_errno);
+        ErrorCode ec = SendFd(socket_fd, write_memfd_.Get(), FdTag::kMemfd, sys_errno);
         if (ec != ErrorCode::kOk)
             return ec;
-        return SendFd(socket_fd, notify_read_efd_.Get(), FdTag::kEventfd,
-                      sys_errno);
+        return SendFd(socket_fd, notify_read_efd_.Get(), FdTag::kEventfd, sys_errno);
     }
 
     /// @brief 接收对端 fd：读环 memfd（mmap 挂载）+ "唤醒对端"的 eventfd
-    ErrorCode RecvPeerFds(int socket_fd, int *sys_errno = nullptr) noexcept
+    ErrorCode RecvPeerFds(int socket_fd, int* sys_errno = nullptr) noexcept
     {
-        ErrorCode ec = RecvFdExpect(socket_fd, FdTag::kMemfd, &read_memfd_,
-                                    sys_errno);
+        ErrorCode ec = RecvFdExpect(socket_fd, FdTag::kMemfd, &read_memfd_, sys_errno);
         if (ec != ErrorCode::kOk)
             return ec;
 
@@ -510,32 +488,28 @@ class RingChannel
         // 两端 Capacity 不一致或对端发送 0 字节/被截断的 memfd 时，
         // 按本地 Ring::shm_size 映射并在环尾读写会越过文件尾（SIGBUS）
         // 或越过本地映射（SIGSEGV）。
-        struct stat st{};
+        struct stat st
+        {};
         if (::fstat(read_memfd_.Get(), &st) != 0)
         {
             if (sys_errno)
                 *sys_errno = errno;
             return ErrnoToErrorCode(errno);
         }
-        if (!S_ISREG(st.st_mode) ||
-            st.st_size != static_cast<off_t>(Ring::shm_size))
+        if (!S_ISREG(st.st_mode) || st.st_size != static_cast<off_t>(Ring::shm_size))
         {
             return ErrorCode::kSizeMismatch;
         }
 
-        ec = read_region_.MapMirrored(read_memfd_.Get(), Ring::shm_size,
-                                      kRingDataOffset, Ring::capacity,
-                                      PROT_READ | PROT_WRITE, MAP_SHARED,
-                                      sys_errno);
+        ec = read_region_.MapMirrored(read_memfd_.Get(), Ring::shm_size, kRingDataOffset, Ring::capacity,
+                                      PROT_READ | PROT_WRITE, MAP_SHARED, sys_errno);
         if (ec != ErrorCode::kOk)
         {
-            ec = read_region_.Map(read_memfd_.Get(), Ring::shm_size,
-                                  PROT_READ | PROT_WRITE, MAP_SHARED, sys_errno);
+            ec = read_region_.Map(read_memfd_.Get(), Ring::shm_size, PROT_READ | PROT_WRITE, MAP_SHARED, sys_errno);
             if (ec != ErrorCode::kOk)
                 return ec;
         }
-        return RecvFdExpect(socket_fd, FdTag::kEventfd, &notify_write_efd_,
-                            sys_errno);
+        return RecvFdExpect(socket_fd, FdTag::kEventfd, &notify_write_efd_, sys_errno);
     }
 
     UniqueFd write_memfd_;     ///< 写环对应的 memfd

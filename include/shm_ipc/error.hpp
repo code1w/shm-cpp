@@ -24,33 +24,43 @@ namespace shm {
 /** @brief 统一错误码 */
 enum class ErrorCode : int32_t
 {
-    kOk = 0,          ///< 成功
-    kInvalidArgument, ///< 参数非法（空出参、路径过长等）
-    kSystem,          ///< 系统调用失败（errno 见 sys_errno 出参）
-    kTimeout,         ///< EAGAIN/EWOULDBLOCK（握手超时等）
-    kPeerClosed,      ///< 对端关闭（EOF/EPIPE/ECONNRESET/ENOTCONN）
-    kProtocol,        ///< 协议错误（tag 不符、非法控制消息、CTRUNC）
-    kSizeMismatch,    ///< 对端环尺寸与本地 Capacity 不一致
-    kNotInitialized,  ///< 在默认构造/moved-from 对象上操作
-    kMultipleFds,     ///< 一条 SCM_RIGHTS 消息携带多个 fd
-    kNoMemory,        ///< 已捕获的 std::bad_alloc
+    kOk = 0,           ///< 成功
+    kInvalidArgument,  ///< 参数非法（空出参、路径过长等）
+    kSystem,           ///< 系统调用失败（errno 见 sys_errno 出参）
+    kTimeout,          ///< EAGAIN/EWOULDBLOCK（握手超时等）
+    kPeerClosed,       ///< 对端关闭（EOF/EPIPE/ECONNRESET/ENOTCONN）
+    kProtocol,         ///< 协议错误（tag 不符、非法控制消息、CTRUNC）
+    kSizeMismatch,     ///< 对端环尺寸与本地 Capacity 不一致
+    kNotInitialized,   ///< 在默认构造/moved-from 对象上操作
+    kMultipleFds,      ///< 一条 SCM_RIGHTS 消息携带多个 fd
+    kNoMemory,         ///< 已捕获的 std::bad_alloc
 };
 
 /** @brief 错误码名称（静态字符串，无分配） */
-inline const char *ErrorCodeName(ErrorCode ec) noexcept
+inline const char* ErrorCodeName(ErrorCode ec) noexcept
 {
     switch (ec)
     {
-        case ErrorCode::kOk:              return "ok";
-        case ErrorCode::kInvalidArgument: return "invalid argument";
-        case ErrorCode::kSystem:          return "system error";
-        case ErrorCode::kTimeout:         return "timeout";
-        case ErrorCode::kPeerClosed:      return "peer closed";
-        case ErrorCode::kProtocol:        return "protocol error";
-        case ErrorCode::kSizeMismatch:    return "size mismatch";
-        case ErrorCode::kNotInitialized:  return "not initialized";
-        case ErrorCode::kMultipleFds:     return "multiple fds";
-        case ErrorCode::kNoMemory:        return "out of memory";
+        case ErrorCode::kOk:
+            return "ok";
+        case ErrorCode::kInvalidArgument:
+            return "invalid argument";
+        case ErrorCode::kSystem:
+            return "system error";
+        case ErrorCode::kTimeout:
+            return "timeout";
+        case ErrorCode::kPeerClosed:
+            return "peer closed";
+        case ErrorCode::kProtocol:
+            return "protocol error";
+        case ErrorCode::kSizeMismatch:
+            return "size mismatch";
+        case ErrorCode::kNotInitialized:
+            return "not initialized";
+        case ErrorCode::kMultipleFds:
+            return "multiple fds";
+        case ErrorCode::kNoMemory:
+            return "out of memory";
     }
     return "unknown error";
 }

@@ -29,7 +29,7 @@
 
 namespace shm {
 
-inline constexpr const char *kDefaultSocketPath = "/tmp/fd-pass.socket";
+inline constexpr const char* kDefaultSocketPath = "/tmp/fd-pass.socket";
 
 // memfd seal 常量：glibc 2.17 等老版本的 <fcntl.h> 未定义，而
 // <linux/fcntl.h> 与其 struct flock 定义冲突，故直接使用内核 UAPI 固定值
@@ -37,9 +37,9 @@ inline constexpr const char *kDefaultSocketPath = "/tmp/fd-pass.socket";
 #define MFD_ALLOW_SEALING 0x0004U
 #endif
 #ifndef F_ADD_SEALS
-#define F_ADD_SEALS   1033     ///< UAPI: fcntl 命令，为文件添加 seal
-#define F_SEAL_SHRINK 0x0002   ///< 禁止 ftruncate 缩小文件
-#define F_SEAL_GROW   0x0004   ///< 禁止 ftruncate 扩大文件
+#define F_ADD_SEALS 1033      ///< UAPI: fcntl 命令，为文件添加 seal
+#define F_SEAL_SHRINK 0x0002  ///< 禁止 ftruncate 缩小文件
+#define F_SEAL_GROW 0x0004    ///< 禁止 ftruncate 扩大文件
 #endif
 
 // ---------------------------------------------------------------------------
@@ -54,8 +54,8 @@ class [[nodiscard]] UniqueFd
     explicit UniqueFd(int fd) noexcept : fd_(fd) {}
     ~UniqueFd() { Reset(); }
 
-    UniqueFd(UniqueFd &&o) noexcept : fd_(std::exchange(o.fd_, -1)) {}
-    UniqueFd &operator=(UniqueFd &&o) noexcept
+    UniqueFd(UniqueFd&& o) noexcept : fd_(std::exchange(o.fd_, -1)) {}
+    UniqueFd& operator=(UniqueFd&& o) noexcept
     {
         if (this != &o)
         {
@@ -64,8 +64,8 @@ class [[nodiscard]] UniqueFd
         }
         return *this;
     }
-    UniqueFd(const UniqueFd &)            = delete;
-    UniqueFd &operator=(const UniqueFd &) = delete;
+    UniqueFd(const UniqueFd&)            = delete;
+    UniqueFd& operator=(const UniqueFd&) = delete;
 
     [[nodiscard]]
     int Get() const noexcept
@@ -100,43 +100,44 @@ class MmapRegion
             ::munmap(addr_, size_);
     }
 
-    MmapRegion(MmapRegion &&o) noexcept
-        : addr_(std::exchange(o.addr_, MAP_FAILED)), size_(o.size_),
-          mirrored_(o.mirrored_), data_offset_(o.data_offset_)
+    MmapRegion(MmapRegion&& o) noexcept
+        : addr_(std::exchange(o.addr_, MAP_FAILED)),
+          size_(o.size_),
+          mirrored_(o.mirrored_),
+          data_offset_(o.data_offset_)
     {
         o.mirrored_    = false;
         o.data_offset_ = 0;
     }
-    MmapRegion &operator=(MmapRegion &&o) noexcept
+    MmapRegion& operator=(MmapRegion&& o) noexcept
     {
         if (this != &o)
         {
             if (addr_ != MAP_FAILED)
                 ::munmap(addr_, size_);
-            addr_        = std::exchange(o.addr_, MAP_FAILED);
-            size_        = std::exchange(o.size_, 0);
-            mirrored_    = o.mirrored_;
-            data_offset_ = o.data_offset_;
+            addr_          = std::exchange(o.addr_, MAP_FAILED);
+            size_          = std::exchange(o.size_, 0);
+            mirrored_      = o.mirrored_;
+            data_offset_   = o.data_offset_;
             o.mirrored_    = false;
             o.data_offset_ = 0;
         }
         return *this;
     }
-    MmapRegion(const MmapRegion &)            = delete;
-    MmapRegion &operator=(const MmapRegion &) = delete;
+    MmapRegion(const MmapRegion&)            = delete;
+    MmapRegion& operator=(const MmapRegion&) = delete;
 
     /**
      * @brief 建立映射（替换已有映射；失败时保留原映射不变）
      * @return kOk 成功；kInvalidArgument 参数非法；否则映射失败（errno 出参）
      */
     [[nodiscard]]
-    ErrorCode Map(int fd, std::size_t size, int prot, int flags,
-                  int *sys_errno = nullptr) noexcept
+    ErrorCode Map(int fd, std::size_t size, int prot, int flags, int* sys_errno = nullptr) noexcept
     {
         if (fd < 0 || size == 0)
             return ErrorCode::kInvalidArgument;
 
-        void *addr = ::mmap(nullptr, size, prot, flags, fd, 0);
+        void* addr = ::mmap(nullptr, size, prot, flags, fd, 0);
         if (addr == MAP_FAILED)
         {
             if (sys_errno)
@@ -169,25 +170,20 @@ class MmapRegion
      * @param sys_errno    可选：失败时的 errno
      */
     [[nodiscard]]
-    ErrorCode MapMirrored(int fd, std::size_t file_size,
-                          std::size_t data_offset, std::size_t capacity,
-                          int prot, int flags,
-                          int *sys_errno = nullptr) noexcept
+    ErrorCode MapMirrored(int fd, std::size_t file_size, std::size_t data_offset, std::size_t capacity, int prot,
+                          int flags, int* sys_errno = nullptr) noexcept
     {
-        if (fd < 0 || capacity == 0 ||
-            data_offset + capacity != file_size)
+        if (fd < 0 || capacity == 0 || data_offset + capacity != file_size)
             return ErrorCode::kInvalidArgument;
 
-        const long page = ::sysconf(_SC_PAGESIZE);
-        const std::size_t page_size =
-            (page > 0) ? static_cast<std::size_t>(page) : 4096u;
+        const long page             = ::sysconf(_SC_PAGESIZE);
+        const std::size_t page_size = (page > 0) ? static_cast<std::size_t>(page) : 4096u;
         if (data_offset % page_size != 0)
             return ErrorCode::kInvalidArgument;
 
         // VA 预留：header 页 + 两圈 data
         const std::size_t reserve = file_size + capacity;
-        void *base = ::mmap(nullptr, reserve, PROT_NONE,
-                            MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        void* base                = ::mmap(nullptr, reserve, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
         if (base == MAP_FAILED)
         {
             if (sys_errno)
@@ -205,9 +201,8 @@ class MmapRegion
             return ErrnoToErrorCode(err);
         }
         // 第二圈：仅 data 区，紧接在第一圈 data 末尾
-        void *second = static_cast<char *>(base) + file_size;
-        if (::mmap(second, capacity, prot, flags | MAP_FIXED, fd,
-                   static_cast<off_t>(data_offset)) == MAP_FAILED)
+        void* second = static_cast<char*>(base) + file_size;
+        if (::mmap(second, capacity, prot, flags | MAP_FIXED, fd, static_cast<off_t>(data_offset)) == MAP_FAILED)
         {
             const int err = errno;
             ::munmap(base, reserve);
@@ -226,7 +221,7 @@ class MmapRegion
     }
 
     [[nodiscard]]
-    void *Get() const noexcept
+    void* Get() const noexcept
     {
         return addr_;
     }
@@ -243,17 +238,17 @@ class MmapRegion
     }
     /// @brief 数据区起始指针（仅镜像映射有效）
     [[nodiscard]]
-    char *DataBase() const noexcept
+    char* DataBase() const noexcept
     {
-        return static_cast<char *>(addr_) + data_offset_;
+        return static_cast<char*>(addr_) + data_offset_;
     }
     explicit operator bool() const noexcept { return addr_ != MAP_FAILED; }
 
  private:
-    void *addr_       = MAP_FAILED;  ///< mmap 起始地址（镜像时为 VA 预留起点）
-    std::size_t size_ = 0;           ///< munmap 长度（镜像时为 VA 预留长度）
-    bool mirrored_    = false;       ///< 数据区是否两圈镜像
-    std::size_t data_offset_ = 0;    ///< 数据区在文件中的偏移
+    void* addr_              = MAP_FAILED;  ///< mmap 起始地址（镜像时为 VA 预留起点）
+    std::size_t size_        = 0;           ///< munmap 长度（镜像时为 VA 预留长度）
+    bool mirrored_           = false;       ///< 数据区是否两圈镜像
+    std::size_t data_offset_ = 0;           ///< 数据区在文件中的偏移
 };
 
 // ---------------------------------------------------------------------------
@@ -292,20 +287,17 @@ struct TaggedFd
  * @param sys_errno  可选：失败时的 errno
  */
 [[nodiscard]]
-inline ErrorCode CreateMemfd(const char *name, std::size_t size,
-                             UniqueFd *out, int *sys_errno = nullptr) noexcept
+inline ErrorCode CreateMemfd(const char* name, std::size_t size, UniqueFd* out, int* sys_errno = nullptr) noexcept
 {
     if (!out || !name || size == 0)
         return ErrorCode::kInvalidArgument;
 
     // MFD_ALLOW_SEALING 允许随后 fcntl(F_ADD_SEALS)；内核不识别该标志
     // （EINVAL）时退化为普通 memfd，仅失去防 truncate 硬化
-    int fd = static_cast<int>(::syscall(
-        __NR_memfd_create, name,
-        static_cast<unsigned>(MFD_CLOEXEC | MFD_ALLOW_SEALING)));
+    int fd =
+        static_cast<int>(::syscall(__NR_memfd_create, name, static_cast<unsigned>(MFD_CLOEXEC | MFD_ALLOW_SEALING)));
     if (fd < 0 && errno == EINVAL)
-        fd = static_cast<int>(
-            ::syscall(__NR_memfd_create, name, static_cast<unsigned>(MFD_CLOEXEC)));
+        fd = static_cast<int>(::syscall(__NR_memfd_create, name, static_cast<unsigned>(MFD_CLOEXEC)));
     if (fd < 0)
     {
         if (sys_errno)
@@ -334,8 +326,7 @@ inline ErrorCode CreateMemfd(const char *name, std::size_t size,
  * @param sys_errno 可选：失败时的 errno
  */
 [[nodiscard]]
-inline ErrorCode SendFd(int socket, int fd, FdTag tag,
-                        int *sys_errno = nullptr) noexcept
+inline ErrorCode SendFd(int socket, int fd, FdTag tag, int* sys_errno = nullptr) noexcept
 {
     if (socket < 0 || fd < 0)
         return ErrorCode::kInvalidArgument;
@@ -360,7 +351,7 @@ inline ErrorCode SendFd(int socket, int fd, FdTag tag,
         {
             msg.msg_control    = ctrl.data();
             msg.msg_controllen = ctrl.size();
-            auto *cmsg         = CMSG_FIRSTHDR(&msg);
+            auto* cmsg         = CMSG_FIRSTHDR(&msg);
             cmsg->cmsg_level   = SOL_SOCKET;
             cmsg->cmsg_type    = SCM_RIGHTS;
             cmsg->cmsg_len     = CMSG_LEN(sizeof(int));
@@ -368,7 +359,8 @@ inline ErrorCode SendFd(int socket, int fd, FdTag tag,
         }
 
         ssize_t n;
-        do {
+        do
+        {
             n = ::sendmsg(socket, &msg, MSG_NOSIGNAL);
         } while (n < 0 && errno == EINTR);
 
@@ -396,8 +388,7 @@ inline ErrorCode SendFd(int socket, int fd, FdTag tag,
  * @param sys_errno 可选：失败时的 errno
  */
 [[nodiscard]]
-inline ErrorCode RecvFd(int socket, TaggedFd *out,
-                        int *sys_errno = nullptr) noexcept
+inline ErrorCode RecvFd(int socket, TaggedFd* out, int* sys_errno = nullptr) noexcept
 {
     if (socket < 0 || !out)
         return ErrorCode::kInvalidArgument;
@@ -426,7 +417,8 @@ inline ErrorCode RecvFd(int socket, TaggedFd *out,
         }
 
         ssize_t n;
-        do {
+        do
+        {
             n = ::recvmsg(socket, &msg, MSG_WAITALL);
         } while (n < 0 && errno == EINTR);
 
@@ -446,9 +438,8 @@ inline ErrorCode RecvFd(int socket, TaggedFd *out,
             if (msg.msg_flags & MSG_CTRUNC)
                 return ErrorCode::kProtocol;
 
-            auto *cmsg = CMSG_FIRSTHDR(&msg);
-            if (!cmsg || cmsg->cmsg_level != SOL_SOCKET ||
-                cmsg->cmsg_type != SCM_RIGHTS)
+            auto* cmsg = CMSG_FIRSTHDR(&msg);
+            if (!cmsg || cmsg->cmsg_level != SOL_SOCKET || cmsg->cmsg_type != SCM_RIGHTS)
                 return ErrorCode::kProtocol;
             if (cmsg->cmsg_len < CMSG_LEN(sizeof(int)))
                 return ErrorCode::kProtocol;
@@ -457,13 +448,11 @@ inline ErrorCode RecvFd(int socket, TaggedFd *out,
             // 属协议违规：关闭全部并报错
             if (cmsg->cmsg_len > CMSG_LEN(sizeof(int)))
             {
-                int nfds = static_cast<int>(
-                    (cmsg->cmsg_len - CMSG_LEN(0)) / sizeof(int));
+                int nfds = static_cast<int>((cmsg->cmsg_len - CMSG_LEN(0)) / sizeof(int));
                 for (int i = 0; i < nfds; ++i)
                 {
                     int extra = -1;
-                    std::memcpy(&extra, CMSG_DATA(cmsg) + i * sizeof(int),
-                                sizeof(int));
+                    std::memcpy(&extra, CMSG_DATA(cmsg) + i * sizeof(int), sizeof(int));
                     if (extra >= 0)
                         ::close(extra);
                 }
@@ -492,8 +481,7 @@ inline ErrorCode RecvFd(int socket, TaggedFd *out,
  * @param sys_errno 可选：失败时的 errno
  */
 [[nodiscard]]
-inline ErrorCode RecvFdExpect(int socket, FdTag expected, UniqueFd *out,
-                              int *sys_errno = nullptr) noexcept
+inline ErrorCode RecvFdExpect(int socket, FdTag expected, UniqueFd* out, int* sys_errno = nullptr) noexcept
 {
     if (!out)
         return ErrorCode::kInvalidArgument;
@@ -515,7 +503,7 @@ inline ErrorCode RecvFdExpect(int socket, FdTag expected, UniqueFd *out,
  * @param sys_errno 可选：失败时的 errno
  */
 [[nodiscard]]
-inline ErrorCode CreateEventfd(UniqueFd *out, int *sys_errno = nullptr) noexcept
+inline ErrorCode CreateEventfd(UniqueFd* out, int* sys_errno = nullptr) noexcept
 {
     if (!out)
         return ErrorCode::kInvalidArgument;
@@ -550,8 +538,7 @@ inline std::string_view UriToPath(std::string_view uri) noexcept
  * @brief 路径写入栈上的 NUL 结尾缓冲区
  * @return false 表示路径过长或为空
  */
-inline bool CopyUnixPath(std::string_view path, char *buf,
-                         std::size_t buf_size) noexcept
+inline bool CopyUnixPath(std::string_view path, char* buf, std::size_t buf_size) noexcept
 {
     if (path.empty() || path.size() >= buf_size)
         return false;
@@ -568,9 +555,8 @@ inline bool CopyUnixPath(std::string_view path, char *buf,
  * @param sys_errno  可选：失败时的 errno
  */
 [[nodiscard]]
-inline ErrorCode ListenUnixSocket(std::string_view path, UniqueFd *out,
-                                  int backlog = 16,
-                                  int *sys_errno = nullptr) noexcept
+inline ErrorCode ListenUnixSocket(std::string_view path, UniqueFd* out, int backlog = 16,
+                                  int* sys_errno = nullptr) noexcept
 {
     if (!out)
         return ErrorCode::kInvalidArgument;
@@ -597,7 +583,7 @@ inline ErrorCode ListenUnixSocket(std::string_view path, UniqueFd *out,
     addr.sun_family = AF_UNIX;
     std::memcpy(addr.sun_path, cpath, std::strlen(cpath));
 
-    if (::bind(sfd.Get(), reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) < 0)
+    if (::bind(sfd.Get(), reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0)
     {
         if (sys_errno)
             *sys_errno = errno;
@@ -621,8 +607,7 @@ inline ErrorCode ListenUnixSocket(std::string_view path, UniqueFd *out,
  * @param sys_errno  可选：失败时的 errno
  */
 [[nodiscard]]
-inline ErrorCode ConnectUnixSocket(std::string_view path, UniqueFd *out,
-                                   int *sys_errno = nullptr) noexcept
+inline ErrorCode ConnectUnixSocket(std::string_view path, UniqueFd* out, int* sys_errno = nullptr) noexcept
 {
     if (!out)
         return ErrorCode::kInvalidArgument;
@@ -647,7 +632,7 @@ inline ErrorCode ConnectUnixSocket(std::string_view path, UniqueFd *out,
     addr.sun_family = AF_UNIX;
     std::memcpy(addr.sun_path, cpath, std::strlen(cpath));
 
-    if (::connect(sfd.Get(), reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) < 0)
+    if (::connect(sfd.Get(), reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0)
     {
         if (sys_errno)
             *sys_errno = errno;

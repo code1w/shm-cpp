@@ -37,8 +37,7 @@ class ICodec
      * @param seq       消息序列号
      * @return 写入的总字节数，空间不足返回 0
      */
-    virtual uint32_t Encode(const void *msg, void *buf,
-                            uint32_t buf_size, uint32_t seq) = 0;
+    virtual uint32_t Encode(const void* msg, void* buf, uint32_t buf_size, uint32_t seq) = 0;
 
     /**
      * @brief 从字节帧中解码，提取 payload 指针（零拷贝）
@@ -52,9 +51,8 @@ class ICodec
      * @param[out] seq         序列号（可为 nullptr）
      * @return true 解码成功，false 帧不完整或格式错误
      */
-    virtual bool Decode(const void *buf, uint32_t buf_len,
-                        const void **payload, uint32_t *payload_len,
-                        uint32_t *seq) = 0;
+    virtual bool Decode(const void* buf, uint32_t buf_len, const void** payload, uint32_t* payload_len,
+                        uint32_t* seq) = 0;
 
     /**
      * @brief 消息类型标识字符串
@@ -75,8 +73,7 @@ class ICodec
      * @param[out] data_len 数据部分字节数
      * @return true 解码成功，false payload 格式错误
      */
-    virtual bool DecodePayload(const void *payload, uint32_t payload_len,
-                               const void **data, uint32_t *data_len) = 0;
+    virtual bool DecodePayload(const void* payload, uint32_t payload_len, const void** data, uint32_t* data_len) = 0;
 
     /**
      * @brief 从 RingChannel 中读取一帧并反序列化到 out
@@ -85,7 +82,7 @@ class ICodec
      * @param out  输出对象指针（由实现类解释具体类型）
      * @return 0 成功，非 0 无数据或错误
      */
-    virtual int Recv(DefaultRingChannel &ch, void *out) = 0;
+    virtual int Recv(DefaultRingChannel& ch, void* out) = 0;
 
     /**
      * @brief 编码消息并写入 RingChannel，成功后通知对端
@@ -95,12 +92,12 @@ class ICodec
      * @param seq  消息序列号
      * @return 0 成功，-1 空间不足
      */
-    virtual int Send(DefaultRingChannel &ch, const void *msg, uint32_t seq) = 0;
+    virtual int Send(DefaultRingChannel& ch, const void* msg, uint32_t seq) = 0;
 
     /**
      * @brief 提交上一帧的读取，推进 read_pos
      */
-    virtual void Commit(DefaultRingChannel &ch) = 0;
+    virtual void Commit(DefaultRingChannel& ch) = 0;
 };
 
 }  // namespace shm

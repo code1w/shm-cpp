@@ -46,15 +46,15 @@ using ClientState = shm::ClientState;
 using Clients     = std::unordered_map<int, std::unique_ptr<ClientState>>;
 
 /// 全局 PodCodec 实例（写方向）
-shm::PodCodec<Heartbeat>  gHeartbeatCodec;
+shm::PodCodec<Heartbeat> gHeartbeatCodec;
 
 #ifdef SHM_IPC_HAS_PROTOBUF
 /// 全局 ProtoCodec 实例（写方向）
-shm::ProtoCodec<shm_ipc::HeartbeatProto>  gProtoHeartbeatCodec;
+shm::ProtoCodec<shm_ipc::HeartbeatProto> gProtoHeartbeatCodec;
 #endif
 
 /// 全局事件循环指针，供信号处理器使用
-shm::EventLoop *gLoop = nullptr;
+shm::EventLoop* gLoop = nullptr;
 
 /// 是否使用 protobuf 编解码
 bool gUseProto = false;
@@ -69,17 +69,15 @@ void SignalHandler(int /*signo*/)
 // 打印重载
 // ---------------------------------------------------------------------------
 
-void PrintMsg(int client_id, const ClientMsg &m)
+void PrintMsg(int client_id, const ClientMsg& m)
 {
-    std::printf("server: client #%d [tick=%d payload_len=%u]\n",
-                client_id, m.tick, m.payload_len);
+    std::printf("server: client #%d [tick=%d payload_len=%u]\n", client_id, m.tick, m.payload_len);
 }
 
 #ifdef SHM_IPC_HAS_PROTOBUF
-void PrintMsg(int client_id, const shm_ipc::ClientMsgProto &m)
+void PrintMsg(int client_id, const shm_ipc::ClientMsgProto& m)
 {
-    std::printf("server: client #%d [tick=%d payload_len=%zu] (proto)\n",
-                client_id, m.tick(), m.payload().size());
+    std::printf("server: client #%d [tick=%d payload_len=%zu] (proto)\n", client_id, m.tick(), m.payload().size());
 }
 #endif
 
@@ -90,8 +88,7 @@ void PrintMsg(int client_id, const shm_ipc::ClientMsgProto &m)
 /**
  * @brief 从事件循环中移除客户端的所有关联 fd 并销毁状态
  */
-void RemoveClient(shm::EventLoop &loop, Clients &clients,
-                  int client_fd, ClientState *csp)
+void RemoveClient(shm::EventLoop& loop, Clients& clients, int client_fd, ClientState* csp)
 {
     loop.RemoveTimer(csp->timer_fd);
     loop.RemoveFd(csp->notify_efd);
@@ -103,7 +100,7 @@ void RemoveClient(shm::EventLoop &loop, Clients &clients,
  * @brief 从客户端环形缓冲区中读取并反序列化所有待处理消息
  * @return 读取到的消息数；-1 表示协议错误（帧头非法），连接应断开
  */
-int DrainClientRing(ClientState *csp)
+int DrainClientRing(ClientState* csp)
 {
     int count = 0;
 #ifdef SHM_IPC_HAS_PROTOBUF
@@ -148,20 +145,18 @@ int DrainClientRing(ClientState *csp)
 /**
  * @brief 心跳定时器回调：向客户端发送 Heartbeat POD
  */
-void OnHeartbeatTimer(int timer_fd, shm::EventLoop &loop,
-                      Clients &clients, int client_fd)
+void OnHeartbeatTimer(int timer_fd, shm::EventLoop& loop, Clients& clients, int client_fd)
 {
     shm::EventLoop::DrainTimerfd(timer_fd);
 
     auto it = clients.find(client_fd);
     if (it == clients.end())
         return;
-    ClientState *csp = it->second.get();
+    ClientState* csp = it->second.get();
 
     if (++csp->tick > kMaxTicks)
     {
-        std::printf("server: client #%d max ticks reached, disconnecting\n",
-                    csp->id);
+        std::printf("server: client #%d max ticks reached, disconnecting\n", csp->id);
         RemoveClient(loop, clients, client_fd, csp);
         return;
     }
@@ -178,61 +173,52 @@ void OnHeartbeatTimer(int timer_fd, shm::EventLoop &loop,
         pb_hb.set_client_id(csp->id);
         pb_hb.set_seq(csp->tick);
         pb_hb.set_timestamp(std::time(nullptr));
-        if (gProtoHeartbeatCodec.Send(csp->channel, pb_hb,
-                                      static_cast<uint32_t>(csp->tick)) != 0)
+        if (gProtoHeartbeatCodec.Send(csp->channel, pb_hb, static_cast<uint32_t>(csp->tick)) != 0)
         {
-            std::fprintf(stderr, "server: client #%d heartbeat write full (proto)\n",
-                         csp->id);
+            std::fprintf(stderr, "server: client #%d heartbeat write full (proto)\n", csp->id);
         }
         return;
     }
 #endif
 
-    if (gHeartbeatCodec.Send(csp->channel, hb,
-                             static_cast<uint32_t>(csp->tick)) != 0)
+    if (gHeartbeatCodec.Send(csp->channel, hb, static_cast<uint32_t>(csp->tick)) != 0)
     {
-        std::fprintf(stderr, "server: client #%d heartbeat write full\n",
-                     csp->id);
+        std::fprintf(stderr, "server: client #%d heartbeat write full\n", csp->id);
     }
 }
 
 /**
  * @brief Eventfd 回调：客户端写入新数据，立即实时读取
  */
-void OnClientNotify(int efd, shm::EventLoop &loop, Clients &clients,
-                    int client_fd)
+void OnClientNotify(int efd, shm::EventLoop& loop, Clients& clients, int client_fd)
 {
     Channel::DrainNotify(efd);
     auto it = clients.find(client_fd);
     if (it == clients.end())
         return;
-    ClientState *csp = it->second.get();
-    int count = DrainClientRing(csp);
+    ClientState* csp = it->second.get();
+    int count        = DrainClientRing(csp);
     if (count < 0)
     {
-        std::fprintf(stderr,
-                     "server: client #%d protocol error, disconnecting\n",
-                     csp->id);
+        std::fprintf(stderr, "server: client #%d protocol error, disconnecting\n", csp->id);
         RemoveClient(loop, clients, client_fd, csp);
         return;
     }
     if (count > 0)
     {
-        std::printf("server: client #%d realtime read count=%d total=%d\n",
-                    csp->id, count, csp->total_read);
+        std::printf("server: client #%d realtime read count=%d total=%d\n", csp->id, count, csp->total_read);
     }
 }
 
 /**
  * @brief Socket 回调：仅用于断连检测
  */
-void OnClientSocket(int fd, short revents, shm::EventLoop &loop,
-                    Clients &clients, int client_fd)
+void OnClientSocket(int fd, short revents, shm::EventLoop& loop, Clients& clients, int client_fd)
 {
     auto it = clients.find(client_fd);
     if (it == clients.end())
         return;
-    ClientState *csp = it->second.get();
+    ClientState* csp = it->second.get();
 
     if (revents & (POLLHUP | POLLERR))
     {
@@ -248,8 +234,10 @@ void OnClientSocket(int fd, short revents, shm::EventLoop &loop,
         {
             int remaining = DrainClientRing(csp);
             if (remaining < 0)
-                std::fprintf(stderr, "server: client #%d protocol error, "
-                                     "total read=%d\n", csp->id, csp->total_read);
+                std::fprintf(stderr,
+                             "server: client #%d protocol error, "
+                             "total read=%d\n",
+                             csp->id, csp->total_read);
             else
                 std::printf("server: client #%d disconnected, "
                             "drained %d remaining, total read=%d\n",
@@ -263,8 +251,7 @@ void OnClientSocket(int fd, short revents, shm::EventLoop &loop,
 /**
  * @brief Accept 回调：接受新客户端连接并注册所有回调
  */
-void OnAccept(int lfd, shm::EventLoop &loop,
-              Clients &clients, int &next_client_id)
+void OnAccept(int lfd, shm::EventLoop& loop, Clients& clients, int& next_client_id)
 {
     if (static_cast<int>(clients.size()) >= kMaxClients)
     {
@@ -280,18 +267,17 @@ void OnAccept(int lfd, shm::EventLoop &loop,
     int cid = next_client_id++;
     std::printf("server: client #%d connected (fd=%d)\n", cid, cfd.Get());
 
-    auto cs      = std::make_unique<ClientState>();
-    cs->id       = cid;
+    auto cs = std::make_unique<ClientState>();
+    cs->id  = cid;
 
     // 握手失败（对端超时、乱发数据、尺寸不符等）只关闭该连接，
     // 不能让错误影响整个 server 进程
-    int sys_errno = 0;
-    shm::ErrorCode ec = Channel::CreateRingChannel(
-        cfd.Get(), shm::ChannelRole::kServer, &cs->channel, &sys_errno);
+    int sys_errno     = 0;
+    shm::ErrorCode ec = Channel::CreateRingChannel(cfd.Get(), shm::ChannelRole::kServer, &cs->channel, &sys_errno);
     if (ec != shm::ErrorCode::kOk)
     {
-        std::fprintf(stderr, "server: client #%d handshake failed: %s\n",
-                     cid, shm::ErrorCodeMessage(ec, sys_errno).c_str());
+        std::fprintf(stderr, "server: client #%d handshake failed: %s\n", cid,
+                     shm::ErrorCodeMessage(ec, sys_errno).c_str());
         return;  // cfd 由 RAII 自动关闭
     }
     std::printf("server: client #%d ring channel established\n", cid);
@@ -310,14 +296,13 @@ void OnAccept(int lfd, shm::EventLoop &loop,
     // 注册失败（如 fd 耗尽导致 timerfd_create 失败）只关闭该连接，
     // 不能让错误影响整个 server 进程
     int tfd = 0;
-    ec = loop.AddTimer(kHeartbeatMs,
-        std::bind(OnHeartbeatTimer, std::placeholders::_1,
-                  std::ref(loop), std::ref(clients), client_fd),
-        &tfd, &sys_errno);
+    ec      = loop.AddTimer(kHeartbeatMs,
+                            std::bind(OnHeartbeatTimer, std::placeholders::_1, std::ref(loop), std::ref(clients), client_fd),
+                            &tfd, &sys_errno);
     if (ec != shm::ErrorCode::kOk)
     {
-        std::fprintf(stderr, "server: client #%d AddTimer failed: %s\n",
-                     cid, shm::ErrorCodeMessage(ec, sys_errno).c_str());
+        std::fprintf(stderr, "server: client #%d AddTimer failed: %s\n", cid,
+                     shm::ErrorCodeMessage(ec, sys_errno).c_str());
         return;  // cs 析构自动关闭 socket 与通道
     }
     cs->timer_fd = tfd;
@@ -326,15 +311,13 @@ void OnAccept(int lfd, shm::EventLoop &loop,
     {
         // 注册 eventfd 实时读
         loop.AddFd(cs->notify_efd,
-            std::bind(OnClientNotify, std::placeholders::_1,
-                      std::ref(loop), std::ref(clients), client_fd));
+                   std::bind(OnClientNotify, std::placeholders::_1, std::ref(loop), std::ref(clients), client_fd));
 
         // 注册 socket 断连检测
-        loop.AddFd(client_fd,
-            std::bind(OnClientSocket, std::placeholders::_1, std::placeholders::_2,
-                      std::ref(loop), std::ref(clients), client_fd));
+        loop.AddFd(client_fd, std::bind(OnClientSocket, std::placeholders::_1, std::placeholders::_2, std::ref(loop),
+                                        std::ref(clients), client_fd));
     }
-    catch (const std::bad_alloc &)
+    catch (const std::bad_alloc&)
     {
         std::fprintf(stderr, "server: client #%d setup out of memory\n", cid);
         loop.RemoveTimer(cs->timer_fd);
@@ -353,17 +336,14 @@ void OnAccept(int lfd, shm::EventLoop &loop,
 void RunBench()
 {
     shm::UniqueFd listen_fd;
-    int sys_errno = 0;
-    shm::ErrorCode ec = shm::ListenUnixSocket(shm::kDefaultSocketPath, &listen_fd,
-                                              16, &sys_errno);
+    int sys_errno     = 0;
+    shm::ErrorCode ec = shm::ListenUnixSocket(shm::kDefaultSocketPath, &listen_fd, 16, &sys_errno);
     if (ec != shm::ErrorCode::kOk)
     {
-        std::fprintf(stderr, "server(bench): listen failed: %s\n",
-                     shm::ErrorCodeMessage(ec, sys_errno).c_str());
+        std::fprintf(stderr, "server(bench): listen failed: %s\n", shm::ErrorCodeMessage(ec, sys_errno).c_str());
         return;
     }
-    std::printf("server(bench): waiting for client on %s ...\n",
-                shm::kDefaultSocketPath);
+    std::printf("server(bench): waiting for client on %s ...\n", shm::kDefaultSocketPath);
 
     shm::UniqueFd cfd{::accept(listen_fd.Get(), nullptr, nullptr)};
     if (!cfd)
@@ -373,12 +353,10 @@ void RunBench()
     }
 
     Channel ch;
-    ec = Channel::CreateRingChannel(cfd.Get(), shm::ChannelRole::kServer, &ch,
-                                    &sys_errno);
+    ec = Channel::CreateRingChannel(cfd.Get(), shm::ChannelRole::kServer, &ch, &sys_errno);
     if (ec != shm::ErrorCode::kOk)
     {
-        std::fprintf(stderr, "server(bench): handshake failed: %s\n",
-                     shm::ErrorCodeMessage(ec, sys_errno).c_str());
+        std::fprintf(stderr, "server(bench): handshake failed: %s\n", shm::ErrorCodeMessage(ec, sys_errno).c_str());
         return;
     }
     std::printf("server(bench): client connected, ring established\n\n");
@@ -393,11 +371,11 @@ void RunBench()
         if (!shm::ReadFull(cfd.Get(), &cmd, sizeof(cmd)) || cmd.rounds == 0)
             break;
 
-        int32_t received = 0;
-        const void *payload = nullptr;
+        int32_t received     = 0;
+        const void* payload  = nullptr;
         uint32_t payload_len = 0;
 
-        uint64_t t0 = shm::NowNs();
+        uint64_t t0  = shm::NowNs();
         bool got_end = false;
         while (!got_end)
         {
@@ -408,9 +386,7 @@ void RunBench()
                 if (payload_len >= shm::kTagSize + sizeof(shm::BenchPayloadHeader))
                 {
                     shm::BenchPayloadHeader ph{};
-                    std::memcpy(&ph,
-                                static_cast<const char *>(payload) + shm::kTagSize,
-                                sizeof(ph));
+                    std::memcpy(&ph, static_cast<const char*>(payload) + shm::kTagSize, sizeof(ph));
                     if (ph.seq == -1)
                     {
                         got_end = true;
@@ -437,7 +413,7 @@ void RunBench()
 
 }  // anonymous namespace
 
-int main(int argc, char *argv[])
+int main(int argc, char* argv[])
 {
     // 向已断开的 socket 写入（对端先退出）会触发 SIGPIPE 杀死进程，
     // 忽略之，让 write 返回 EPIPE 由调用方处理
@@ -473,28 +449,24 @@ int main(int argc, char *argv[])
         int next_client_id = 1;
 
         shm::UniqueFd listen_fd;
-        int sys_errno = 0;
-        shm::ErrorCode ec = shm::ListenUnixSocket(shm::kDefaultSocketPath,
-                                                  &listen_fd, 16, &sys_errno);
+        int sys_errno     = 0;
+        shm::ErrorCode ec = shm::ListenUnixSocket(shm::kDefaultSocketPath, &listen_fd, 16, &sys_errno);
         if (ec != shm::ErrorCode::kOk)
         {
-            std::fprintf(stderr, "server: listen failed: %s\n",
-                         shm::ErrorCodeMessage(ec, sys_errno).c_str());
+            std::fprintf(stderr, "server: listen failed: %s\n", shm::ErrorCodeMessage(ec, sys_errno).c_str());
             return EXIT_FAILURE;
         }
         std::printf("server: listening on %s (max %d clients, ring=%zuMB, realtime "
                     "eventfd read, codec=%s)\n",
-                    shm::kDefaultSocketPath, kMaxClients,
-                    Channel::Ring::capacity / (1024 * 1024),
+                    shm::kDefaultSocketPath, kMaxClients, Channel::Ring::capacity / (1024 * 1024),
                     gUseProto ? "proto" : "pod");
 
         try
         {
-            loop.AddFd(listen_fd.Get(),
-                std::bind(OnAccept, std::placeholders::_1,
-                          std::ref(loop), std::ref(clients), std::ref(next_client_id)));
+            loop.AddFd(listen_fd.Get(), std::bind(OnAccept, std::placeholders::_1, std::ref(loop), std::ref(clients),
+                                                  std::ref(next_client_id)));
         }
-        catch (const std::bad_alloc &)
+        catch (const std::bad_alloc&)
         {
             std::fprintf(stderr, "server: out of memory registering listen fd\n");
             return EXIT_FAILURE;
@@ -503,13 +475,11 @@ int main(int argc, char *argv[])
         ec = loop.Run();
         if (ec != shm::ErrorCode::kOk)
         {
-            std::fprintf(stderr, "server: event loop failed: %s\n",
-                         shm::ErrorCodeName(ec));
+            std::fprintf(stderr, "server: event loop failed: %s\n", shm::ErrorCodeName(ec));
             return EXIT_FAILURE;
         }
 
-        std::printf("\nserver: shutting down (%zu clients remaining)\n",
-                    clients.size());
+        std::printf("\nserver: shutting down (%zu clients remaining)\n", clients.size());
         clients.clear();
         (void)::unlink(shm::kDefaultSocketPath);
     }

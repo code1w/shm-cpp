@@ -31,14 +31,14 @@ struct BenchPayloadHeader
 struct BenchCmd
 {
     uint32_t payload_size;
-    int32_t  rounds;  ///< 0 = 全部测试结束
+    int32_t rounds;  ///< 0 = 全部测试结束
 };
 
 /// 单组测试参数
 struct BenchCase
 {
     uint32_t payload_size;
-    int32_t  rounds;
+    int32_t rounds;
 };
 
 /// 默认测试用例
@@ -47,39 +47,23 @@ struct BenchCase
 /// 256KB 以上的 2x 间隔处补入 1.5x 点（384KB/768KB/1.5MB），
 /// 便于观察吞吐随 payload 变化的拐点。
 inline constexpr BenchCase kBenchCases[] = {
-    {       64, 500000},
-    {      128, 500000},
-    {      256, 500000},
-    {      512, 300000},
-    {     1024, 200000},
-    {     2048, 200000},
-    {     4096, 200000},
-    {     8192, 150000},
-    {    16384, 100000},
-    {    32768,  75000},
-    {    65536,  50000},
-    {   131072,  30000},
-    {   262144,  20000},
-    {   393216,  14000},
-    {   524288,  10000},
-    {   786432,   7000},
-    {  1048576,   5000},
-    {  1572864,   3000},
-    {  2097152,   2000},
+    {64, 500000},   {128, 500000},   {256, 500000},   {512, 300000},   {1024, 200000},
+    {2048, 200000}, {4096, 200000},  {8192, 150000},  {16384, 100000}, {32768, 75000},
+    {65536, 50000}, {131072, 30000}, {262144, 20000}, {393216, 14000}, {524288, 10000},
+    {786432, 7000}, {1048576, 5000}, {1572864, 3000}, {2097152, 2000},
 };
 
 /// 计算单帧总字节数 = MsgHeader + tag + BenchPayloadHeader + payload_size
 inline uint32_t BenchFrameSize(uint32_t payload_size)
 {
-    return kMsgHeaderSize + kTagSize
-         + static_cast<uint32_t>(sizeof(BenchPayloadHeader)) + payload_size;
+    return kMsgHeaderSize + kTagSize + static_cast<uint32_t>(sizeof(BenchPayloadHeader)) + payload_size;
 }
 
 /// @brief 循环读满 len 字节（处理 stream socket 短读与 EINTR）
 /// @return true 读满，false 对端关闭或读出错
-inline bool ReadFull(int fd, void *buf, std::size_t len)
+inline bool ReadFull(int fd, void* buf, std::size_t len)
 {
-    auto *p = static_cast<char *>(buf);
+    auto* p         = static_cast<char*>(buf);
     std::size_t got = 0;
     while (got < len)
     {
@@ -99,9 +83,9 @@ inline bool ReadFull(int fd, void *buf, std::size_t len)
 
 /// @brief 循环写满 len 字节（处理 stream socket 短写与 EINTR）
 /// @return true 写满，false 写出错（含对端关闭导致的 EPIPE）
-inline bool WriteFull(int fd, const void *buf, std::size_t len)
+inline bool WriteFull(int fd, const void* buf, std::size_t len)
 {
-    auto *p = static_cast<const char *>(buf);
+    auto* p          = static_cast<const char*>(buf);
     std::size_t sent = 0;
     while (sent < len)
     {
@@ -122,29 +106,25 @@ inline uint64_t NowNs()
 {
     timespec ts{};
     ::clock_gettime(CLOCK_MONOTONIC, &ts);
-    return static_cast<uint64_t>(ts.tv_sec) * 1000000000ULL
-         + static_cast<uint64_t>(ts.tv_nsec);
+    return static_cast<uint64_t>(ts.tv_sec) * 1000000000ULL + static_cast<uint64_t>(ts.tv_nsec);
 }
 
 /// 打印 bench 表头
 inline void PrintBenchHeader()
 {
     std::printf("=== End-to-end throughput (client -> server) ===\n\n");
-    std::printf("%12s %10s %10s %12s %12s %10s\n",
-                "payload", "rounds", "time(ms)", "msg/s", "MB/s", "lat(ns)");
+    std::printf("%12s %10s %10s %12s %12s %10s\n", "payload", "rounds", "time(ms)", "msg/s", "MB/s", "lat(ns)");
 }
 
 /// 计算并打印单行 bench 结果
-inline void PrintBenchRow(uint32_t payload_size, int32_t received,
-                          uint64_t elapsed_ns)
+inline void PrintBenchRow(uint32_t payload_size, int32_t received, uint64_t elapsed_ns)
 {
     double ms    = static_cast<double>(elapsed_ns) / 1e6;
     double msg_s = static_cast<double>(received) / (static_cast<double>(elapsed_ns) / 1e9);
     double mb_s  = msg_s * payload_size / (1024.0 * 1024.0);
     double lat   = static_cast<double>(elapsed_ns) / received;
 
-    std::printf("%12u %10d %10.1f %12.0f %12.1f %10.0f\n",
-                payload_size, received, ms, msg_s, mb_s, lat);
+    std::printf("%12u %10d %10.1f %12.0f %12.1f %10.0f\n", payload_size, received, ms, msg_s, mb_s, lat);
 }
 
 }  // namespace shm
