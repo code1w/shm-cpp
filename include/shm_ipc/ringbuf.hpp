@@ -445,7 +445,7 @@ class RingBuf
      *       SCM_RIGHTS（sendmsg/recvmsg）传递时内核提供的 happens-before：
      *       fd 传递是一次同步点，发送端在 sendmsg 前对该 mmap 区域的所有写入，
      *       在接收端 recvmsg 后必然可见。因此调用方必须保证 Init 在 fd 发送
-     *       之前完成（见 RingChannel::Connect/Accept 的调用顺序）。
+     *       之前完成（见 RingChannel::CreateRingChannel 的调用顺序）。
      *       对端后续读到的 write_pos=0 即"环为空"，是安全的初态。
      */
     static void Init(void *shm)

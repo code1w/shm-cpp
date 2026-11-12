@@ -137,7 +137,7 @@ void TestSendRecvViaRing()
 
     // 在子线程/fork 中不好用 socketpair+Accept/Connect，
     // 这里用更底层的方式：直接创建 memfd + ring
-    // 但 RingChannel::Accept/Connect 需要 fd 交换，所以用 fork
+    // 但 RingChannel::CreateRingChannel 需要 fd 交换，所以用 fork
 
     pid_t pid = ::fork();
     assert(pid >= 0);
