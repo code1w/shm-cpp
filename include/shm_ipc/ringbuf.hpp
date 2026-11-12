@@ -158,6 +158,7 @@ class BatchWriter
         : hdr_(RingHdr(shm)),
           base_(RingData(shm)),
           mirrored_(mirrored),
+          // relaxed：write_pos 仅本端（单生产者）修改，读自己的值无需同步
           w_(hdr_->write_pos.load(std::memory_order_relaxed)),
           r_(hdr_->read_pos.load(std::memory_order_acquire)),
           w_start_(w_)
@@ -481,6 +482,7 @@ class RingBuf
         // 的值初始化会把控制区清零，数据区单独清零。
         assert(reinterpret_cast<uintptr_t>(shm) % alignof(RingHeader) == 0);
         auto* hdr = new (shm) RingHeader{};
+        // relaxed：Init 在对象对外发布（fd 交换）之前执行，无并发访问
         hdr->write_pos.store(0, std::memory_order_relaxed);
         hdr->read_pos.store(0, std::memory_order_relaxed);
         // 读方尚未声明支持按需通知前，写方保持"每次都通知"，兼容不调用
@@ -516,6 +518,7 @@ class RingBuf
         auto* hdr  = detail::RingHdr(shm);
         char* base = detail::RingData(shm);
 
+        // relaxed：write_pos 仅本端（单生产者）修改，读自己的值无需同步
         const uint64_t w = hdr->write_pos.load(std::memory_order_relaxed);
         const uint64_t r = hdr->read_pos.load(std::memory_order_acquire);
 
@@ -565,6 +568,7 @@ class RingBuf
         auto* hdr        = detail::RingHdr(shm);
         const char* base = detail::RingData(shm);
 
+        // relaxed：read_pos 仅本端（单消费者）修改，读自己的值无需同步
         const uint64_t r     = hdr->read_pos.load(std::memory_order_relaxed);
         const uint64_t w     = hdr->write_pos.load(std::memory_order_acquire);
         const uint64_t avail = w - r;
@@ -608,6 +612,7 @@ class RingBuf
         auto* hdr        = detail::RingHdr(shm);
         const char* base = detail::RingData(shm);
 
+        // relaxed：read_pos 仅本端（单消费者）修改，读自己的值无需同步
         const uint64_t r     = hdr->read_pos.load(std::memory_order_relaxed);
         const uint64_t w     = hdr->write_pos.load(std::memory_order_acquire);
         const uint64_t avail = w - r;
@@ -635,8 +640,9 @@ class RingBuf
             return -1;
         }
 
-        auto* hdr        = detail::RingHdr(shm);
-        char* base       = detail::RingData(shm);
+        auto* hdr  = detail::RingHdr(shm);
+        char* base = detail::RingData(shm);
+        // relaxed：write_pos 仅本端（单生产者）修改，读自己的值无需同步
         const uint64_t w = hdr->write_pos.load(std::memory_order_relaxed);
         const uint64_t r = hdr->read_pos.load(std::memory_order_acquire);
         if ((w + len) - r > Capacity)
@@ -657,8 +663,9 @@ class RingBuf
             return 0;
         }
 
-        auto* hdr            = detail::RingHdr(shm);
-        const char* base     = detail::RingData(shm);
+        auto* hdr        = detail::RingHdr(shm);
+        const char* base = detail::RingData(shm);
+        // relaxed：read_pos 仅本端（单消费者）修改，读自己的值无需同步
         const uint64_t r     = hdr->read_pos.load(std::memory_order_relaxed);
         const uint64_t w     = hdr->write_pos.load(std::memory_order_acquire);
         const uint64_t avail = w - r;
@@ -692,6 +699,7 @@ class RingBuf
 
         auto* hdr        = detail::RingHdr(shm);
         const char* base = detail::RingData(shm);
+        // relaxed：read_pos 仅本端（单消费者）修改，读自己的值无需同步
         const uint64_t r = hdr->read_pos.load(std::memory_order_relaxed);
         const uint64_t w = hdr->write_pos.load(std::memory_order_acquire);
         if (w - r < len)
@@ -712,8 +720,9 @@ class RingBuf
             return -1;
         }
 
-        auto* hdr            = detail::RingHdr(shm);
-        const char* base     = detail::RingData(shm);
+        auto* hdr        = detail::RingHdr(shm);
+        const char* base = detail::RingData(shm);
+        // relaxed：read_pos 仅本端（单消费者）修改，读自己的值无需同步
         const uint64_t r     = hdr->read_pos.load(std::memory_order_relaxed);
         const uint64_t w     = hdr->write_pos.load(std::memory_order_acquire);
         const uint64_t avail = w - r;
@@ -751,6 +760,7 @@ class RingBuf
         auto* hdr        = detail::RingHdr(shm);
         const char* base = detail::RingData(shm);
 
+        // relaxed：read_pos 仅本端（单消费者）修改，读自己的值无需同步
         const uint64_t r     = hdr->read_pos.load(std::memory_order_relaxed);
         const uint64_t w     = hdr->write_pos.load(std::memory_order_acquire);
         const uint64_t avail = w - r;
@@ -790,7 +800,8 @@ class RingBuf
      */
     static void CommitRead(void* shm, uint32_t len)
     {
-        auto* hdr            = detail::RingHdr(shm);
+        auto* hdr = detail::RingHdr(shm);
+        // relaxed：read_pos 仅本端（单消费者）修改，读自己的值无需同步
         const uint64_t r     = hdr->read_pos.load(std::memory_order_relaxed);
         const uint64_t avail = hdr->write_pos.load(std::memory_order_acquire) - r;
         assert(static_cast<uint64_t>(len) <= avail);
@@ -842,6 +853,7 @@ class RingBuf
     static bool ArmReaderWait(void* shm, uint64_t seen_write)
     {
         auto* hdr = detail::RingHdr(shm);
+        // relaxed：与对端的顺序由前后的 seq_cst 栅栏保证（Dekker 式），标志本身不发布数据
         hdr->reader_wait.store(kReaderWaiting, std::memory_order_relaxed);
         std::atomic_thread_fence(std::memory_order_seq_cst);
         if (hdr->write_pos.load(std::memory_order_acquire) != seen_write)
@@ -866,6 +878,7 @@ class RingBuf
     {
         auto* hdr = detail::RingHdr(shm);
         std::atomic_thread_fence(std::memory_order_seq_cst);
+        // relaxed：与对端的顺序由前后的 seq_cst 栅栏保证（Dekker 式），标志本身不发布数据
         const uint32_t v = hdr->reader_wait.load(std::memory_order_relaxed);
         if (v == kReaderAwake)
         {

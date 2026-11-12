@@ -467,7 +467,8 @@ class EventLoop
     std::vector<UniqueFd> owned_timerfds_;             ///< EventLoop 持有的 timerfd 列表
     std::vector<std::pair<HookId, Hook>> post_hooks_;  ///< 分发批次结束钩子
     HookId next_hook_id_ = 1;                          ///< 下一个钩子 ID
-    std::atomic<bool> running_{false};  ///< 事件循环运行标志（atomic 以支持信号处理器写入）
+    /// 事件循环运行标志（atomic 以支持信号处理器写入）；纯停止标志，不发布其他数据，故各处用 relaxed
+    std::atomic<bool> running_{false};
 };
 
 }  // namespace shm
