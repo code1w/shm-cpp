@@ -202,11 +202,7 @@ class MmapRegion
         void* base                = ::mmap(nullptr, reserve, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
         if (base == MAP_FAILED)
         {
-            if (sys_errno)
-            {
-                *sys_errno = errno;
-            }
-            return ErrnoToErrorCode(errno);
+            return ErrnoFailure(errno, sys_errno);
         }
 
         // 第一圈：完整文件（header + data）
@@ -214,11 +210,7 @@ class MmapRegion
         {
             const int err = errno;
             ::munmap(base, reserve);
-            if (sys_errno)
-            {
-                *sys_errno = err;
-            }
-            return ErrnoToErrorCode(err);
+            return ErrnoFailure(err, sys_errno);
         }
         // 第二圈：仅 data 区，紧接在第一圈 data 末尾
         void* second = static_cast<char*>(base) + file_size;
@@ -226,11 +218,7 @@ class MmapRegion
         {
             const int err = errno;
             ::munmap(base, reserve);
-            if (sys_errno)
-            {
-                *sys_errno = err;
-            }
-            return ErrnoToErrorCode(err);
+            return ErrnoFailure(err, sys_errno);
         }
 
         if (addr_ != MAP_FAILED)
@@ -415,6 +403,59 @@ inline ErrorCode SendFd(int socket, int fd, FdTag tag, int* sys_errno = nullptr)
     return ErrorCode::kOk;
 }
 
+namespace detail {
+
+/**
+ * @brief 从已收到的消息中解析唯一的 SCM_RIGHTS fd 并交给 UniqueFd 接管
+ *
+ * 控制消息被截断、缺失、过短返回 kProtocol；携带多个 fd 时关闭全部并返回 kMultipleFds
+ * （只取第一个会泄漏其余 fd，属协议违规）。
+ *
+ * @param msg   recvmsg 返回的消息头
+ * @param owned 成功时接管收到的 fd
+ */
+inline ErrorCode TakeRightsFd(const msghdr& msg, UniqueFd* owned) noexcept
+{
+    // 控制消息被截断（对端一次发送了多个 fd 或缓冲区不足）时
+    // 静默继续会导致 fd 泄漏或标签错位，必须显式报错
+    if (msg.msg_flags & MSG_CTRUNC)
+    {
+        return ErrorCode::kProtocol;
+    }
+
+    auto* cmsg = CMSG_FIRSTHDR(&msg);
+    if (!cmsg || cmsg->cmsg_level != SOL_SOCKET || cmsg->cmsg_type != SCM_RIGHTS)
+    {
+        return ErrorCode::kProtocol;
+    }
+    if (cmsg->cmsg_len < CMSG_LEN(sizeof(int)))
+    {
+        return ErrorCode::kProtocol;
+    }
+
+    if (cmsg->cmsg_len > CMSG_LEN(sizeof(int)))
+    {
+        const int nfds = static_cast<int>((cmsg->cmsg_len - CMSG_LEN(0)) / sizeof(int));
+        for (int i = 0; i < nfds; ++i)
+        {
+            int extra = -1;
+            std::memcpy(&extra, CMSG_DATA(cmsg) + i * sizeof(int), sizeof(int));
+            if (extra >= 0)
+            {
+                ::close(extra);
+            }
+        }
+        return ErrorCode::kMultipleFds;
+    }
+
+    int fd = -1;
+    std::memcpy(&fd, CMSG_DATA(cmsg), sizeof(int));
+    owned->Reset(fd);
+    return ErrorCode::kOk;
+}
+
+}  // namespace detail
+
 /**
  * @brief 通过 Unix socket 接收带类型标签的文件描述符（SCM_RIGHTS）
  *
@@ -464,11 +505,7 @@ inline ErrorCode RecvFd(int socket, TaggedFd* out, int* sys_errno = nullptr) noe
 
         if (n < 0)
         {
-            if (sys_errno)
-            {
-                *sys_errno = errno;
-            }
-            return ErrnoToErrorCode(errno);
+            return ErrnoFailure(errno, sys_errno);
         }
         if (n == 0)
         {
@@ -477,43 +514,11 @@ inline ErrorCode RecvFd(int socket, TaggedFd* out, int* sys_errno = nullptr) noe
 
         if (!have_cmsg)
         {
-            // 控制消息被截断（对端一次发送了多个 fd 或缓冲区不足）时
-            // 静默继续会导致 fd 泄漏或标签错位，必须显式报错
-            if (msg.msg_flags & MSG_CTRUNC)
+            const ErrorCode pec = detail::TakeRightsFd(msg, &owned);
+            if (pec != ErrorCode::kOk)
             {
-                return ErrorCode::kProtocol;
+                return pec;
             }
-
-            auto* cmsg = CMSG_FIRSTHDR(&msg);
-            if (!cmsg || cmsg->cmsg_level != SOL_SOCKET || cmsg->cmsg_type != SCM_RIGHTS)
-            {
-                return ErrorCode::kProtocol;
-            }
-            if (cmsg->cmsg_len < CMSG_LEN(sizeof(int)))
-            {
-                return ErrorCode::kProtocol;
-            }
-
-            // 对端一条消息携带多个 fd 时只取第一个会造成其余 fd 泄漏，
-            // 属协议违规：关闭全部并报错
-            if (cmsg->cmsg_len > CMSG_LEN(sizeof(int)))
-            {
-                const int nfds = static_cast<int>((cmsg->cmsg_len - CMSG_LEN(0)) / sizeof(int));
-                for (int i = 0; i < nfds; ++i)
-                {
-                    int extra = -1;
-                    std::memcpy(&extra, CMSG_DATA(cmsg) + i * sizeof(int), sizeof(int));
-                    if (extra >= 0)
-                    {
-                        ::close(extra);
-                    }
-                }
-                return ErrorCode::kMultipleFds;
-            }
-
-            int fd = -1;
-            std::memcpy(&fd, CMSG_DATA(cmsg), sizeof(int));
-            owned.Reset(fd);
             have_cmsg = true;
         }
         got += static_cast<std::size_t>(n);

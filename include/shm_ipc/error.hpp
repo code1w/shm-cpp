@@ -85,6 +85,20 @@ inline ErrorCode ErrnoToErrorCode(int err) noexcept
 }
 
 /**
+ * @brief 记录 errno 到可选出参并归类为 ErrorCode（失败路径的统一收尾）
+ * @param err       系统 errno
+ * @param sys_errno 可选出参，非空时写入 err
+ */
+inline ErrorCode ErrnoFailure(int err, int* sys_errno) noexcept
+{
+    if (sys_errno)
+    {
+        *sys_errno = err;
+    }
+    return ErrnoToErrorCode(err);
+}
+
+/**
  * @brief 生成可读错误描述（仅失败路径使用，会分配 std::string）
  * @param ec        错误码
  * @param sys_errno 系统 errno，0 表示不附加

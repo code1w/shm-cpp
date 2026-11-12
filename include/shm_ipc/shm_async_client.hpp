@@ -165,27 +165,7 @@ class ShmAsyncClient : public comm::ITcpAsyncClient
 
         try
         {
-            const uint64_t id = 1;
-            auto conn         = std::make_shared<ShmConnection>(loop_, id, std::move(sock), std::move(channel));
-            codec->conn_id    = id;
-            conn->SetMessageCallback(messagecb_);
-            conn->SetCloseCallback(closecb_);
-            conn->SetConnectionCallback(connectioncb_);
-            conn->SetVerifyCallback(verifycb_);
-            conn->SetCodec(codec);
-            conn->SetConnType(comm::TcpConnType::TcpConn_Client);
-            conn->ResizeBuffer(init_buffer_size_, max_buffer_size_);
-            if (context_.has_value())
-            {
-                conn->SetContext(context_);
-            }
-            conn_ = conn;
-
-            loop_->AddFd(conn->NotifyFd(), [this](int fd, short revents) { OnNotify(fd, revents); });
-            loop_->AddFd(conn->SocketFd(), [this](int fd, short revents) { OnSocket(fd, revents); });
-
-            state_ = comm::TcpClientStates::established;
-            conn->OnConnection();
+            InstallConnection(std::move(sock), std::move(channel), std::move(codec));
         }
         catch (const std::bad_alloc&)
         {
@@ -260,6 +240,32 @@ class ShmAsyncClient : public comm::ITcpAsyncClient
     }
 
  private:
+    /// @brief 创建连接对象、装配回调/codec 并注册 fd，最后触发 connection 回调
+    void InstallConnection(UniqueFd sock, DefaultRingChannel channel, comm::codec::CodecPtr codec)
+    {
+        const uint64_t id = 1;
+        auto conn         = std::make_shared<ShmConnection>(loop_, id, std::move(sock), std::move(channel));
+        codec->conn_id    = id;
+        conn->SetMessageCallback(messagecb_);
+        conn->SetCloseCallback(closecb_);
+        conn->SetConnectionCallback(connectioncb_);
+        conn->SetVerifyCallback(verifycb_);
+        conn->SetCodec(codec);
+        conn->SetConnType(comm::TcpConnType::TcpConn_Client);
+        conn->ResizeBuffer(init_buffer_size_, max_buffer_size_);
+        if (context_.has_value())
+        {
+            conn->SetContext(context_);
+        }
+        conn_ = conn;
+
+        loop_->AddFd(conn->NotifyFd(), [this](int fd, short revents) { OnNotify(fd, revents); });
+        loop_->AddFd(conn->SocketFd(), [this](int fd, short revents) { OnSocket(fd, revents); });
+
+        state_ = comm::TcpClientStates::established;
+        conn->OnConnection();
+    }
+
     /// @brief 连接失败收尾：记录错误码并触发 error 回调
     void FailConnect(const std::string_view& uri, ErrorCode ec)
     {
