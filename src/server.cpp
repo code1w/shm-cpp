@@ -490,7 +490,7 @@ int main(int argc, char* argv[])
         }
         std::printf("server: listening on %s (max %d clients, ring=%zuMB, realtime "
                     "eventfd read, codec=%s)\n",
-                    shm::kDefaultSocketPath, kMaxClients, Channel::Ring::capacity / (1024 * 1024),
+                    shm::kDefaultSocketPath, kMaxClients, Channel::Ring::kCapacity / (1024 * 1024),
                     gUseProto ? "proto" : "pod");
 
         try

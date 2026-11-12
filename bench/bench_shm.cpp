@@ -75,7 +75,7 @@ constexpr int kWarmup = 1000;  ///< 预热轮次
 void RunServer(int socket_fd)
 {
     auto channel = CreateChannelOrExit(socket_fd, shm::ChannelRole::kServer);
-    auto buf     = std::make_unique<char[]>(Channel::max_write_size);
+    auto buf     = std::make_unique<char[]>(Channel::kMaxWriteSize);
 
     for (auto& tc : kTests)
     {
@@ -110,9 +110,9 @@ void RunServer(int socket_fd)
 void RunClient(int socket_fd)
 {
     auto channel  = CreateChannelOrExit(socket_fd, shm::ChannelRole::kClient);
-    auto send_buf = std::make_unique<char[]>(Channel::max_write_size);
-    auto recv_buf = std::make_unique<char[]>(Channel::max_write_size);
-    std::memset(send_buf.get(), 'B', Channel::max_write_size);
+    auto send_buf = std::make_unique<char[]>(Channel::kMaxWriteSize);
+    auto recv_buf = std::make_unique<char[]>(Channel::kMaxWriteSize);
+    std::memset(send_buf.get(), 'B', Channel::kMaxWriteSize);
 
     std::printf("=== Shared Memory Echo Benchmark ===\n");
     std::printf("%10s %10s %12s %14s %16s\n", "msg_size", "rounds", "total_us", "avg_rtt_ns", "throughput_MB/s");

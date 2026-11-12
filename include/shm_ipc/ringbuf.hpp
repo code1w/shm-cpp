@@ -145,7 +145,7 @@ class BatchWriter
     static_assert(Capacity >= 1024, "Capacity must be at least 1024 bytes");
 
  public:
-    static constexpr std::size_t max_write_size = Capacity / 2;
+    static constexpr std::size_t kMaxWriteSize = Capacity / 2;
 
     /** @brief 构造惰性写入器（未绑定共享内存；所有写操作返回 -1） */
     BatchWriter() = default;
@@ -231,7 +231,7 @@ class BatchWriter
         {  // moved-from / 已失效：不得写入
             return -1;
         }
-        if (len == 0 || len > max_write_size)
+        if (len == 0 || len > kMaxWriteSize)
         {
             return -1;
         }
@@ -358,7 +358,7 @@ class BatchWriter
         {  // moved-from / 已失效
             return nullptr;
         }
-        if (len == 0 || len > max_write_size)
+        if (len == 0 || len > kMaxWriteSize)
         {
             return nullptr;
         }
@@ -441,9 +441,9 @@ class RingBuf
     static_assert(std::atomic<uint64_t>::is_always_lock_free, "lock-free atomics are required for cross-process shm");
 
  public:
-    static constexpr std::size_t capacity       = Capacity;
-    static constexpr std::size_t shm_size       = kRingDataOffset + Capacity;
-    static constexpr std::size_t max_write_size = Capacity / 2;
+    static constexpr std::size_t kCapacity     = Capacity;
+    static constexpr std::size_t kShmSize      = kRingDataOffset + Capacity;
+    static constexpr std::size_t kMaxWriteSize = Capacity / 2;
 
     /// @brief RAII 批量写入器（实现位于 detail 命名空间）
     using BatchWriter = detail::BatchWriter<Capacity>;
@@ -475,7 +475,7 @@ class RingBuf
         // ArmReaderWait 的裸读方
         hdr->reader_wait.store(kReaderNotifyAlways, std::memory_order_relaxed);
         // 清零 header 之后的填充页与数据区
-        std::memset(static_cast<char*>(shm) + sizeof(RingHeader), 0, shm_size - sizeof(RingHeader));
+        std::memset(static_cast<char*>(shm) + sizeof(RingHeader), 0, kShmSize - sizeof(RingHeader));
     }
 
     // ---- 写入 ----
@@ -492,7 +492,7 @@ class RingBuf
      */
     static int TryWrite(void* shm, const void* data, uint32_t len)
     {
-        if (len == 0 || len > max_write_size)
+        if (len == 0 || len > kMaxWriteSize)
         {
             return -1;
         }
@@ -618,7 +618,7 @@ class RingBuf
     /// @brief 镜像映射下写入任意长度（单次 memcpy，可跨环尾）
     static int TryWriteContig(void* shm, const void* data, uint32_t len)
     {
-        if (len == 0 || len > max_write_size || data == nullptr)
+        if (len == 0 || len > kMaxWriteSize || data == nullptr)
         {
             return -1;
         }

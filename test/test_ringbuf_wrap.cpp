@@ -37,7 +37,7 @@ using SmallRing                 = shm::RingBuf<kSmallCap>;
 /// 分配并初始化一块 shm
 void* AllocShm()
 {
-    void* shm = std::aligned_alloc(64, SmallRing::shm_size);
+    void* shm = std::aligned_alloc(64, SmallRing::kShmSize);
     if (!shm)
     {
         std::fprintf(stderr, "FAIL: aligned_alloc\n");
@@ -74,7 +74,7 @@ void VerifyPattern(const char* buf, uint32_t len, uint8_t seed, const char* ctx)
 /// 推进 ring 到指定物理偏移（写入 advance 字节再读走）
 void AdvanceRing(void* shm, uint32_t advance)
 {
-    // 分多次写入/读出，每次不超过 max_write_size
+    // 分多次写入/读出，每次不超过 kMaxWriteSize
     char tmp[512];
     std::memset(tmp, 0, sizeof(tmp));
     uint32_t remaining = advance;
@@ -590,15 +590,15 @@ void TestCodecWrap()
 }
 
 // =========================================================================
-// 测试 10: 大消息 (接近 max_write_size) 跨环尾
+// 测试 10: 大消息 (接近 kMaxWriteSize) 跨环尾
 // =========================================================================
 
 void TestLargeMessageWrap()
 {
-    std::printf("--- Test 10: Large message near max_write_size wrap ---\n");
+    std::printf("--- Test 10: Large message near kMaxWriteSize wrap ---\n");
 
-    // max_write_size = 4096/2 = 2048
-    constexpr uint32_t msg_len = SmallRing::max_write_size;
+    // kMaxWriteSize = 4096/2 = 2048
+    constexpr uint32_t msg_len = SmallRing::kMaxWriteSize;
 
     // tail=100: 绝大部分数据在环头部
     std::vector<uint32_t> tails = {1, 16, 100, msg_len / 2, msg_len - 1, msg_len};
@@ -661,9 +661,9 @@ void TestWriteRejectCases()
         std::abort();
     }
 
-    // len > max_write_size 应该被拒绝
-    auto* big = new char[SmallRing::max_write_size + 1];
-    if (SmallRing::TryWrite(shm, big, SmallRing::max_write_size + 1) != -1)
+    // len > kMaxWriteSize 应该被拒绝
+    auto* big = new char[SmallRing::kMaxWriteSize + 1];
+    if (SmallRing::TryWrite(shm, big, SmallRing::kMaxWriteSize + 1) != -1)
     {
         std::fprintf(stderr, "FAIL: oversized not rejected\n");
         std::abort();
@@ -671,15 +671,15 @@ void TestWriteRejectCases()
     delete[] big;
 
     // 填满 ring 后再写应该被拒绝
-    char fill[SmallRing::max_write_size];
+    char fill[SmallRing::kMaxWriteSize];
     std::memset(fill, 'X', sizeof(fill));
-    if (SmallRing::TryWrite(shm, fill, SmallRing::max_write_size) != 0)
+    if (SmallRing::TryWrite(shm, fill, SmallRing::kMaxWriteSize) != 0)
     {
         std::fprintf(stderr, "FAIL: first max write\n");
         std::abort();
     }
-    // ring 已用 max_write_size = Capacity/2，再写 max_write_size 应成功
-    if (SmallRing::TryWrite(shm, fill, SmallRing::max_write_size) != 0)
+    // ring 已用 kMaxWriteSize = Capacity/2，再写 kMaxWriteSize 应成功
+    if (SmallRing::TryWrite(shm, fill, SmallRing::kMaxWriteSize) != 0)
     {
         std::fprintf(stderr, "FAIL: second max write\n");
         std::abort();

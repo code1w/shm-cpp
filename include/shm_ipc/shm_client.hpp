@@ -146,11 +146,11 @@ class ShmClient : public comm::ITcpClient
         int sent = 0;
         while (sent < len)
         {
-            // 单次 TryWrite 上限为 max_write_size（Capacity/2）
+            // 单次 TryWrite 上限为 kMaxWriteSize（Capacity/2）
             uint32_t chunk = static_cast<uint32_t>(len - sent);
-            if (chunk > DefaultRingChannel::max_write_size)
+            if (chunk > DefaultRingChannel::kMaxWriteSize)
             {
-                chunk = static_cast<uint32_t>(DefaultRingChannel::max_write_size);
+                chunk = static_cast<uint32_t>(DefaultRingChannel::kMaxWriteSize);
             }
             if (channel_.TryWrite(message + sent, chunk) != 0)
             {

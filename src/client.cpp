@@ -278,7 +278,7 @@ void RunBench()
             {
                 shm::BenchPayloadHeader hdr{i};
                 std::memcpy(body.data() + shm::kTagSize, &hdr, sizeof(hdr));
-                if (shm::Send<Channel::Ring::capacity>(batch, body.data(), body_len, static_cast<uint32_t>(i)) != 0)
+                if (shm::Send<Channel::Ring::kCapacity>(batch, body.data(), body_len, static_cast<uint32_t>(i)) != 0)
                 {
                     break;  // ring 满，Flush 这批后重新开始
                 }
@@ -382,7 +382,7 @@ int main(int argc, char* argv[])
 
         std::printf("client: ring channel established (capacity=%zuMB, "
                     "eventfd notify)\n\n",
-                    Channel::Ring::capacity / (1024 * 1024));
+                    Channel::Ring::kCapacity / (1024 * 1024));
 
         shm::EventLoop loop;
         gLoop = &loop;

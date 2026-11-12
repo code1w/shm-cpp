@@ -45,6 +45,9 @@ inline constexpr int32_t kCodecNeedMoreBuffer = 0;   ///< CODEC_NEEDMOREDAFFER�
 inline constexpr int32_t kCodecDisconnect     = -1;  ///< CODEC_DISCONNECT：编解码错误，断开连接
 inline constexpr int32_t kCodecSkipPackage    = -2;  ///< CODEC_SKIPPACKAGE：编码丢包 / 解码方向为心跳包
 
+// 注意：本文件的枚举值（含 Unknow/verifing/closeing/TcpConn_Task 等拼写与大小写）
+// 有意保持与 framework/io/defines.h 一致，以便替换实现；不按 k+PascalCase 重命名。
+
 /// @brief 连接关闭类型（与 io::CloseType 一致）
 enum class CloseType
 {

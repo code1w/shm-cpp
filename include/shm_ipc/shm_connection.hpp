@@ -104,7 +104,7 @@ class ShmConnection : public comm::ITcpConnection,
             // 小消息继续走 encode_buf_（缓存命中，避免 Reserve/Commit 开销）。
             const int32_t need = codec_->EncodedSize(pkg);
             if (need >= static_cast<int32_t>(kDirectEncodeMinBytes) &&
-                static_cast<uint32_t>(need) <= DefaultRingChannel::max_write_size)
+                static_cast<uint32_t>(need) <= DefaultRingChannel::kMaxWriteSize)
             {
                 DefaultRingChannel::ChannelBatchWriter batch;
                 if (channel_.StartBatch(&batch) == ErrorCode::kOk)
@@ -622,8 +622,8 @@ class ShmConnection : public comm::ITcpConnection,
         uint32_t left = len;
         while (left > 0)
         {
-            // 单次 TryWrite 上限为 max_write_size（Capacity/2）
-            uint32_t chunk = std::min(left, static_cast<uint32_t>(DefaultRingChannel::max_write_size));
+            // 单次 TryWrite 上限为 kMaxWriteSize（Capacity/2）
+            uint32_t chunk = std::min(left, static_cast<uint32_t>(DefaultRingChannel::kMaxWriteSize));
             if (channel_.TryWrite(p, chunk) != 0)
             {
                 return false;  // 理论不可达（已预检空间）

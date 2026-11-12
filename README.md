@@ -181,7 +181,7 @@ loop.run();
 // 默认 8MB 容量
 using Ring = shm::RingBuf<>;
 
-void *shm = /* mmap 得到的共享内存指针，大小 >= Ring::shm_size */;
+void *shm = /* mmap 得到的共享内存指针，大小 >= Ring::kShmSize */;
 Ring::init(shm);
 
 // 写入变长消息

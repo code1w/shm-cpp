@@ -79,7 +79,7 @@ void AdvanceRing(void* shm, uint64_t advance)
     uint64_t done = 0;
     while (done < advance)
     {
-        auto chunk = static_cast<uint32_t>(std::min<uint64_t>(advance - done, SmallRing::max_write_size));
+        auto chunk = static_cast<uint32_t>(std::min<uint64_t>(advance - done, SmallRing::kMaxWriteSize));
         std::vector<char> tmp(chunk, 'X');
         ASSERT(SmallRing::TryWrite(shm, tmp.data(), chunk) == 0);
         ASSERT(SmallRing::ReadExact(shm, tmp.data(), chunk) == 0);
@@ -130,7 +130,7 @@ void TestSingleFrameWrap()
             continue;
         }
 
-        void* shm = std::aligned_alloc(64, SmallRing::shm_size);
+        void* shm = std::aligned_alloc(64, SmallRing::kShmSize);
         ASSERT(shm != nullptr);
         SmallRing::Init(shm);
         AdvanceRing(shm, kSmallCap - tail);

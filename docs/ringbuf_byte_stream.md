@@ -7,7 +7,7 @@
 ## 1. 共享内存布局
 
 ```
-共享内存 (shm_size = kRingDataOffset + Capacity = 4096 + Capacity 字节)
+共享内存 (kShmSize = kRingDataOffset + Capacity = 4096 + Capacity 字节)
 ┌──────────────────────────────────────────────────────────────┐
 │               RingHeader (192 bytes, 3 个缓存行)              │
 │  ┌────────────────────────────────────────────────────────┐  │
@@ -82,7 +82,7 @@ pos = 8192  →  RingPhys(8192) = 8192 & 0xFFF = 0      ← 第二圈起点
 写入条件: (w + len) - r <= Capacity   即 已用 + 新增 <= 总容量
 ```
 
-`max_write_size = Capacity / 2` 限制单次最大写入为容量的一半。这简化了空间管理——无论读写位置如何，一次 `max_write_size` 的写入只要空闲超过一半就一定能成功。编译期还要求 Capacity 为 2 的幂、不小于 1024、不超过 `UINT32_MAX`。
+`kMaxWriteSize = Capacity / 2` 限制单次最大写入为容量的一半。这简化了空间管理——无论读写位置如何，一次 `kMaxWriteSize` 的写入只要空闲超过一半就一定能成功。编译期还要求 Capacity 为 2 的幂、不小于 1024、不超过 `UINT32_MAX`。
 
 ---
 
@@ -98,7 +98,7 @@ static int TryWrite(void *shm, const void *data, uint32_t len)
         TryWrite(shm, data, len)
                   │
                   ▼
-    ┌─ len == 0 || len > max_write_size? ──── 是 ──→ return -1
+    ┌─ len == 0 || len > kMaxWriteSize? ──── 是 ──→ return -1
     │             否
     │             ▼
     │   w = write_pos.load(relaxed)        ← 读自己的位置，relaxed 够用
@@ -128,7 +128,7 @@ static int TryWrite(void *shm, const void *data, uint32_t len)
 **① 前置校验**
 
 ```cpp
-if (len == 0 || len > max_write_size)
+if (len == 0 || len > kMaxWriteSize)
     return -1;
 ```
 

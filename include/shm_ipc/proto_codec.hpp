@@ -198,7 +198,7 @@ class ProtoCodec : public ICodec
      * @brief 编码 protobuf Message 并写入 RingChannel，成功后通知对端
      *
      * pb 序列化数据通过单次写入完成，pb_len 不得超过
-     * RingBuf::max_write_size（Capacity/2），否则返回 -1 且不写入任何数据。
+     * RingBuf::kMaxWriteSize（Capacity/2），否则返回 -1 且不写入任何数据。
      */
     template <std::size_t Cap>
     static int Send(RingChannel<Cap>& ch, const T& msg, uint32_t seq)
@@ -206,7 +206,7 @@ class ProtoCodec : public ICodec
         std::string name = msg.GetTypeName();
         auto name_len    = static_cast<uint16_t>(name.size());
         auto pb_len      = static_cast<uint32_t>(msg.ByteSizeLong());
-        if (pb_len > RingChannel<Cap>::max_write_size)
+        if (pb_len > RingChannel<Cap>::kMaxWriteSize)
         {
             return -1;
         }
@@ -233,7 +233,7 @@ class ProtoCodec : public ICodec
         std::string name = msg.GetTypeName();
         auto name_len    = static_cast<uint16_t>(name.size());
         auto pb_len      = static_cast<uint32_t>(msg.ByteSizeLong());
-        if (pb_len > RingChannel<Cap>::max_write_size)
+        if (pb_len > RingChannel<Cap>::kMaxWriteSize)
         {
             return -1;
         }

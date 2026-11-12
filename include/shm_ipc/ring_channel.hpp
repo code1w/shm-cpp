@@ -483,7 +483,7 @@ class RingChannel
     }
 
     /// @brief 单次写入最大字节数
-    static constexpr std::size_t max_write_size = Ring::max_write_size;
+    static constexpr std::size_t kMaxWriteSize = Ring::kMaxWriteSize;
 
     /// @brief 写环数据区是否启用镜像映射（可单次跨尾拷贝）
     [[nodiscard]]
@@ -505,17 +505,17 @@ class RingChannel
     /// @param sys_errno 可选：失败时的 errno
     ErrorCode CreateWriteRing(const char* name, int* sys_errno = nullptr) noexcept
     {
-        ErrorCode ec = CreateMemfd(name, Ring::shm_size, &write_memfd_, sys_errno);
+        ErrorCode ec = CreateMemfd(name, Ring::kShmSize, &write_memfd_, sys_errno);
         if (ec != ErrorCode::kOk)
         {
             return ec;
         }
-        ec = write_region_.MapMirrored(write_memfd_.Get(), Ring::shm_size, kRingDataOffset, Ring::capacity,
+        ec = write_region_.MapMirrored(write_memfd_.Get(), Ring::kShmSize, kRingDataOffset, Ring::kCapacity,
                                        PROT_READ | PROT_WRITE, MAP_SHARED, sys_errno);
         if (ec != ErrorCode::kOk)
         {
             // 镜像仅影响本地 VA 布局；失败时退化为普通单次映射
-            ec = write_region_.Map(write_memfd_.Get(), Ring::shm_size, PROT_READ | PROT_WRITE, MAP_SHARED, sys_errno);
+            ec = write_region_.Map(write_memfd_.Get(), Ring::kShmSize, PROT_READ | PROT_WRITE, MAP_SHARED, sys_errno);
             if (ec != ErrorCode::kOk)
             {
                 return ec;
@@ -547,7 +547,7 @@ class RingChannel
 
         // 必须先校验对端 memfd 尺寸再 mmap/访问：
         // 两端 Capacity 不一致或对端发送 0 字节/被截断的 memfd 时，
-        // 按本地 Ring::shm_size 映射并在环尾读写会越过文件尾（SIGBUS）
+        // 按本地 Ring::kShmSize 映射并在环尾读写会越过文件尾（SIGBUS）
         // 或越过本地映射（SIGSEGV）。
         struct stat st
         {};
@@ -559,16 +559,16 @@ class RingChannel
             }
             return ErrnoToErrorCode(errno);
         }
-        if (!S_ISREG(st.st_mode) || st.st_size != static_cast<off_t>(Ring::shm_size))
+        if (!S_ISREG(st.st_mode) || st.st_size != static_cast<off_t>(Ring::kShmSize))
         {
             return ErrorCode::kSizeMismatch;
         }
 
-        ec = read_region_.MapMirrored(read_memfd_.Get(), Ring::shm_size, kRingDataOffset, Ring::capacity,
+        ec = read_region_.MapMirrored(read_memfd_.Get(), Ring::kShmSize, kRingDataOffset, Ring::kCapacity,
                                       PROT_READ | PROT_WRITE, MAP_SHARED, sys_errno);
         if (ec != ErrorCode::kOk)
         {
-            ec = read_region_.Map(read_memfd_.Get(), Ring::shm_size, PROT_READ | PROT_WRITE, MAP_SHARED, sys_errno);
+            ec = read_region_.Map(read_memfd_.Get(), Ring::kShmSize, PROT_READ | PROT_WRITE, MAP_SHARED, sys_errno);
             if (ec != ErrorCode::kOk)
             {
                 return ec;

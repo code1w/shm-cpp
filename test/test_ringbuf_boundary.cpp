@@ -6,7 +6,7 @@
  *
  * 1. 满环：填满至 Capacity，写 1 字节被拒，两段式 Peek 读全部内容并校验
  * 2. 满环循环：填满 → 读一半 → 写一半（跨环尾补满）→ 读全部校验
- * 3. BatchWriter 长度边界：len == max_write_size 成功 / +1 拒绝 / 0 拒绝
+ * 3. BatchWriter 长度边界：len == kMaxWriteSize 成功 / +1 拒绝 / 0 拒绝
  * 4. Reserve 边界：len == tail 精确贴合成功 / tail+1 拒绝 / 0 拒绝 /
  *    超大拒绝 / 满环拒绝；Reserve 直写内容校验
  * 5. 空操作边界：Peek 空环 -1、TryRead 空环 0、TryRead max_len=0、
@@ -66,7 +66,7 @@ int g_pass_count = 0;
 /// 分配并初始化一块 shm
 void* AllocShm()
 {
-    void* shm = std::aligned_alloc(64, SmallRing::shm_size);
+    void* shm = std::aligned_alloc(64, SmallRing::kShmSize);
     CHECK(shm != nullptr, "aligned_alloc");
     SmallRing::Init(shm);
     return shm;
@@ -215,23 +215,23 @@ void TestBatchWriterLenBounds()
     std::printf("--- Test 3: BatchWriter length bounds ---\n");
 
     void* shm = AllocShm();
-    std::vector<char> buf(SmallRing::max_write_size + 1, 'B');
+    std::vector<char> buf(SmallRing::kMaxWriteSize + 1, 'B');
 
     {
         SmallRing::BatchWriter batch(shm);
 
         // len == 0 拒绝
         CHECK(batch.TryWrite(buf.data(), 0) == -1, "len=0");
-        // len == max_write_size + 1 拒绝
-        CHECK(batch.TryWrite(buf.data(), SmallRing::max_write_size + 1) == -1, "len=max+1");
+        // len == kMaxWriteSize + 1 拒绝
+        CHECK(batch.TryWrite(buf.data(), SmallRing::kMaxWriteSize + 1) == -1, "len=max+1");
         // data == nullptr 拒绝
         CHECK(batch.TryWrite(nullptr, 10) == -1, "null data");
         CHECK(batch.Count() == 0 && batch.PendingBytes() == 0, "rejected writes must not count");
 
-        // len == max_write_size 恰好成功
-        CHECK(batch.TryWrite(buf.data(), SmallRing::max_write_size) == 0, "len=max");
-        // 再写一个 max_write_size：恰好填满
-        CHECK(batch.TryWrite(buf.data(), SmallRing::max_write_size) == 0, "len=max second (fills ring)");
+        // len == kMaxWriteSize 恰好成功
+        CHECK(batch.TryWrite(buf.data(), SmallRing::kMaxWriteSize) == 0, "len=max");
+        // 再写一个 kMaxWriteSize：恰好填满
+        CHECK(batch.TryWrite(buf.data(), SmallRing::kMaxWriteSize) == 0, "len=max second (fills ring)");
         CHECK(batch.FreeBytes() == 0, "full after 2 x max");
         // 满环再写 1 字节拒绝
         CHECK(batch.TryWrite(buf.data(), 1) == -1, "full ring write");
@@ -254,7 +254,7 @@ void TestReserveBoundaries()
     std::printf("--- Test 4: Reserve boundaries ---\n");
 
     void* shm               = AllocShm();
-    constexpr uint32_t kMax = SmallRing::max_write_size;  // 2048
+    constexpr uint32_t kMax = SmallRing::kMaxWriteSize;  // 2048
 
     // phys=0：基本拒绝项 + 正常 Reserve/CommitReserve 直写校验
     {
@@ -680,11 +680,11 @@ struct MirroredRing
 
     bool Init()
     {
-        if (shm::CreateMemfd("ring-mirror-test", SmallRing::shm_size, &fd) != shm::ErrorCode::kOk)
+        if (shm::CreateMemfd("ring-mirror-test", SmallRing::kShmSize, &fd) != shm::ErrorCode::kOk)
         {
             return false;
         }
-        return region.MapMirrored(fd.Get(), SmallRing::shm_size, shm::kRingDataOffset, SmallRing::capacity,
+        return region.MapMirrored(fd.Get(), SmallRing::kShmSize, shm::kRingDataOffset, SmallRing::kCapacity,
                                   PROT_READ | PROT_WRITE, MAP_SHARED) == shm::ErrorCode::kOk;
     }
     void* Get() { return region.Get(); }
@@ -717,9 +717,9 @@ void TestContigWrap()
         MirroredRing ring;
         CHECK(ring.Init(), "mirror map");
         void* shm = ring.Get();
-        AdvanceMirrored(shm, static_cast<uint32_t>(SmallRing::capacity - tail));
+        AdvanceMirrored(shm, static_cast<uint32_t>(SmallRing::kCapacity - tail));
 
-        const uint32_t len = SmallRing::max_write_size;  // 2048
+        const uint32_t len = SmallRing::kMaxWriteSize;  // 2048
         std::vector<char> wbuf(len);
         FillPattern(wbuf.data(), len, static_cast<uint8_t>(tail & 0xFF));
         CHECK(SmallRing::TryWriteContig(shm, wbuf.data(), len) == 0, "contig write tail=%u", tail);
@@ -757,25 +757,25 @@ void TestContigFullRing()
     void* shm = ring.Get();
     AdvanceMirrored(shm, 100);  // 非零物理起点，满环必然跨镜像边界
 
-    const uint32_t half = SmallRing::max_write_size;  // 2048
+    const uint32_t half = SmallRing::kMaxWriteSize;  // 2048
     std::vector<char> a(half), b(half);
     FillPattern(a.data(), half, 0x31);
     FillPattern(b.data(), half, 0x32);
 
     CHECK(SmallRing::TryWriteContig(shm, a.data(), half) == 0, "write a");
     CHECK(SmallRing::TryWriteContig(shm, b.data(), half) == 0, "write b");
-    CHECK(SmallRing::Available(shm) == SmallRing::capacity, "full");
+    CHECK(SmallRing::Available(shm) == SmallRing::kCapacity, "full");
     CHECK(SmallRing::TryWriteContig(shm, "x", 1) == -1, "full reject");
 
     const void* seg  = nullptr;
     uint32_t seg_len = 0;
     CHECK(SmallRing::PeekContig(shm, &seg, &seg_len) == 0, "peek full");
-    CHECK(seg_len == SmallRing::capacity, "peek full len=%u", seg_len);
+    CHECK(seg_len == SmallRing::kCapacity, "peek full len=%u", seg_len);
     VerifyPattern(static_cast<const char*>(seg), half, 0x31, "full a");
     VerifyPattern(static_cast<const char*>(seg) + half, half, 0x32, "full b");
 
-    std::vector<char> out(SmallRing::capacity);
-    CHECK(SmallRing::TryReadContig(shm, out.data(), SmallRing::capacity) == SmallRing::capacity, "read full");
+    std::vector<char> out(SmallRing::kCapacity);
+    CHECK(SmallRing::TryReadContig(shm, out.data(), SmallRing::kCapacity) == SmallRing::kCapacity, "read full");
     VerifyPattern(out.data(), half, 0x31, "read full a");
     VerifyPattern(out.data() + half, half, 0x32, "read full b");
     CHECK(SmallRing::Available(shm) == 0, "empty after full read");
@@ -795,14 +795,14 @@ void TestMirroredBatchWriter()
     MirroredRing ring;
     CHECK(ring.Init(), "mirror map");
     void* shm = ring.Get();
-    AdvanceMirrored(shm, static_cast<uint32_t>(SmallRing::capacity - 100));
+    AdvanceMirrored(shm, static_cast<uint32_t>(SmallRing::kCapacity - 100));
 
     {
         SmallRing::BatchWriter b(shm, true);
-        char* p = b.Reserve(SmallRing::max_write_size);  // tail=100，跨尾
+        char* p = b.Reserve(SmallRing::kMaxWriteSize);  // tail=100，跨尾
         CHECK(p != nullptr, "mirrored Reserve cross tail");
-        FillPattern(p, SmallRing::max_write_size, 0x41);
-        b.CommitReserve(SmallRing::max_write_size);
+        FillPattern(p, SmallRing::kMaxWriteSize, 0x41);
+        b.CommitReserve(SmallRing::kMaxWriteSize);
 
         char tailbuf[300];
         FillPattern(tailbuf, sizeof(tailbuf), 0x42);
@@ -810,11 +810,11 @@ void TestMirroredBatchWriter()
         CHECK(b.Flush() == 2, "flush count");
     }
 
-    const uint32_t total = SmallRing::max_write_size + 300;
+    const uint32_t total = SmallRing::kMaxWriteSize + 300;
     std::vector<char> out(total);
     CHECK(SmallRing::ReadExactContig(shm, out.data(), total) == 0, "read reserve+write");
-    VerifyPattern(out.data(), SmallRing::max_write_size, 0x41, "reserve part");
-    VerifyPattern(out.data() + SmallRing::max_write_size, 300, 0x42, "tail part");
+    VerifyPattern(out.data(), SmallRing::kMaxWriteSize, 0x41, "reserve part");
+    VerifyPattern(out.data() + SmallRing::kMaxWriteSize, 300, 0x42, "tail part");
     CHECK(SmallRing::Available(shm) == 0, "empty after batch");
 
     ++g_pass_count;
@@ -836,7 +836,7 @@ void TestContigGuards()
     char x = 'x';
     CHECK(SmallRing::TryWriteContig(shm, nullptr, 10) == -1, "null src");
     CHECK(SmallRing::TryWriteContig(shm, &x, 0) == -1, "len 0");
-    CHECK(SmallRing::TryWriteContig(shm, &x, SmallRing::max_write_size + 1) == -1, "oversize");
+    CHECK(SmallRing::TryWriteContig(shm, &x, SmallRing::kMaxWriteSize + 1) == -1, "oversize");
     CHECK(SmallRing::TryReadContig(shm, nullptr, 10) == 0, "read null");
     CHECK(SmallRing::ReadExactContig(shm, nullptr, 10) == -1, "read exact null");
     CHECK(SmallRing::ReadExactContig(shm, nullptr, 0) == 0, "read exact 0");

@@ -158,14 +158,14 @@ private:
 `RingChannel` 优先建立镜像映射，失败时退化为普通映射：
 
 ```cpp
-region.MapMirrored(fd, Ring::shm_size, kRingDataOffset, Ring::capacity,
+region.MapMirrored(fd, Ring::kShmSize, kRingDataOffset, Ring::kCapacity,
                    PROT_READ | PROT_WRITE, MAP_SHARED);
-// 失败 → region.Map(fd, Ring::shm_size, PROT_READ | PROT_WRITE, MAP_SHARED);
+// 失败 → region.Map(fd, Ring::kShmSize, PROT_READ | PROT_WRITE, MAP_SHARED);
 ```
 
 | 参数            | 值                         | 含义                                                        |
 | --------------- | -------------------------- | ----------------------------------------------------------- |
-| `size`        | `Ring::shm_size`         | `kRingDataOffset + Capacity`（默认 4096 + 8MB）           |
+| `size`        | `Ring::kShmSize`         | `kRingDataOffset + Capacity`（默认 4096 + 8MB）           |
 | `data_offset` | `kRingDataOffset = 4096` | 数据区在文件中的页对齐偏移；之前是 `RingHeader` + 填充页  |
 | `prot`        | `PROT_READ \| PROT_WRITE` | 读写权限（双方都需要读写：写方写数据，读方写 `read_pos`） |
 | `flags`       | `MAP_SHARED`             | 修改对所有映射同一文件的进程可见                            |
@@ -221,7 +221,7 @@ base                        base+4096          base+4096+Cap      base+4096+2·C
 `RingBuf<Capacity>` 是一个纯静态方法的工具类，操作位于共享内存中的 POD 数据结构：
 
 ```
-共享内存布局 (shm_size = kRingDataOffset + Capacity = 4096 + Capacity)
+共享内存布局 (kShmSize = kRingDataOffset + Capacity = 4096 + Capacity)
 ┌─────────────────────────────────────────────────────────────┐
 │                    RingHeader (192 bytes, 3 个缓存行)         │
 │  ┌──────────────────────────────┬──────────────────────────┐ │
@@ -279,7 +279,7 @@ constexpr std::size_t RingPhys(uint64_t pos)
 - 利用 2 的幂容量，掩码运算（一条 AND 指令）替代取模运算
 - `uint64_t` 单调递增，即使以 10 GB/s 速率写入也需要约 58 年才会溢出
 
-容量约束（`static_assert`）：2 的幂、不小于 1024、不超过 `UINT32_MAX`（长度字段为 `uint32_t`）。单次写入上限 `max_write_size = Capacity / 2`。
+容量约束（`static_assert`）：2 的幂、不小于 1024、不超过 `UINT32_MAX`（长度字段为 `uint32_t`）。单次写入上限 `kMaxWriteSize = Capacity / 2`。
 
 ### 4.4 纯字节流：无帧头、无哨兵
 
@@ -469,7 +469,7 @@ RingChannel 内部结构
 握手期间的几处防护：
 
 - **超时**：`HandshakeGuard` 在握手期间给 socket 设 5 秒收发超时，防止半连接挂死；返回时（含出错路径）恢复阻塞模式
-- **尺寸校验**：收到对端 memfd 后**先 `fstat`，比对 `Ring::shm_size` 再 `mmap`**。两端 `Capacity` 不一致，或对端发送 0 字节/被截断的 fd，直接返回 `kSizeMismatch`，而不是之后在环尾访问时 `SIGBUS`/`SIGSEGV`
+- **尺寸校验**：收到对端 memfd 后**先 `fstat`，比对 `Ring::kShmSize` 再 `mmap`**。两端 `Capacity` 不一致，或对端发送 0 字节/被截断的 fd，直接返回 `kSizeMismatch`，而不是之后在环尾访问时 `SIGBUS`/`SIGSEGV`
 - **先初始化后发送**：`Ring::Init` 必须在发送 memfd 之前完成——`SCM_RIGHTS` 的 `sendmsg`/`recvmsg` 提供 happens-before，使 `Init` 的清零对端可见
 - **原子替换**：握手在局部对象上完成，成功才移动给出参 `out`，失败时 `out` 保持原状
 
@@ -658,7 +658,7 @@ template <std::size_t Cap, typename WriteFn>
 int SendFrameBatch(typename RingChannel<Cap>::ChannelBatchWriter &batch,
                    uint32_t payload_len, uint32_t seq, WriteFn &&write_payload);
 
-// 便捷接口：单块 payload（≤ max_write_size）
+// 便捷接口：单块 payload（≤ kMaxWriteSize）
 template <std::size_t Cap> int Send(RingChannel<Cap> &ch, const void *payload, uint32_t len, uint32_t seq);
 template <std::size_t Cap> int Send(typename RingChannel<Cap>::ChannelBatchWriter &batch, ...);
 ```

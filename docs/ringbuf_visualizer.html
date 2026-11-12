@@ -291,7 +291,7 @@ footer {
 
         <div class="panel" style="flex:1;">
             <h2>TryWrite 真实实现（ringbuf.hpp，简化注释）</h2>
-            <pre class="code"><span class="kw">if</span> (len == <span class="num">0</span> || len &gt; max_write_size) <span class="kw">return</span> -<span class="num">1</span>;  <span class="cm">// 空写 / 超上限拒绝</span>
+            <pre class="code"><span class="kw">if</span> (len == <span class="num">0</span> || len &gt; kMaxWriteSize) <span class="kw">return</span> -<span class="num">1</span>;  <span class="cm">// 空写 / 超上限拒绝</span>
 w = write_pos.<span class="fn">load</span>(relaxed);      <span class="cm">// 写者独占 write_pos → relaxed</span>
 r = read_pos.<span class="fn">load</span>(acquire);       <span class="cm">// 配对读者的 release</span>
 <span class="kw">if</span> ((w + len) - r &gt; Capacity) <span class="kw">return</span> -<span class="num">1</span>; <span class="cm">// 空间检查（无符号减法）</span>
@@ -325,7 +325,7 @@ write_pos.<span class="fn">store</span>(w + len, release);  <span class="cm">// 
 // 模型：与 ringbuf.hpp 一致的 SPSC 字节环
 // ============================================================
 const CAP  = 64;          // 演示用小容量（2 的幂）
-const MAXW = CAP / 2;     // max_write_size = Capacity / 2
+const MAXW = CAP / 2;     // kMaxWriteSize = Capacity / 2
 
 let w = 0, r = 0;         // 单调递增的绝对字节偏移
 // 动画把一次操作拉长到数百毫秒，期间新操作必须以"计划中的 w/r"
@@ -359,7 +359,7 @@ function log(msg, cls) {
 function tryWrite(len) {
     peekSegs = null;
     if (len === 0 || len > MAXW) {
-        log(`TryWrite(len=${len}) → -1  len==0 或超过 max_write_size=${MAXW}（Capacity/2）`, 'l-err');
+        log(`TryWrite(len=${len}) → -1  len==0 或超过 kMaxWriteSize=${MAXW}（Capacity/2）`, 'l-err');
         flashPanel();
         return;
     }

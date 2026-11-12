@@ -129,7 +129,7 @@ inline char* EncodeFrame(void* buf, uint32_t buf_size, uint32_t payload_len, uin
  * @param write_payload 回调，负责向 batch 写入 payload
  * @return 0 成功，-1 缓冲区满、消息过大或回调写入字节数与 payload_len 不符
  *
- * @note 回调中每次 TryWrite 的长度不得超过 RingBuf::max_write_size。
+ * @note 回调中每次 TryWrite 的长度不得超过 RingBuf::kMaxWriteSize。
  *       函数返回前会校验回调实际写入的字节数恰好等于 payload_len；
  *       不匹配时回滚本次写入（未 Flush 的数据对对端不可见），
  *       保证不会发布残缺帧而损坏字节流。
@@ -315,12 +315,12 @@ inline bool Decode(const void* buf, uint32_t buf_len, const void** payload, uint
  * @brief 编码消息并写入 RingChannel，成功后通知对端
  *
  * payload 通过单次 TryWrite 写入，payload_len 不得超过
- * RingBuf::max_write_size（Capacity/2），否则返回 -1 且不写入任何数据。
+ * RingBuf::kMaxWriteSize（Capacity/2），否则返回 -1 且不写入任何数据。
  */
 template <std::size_t Cap>
 int Send(RingChannel<Cap>& ch, const void* payload, uint32_t payload_len, uint32_t seq)
 {
-    if (payload_len > RingChannel<Cap>::max_write_size)
+    if (payload_len > RingChannel<Cap>::kMaxWriteSize)
     {
         return -1;
     }
@@ -340,7 +340,7 @@ int Send(RingChannel<Cap>& ch, const void* payload, uint32_t payload_len, uint32
 template <std::size_t Cap>
 int Send(typename RingChannel<Cap>::ChannelBatchWriter& batch, const void* payload, uint32_t payload_len, uint32_t seq)
 {
-    if (payload_len > RingChannel<Cap>::max_write_size)
+    if (payload_len > RingChannel<Cap>::kMaxWriteSize)
     {
         return -1;
     }

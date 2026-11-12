@@ -240,7 +240,7 @@ struct ReadCmd
 void RunReader(int socket_fd, int ctrl_fd)
 {
     auto ch      = CreateChannelOrExit(socket_fd, shm::ChannelRole::kServer);
-    auto raw_buf = std::make_unique<char[]>(Channel::max_write_size);
+    auto raw_buf = std::make_unique<char[]>(Channel::kMaxWriteSize);
 
     shm::FrameReader<> reader;
 
@@ -320,14 +320,14 @@ void RunWriter(int socket_fd, int ctrl_fd)
 {
     auto ch = CreateChannelOrExit(socket_fd, shm::ChannelRole::kClient);
     // payload_with_tag = [tag u32][payload data...]
-    uint32_t max_payload_with_tag = shm::kTagSize + Channel::max_write_size;
+    uint32_t max_payload_with_tag = shm::kTagSize + Channel::kMaxWriteSize;
     auto payload_with_tag         = std::make_unique<char[]>(max_payload_with_tag);
     uint32_t bench_tag            = kTag;
     std::memcpy(payload_with_tag.get(), &bench_tag, shm::kTagSize);
-    std::memset(payload_with_tag.get() + shm::kTagSize, 'W', Channel::max_write_size);
+    std::memset(payload_with_tag.get() + shm::kTagSize, 'W', Channel::kMaxWriteSize);
     // raw payload for TryWrite baseline (same total size as frame)
-    auto raw_payload = std::make_unique<char[]>(Channel::max_write_size);
-    std::memset(raw_payload.get(), 'W', Channel::max_write_size);
+    auto raw_payload = std::make_unique<char[]>(Channel::kMaxWriteSize);
+    std::memset(raw_payload.get(), 'W', Channel::kMaxWriteSize);
 
     std::vector<RingResult> results;
 

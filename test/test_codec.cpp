@@ -548,8 +548,8 @@ void RunSenderOversized(int socket_fd)
 {
     auto ch = CreateChannelOrAbort<Channel>(socket_fd, shm::ChannelRole::kServer);
 
-    // payload 超过 max_write_size（Capacity/2）：必须返回 -1 且不写入任何数据
-    std::vector<char> big(Channel::max_write_size + 1, 'B');
+    // payload 超过 kMaxWriteSize（Capacity/2）：必须返回 -1 且不写入任何数据
+    std::vector<char> big(Channel::kMaxWriteSize + 1, 'B');
     if (shm::Send(ch, big.data(), static_cast<uint32_t>(big.size()), 1) == 0)
     {
         std::fprintf(stderr, "FAIL: oversized Send should be rejected\n");
@@ -900,9 +900,9 @@ void TestBatchRewindCount()
 {
     std::printf("--- Test 10: SendFrameBatch rewind restores count ---\n");
 
-    // max_write_size = 2048
+    // kMaxWriteSize = 2048
     void* shm =
-        ::mmap(nullptr, SmallChannel::Ring::shm_size, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_SHARED, -1, 0);
+        ::mmap(nullptr, SmallChannel::Ring::kShmSize, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_SHARED, -1, 0);
     if (shm == MAP_FAILED)
     {
         std::perror("mmap");
@@ -931,7 +931,7 @@ void TestBatchRewindCount()
     // 第 2 帧：callback 第一次写成功、第二次写超长失败 → 触发回滚
     int rc = shm::SendFrameBatch<4096>(batch, 4 + 2100, 2, [&](auto& b) {
         b.TryWrite(data, 4);     // 成功
-        b.TryWrite(data, 2100);  // 失败：> max_write_size(2048)
+        b.TryWrite(data, 2100);  // 失败：> kMaxWriteSize(2048)
     });
     if (rc != -1)
     {
@@ -957,7 +957,7 @@ void TestBatchRewindCount()
     }
 
     std::printf("  PASS: rewind restores PendingBytes and Count\n");
-    ::munmap(shm, SmallChannel::Ring::shm_size);
+    ::munmap(shm, SmallChannel::Ring::kShmSize);
 }
 
 // =========================================================================
@@ -1471,7 +1471,7 @@ void RunReceiverThrow(int socket_fd)
 // 测试 16（回归）：握手必须拒绝 Capacity 不一致的对端，而不是 SIGBUS
 //
 // 两端分别用 RingChannel<4096> / RingChannel<8192>：若不校验对端 memfd
-// 尺寸，接收方会按本地 shm_size 映射并在访问环尾时越过文件尾崩溃。
+// 尺寸，接收方会按本地 kShmSize 映射并在访问环尾时越过文件尾崩溃。
 // =========================================================================
 
 void RunSenderCapMismatch(int socket_fd)

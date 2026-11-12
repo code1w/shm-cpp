@@ -160,7 +160,7 @@ void WriteBatch(Channel& ch, const char* buf, uint32_t msg_len, int total, int b
 void RunReader(int socket_fd, int ctrl_fd)
 {
     auto ch  = CreateChannelOrExit(socket_fd, shm::ChannelRole::kServer);
-    auto buf = std::make_unique<char[]>(Channel::max_write_size);
+    auto buf = std::make_unique<char[]>(Channel::kMaxWriteSize);
 
     for (;;)
     {
@@ -269,8 +269,8 @@ std::pair<double, double> BenchOne(Channel& ch, int ctrl_fd, const TestParam& p,
 void RunWriter(int socket_fd, int ctrl_fd)
 {
     auto ch  = CreateChannelOrExit(socket_fd, shm::ChannelRole::kClient);
-    auto buf = std::make_unique<char[]>(Channel::max_write_size);
-    std::memset(buf.get(), 'B', Channel::max_write_size);
+    auto buf = std::make_unique<char[]>(Channel::kMaxWriteSize);
+    std::memset(buf.get(), 'B', Channel::kMaxWriteSize);
 
     std::vector<Result> results;
     results.reserve(kParams.size());
@@ -300,7 +300,7 @@ void RunWriter(int socket_fd, int ctrl_fd)
     std::printf("- `fork()` + `socketpair()` 进程隔离\n");
     std::printf("- 单向写入：写端尽速写入，读端忙轮询消费（`ReadExact`）\n");
     std::printf("- 每组重复 %d 次取最小值，每次预热 %d 条\n", kRepeat, kWarmup);
-    std::printf("- Ring 容量：%zuMB\n\n", Channel::Ring::capacity / (1024 * 1024));
+    std::printf("- Ring 容量：%zuMB\n\n", Channel::Ring::kCapacity / (1024 * 1024));
 
     // 按 msg_size 分组输出
     std::size_t prev_msg_size = 0;

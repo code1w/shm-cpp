@@ -109,7 +109,7 @@ Linux system headers plus pthread (`shm_server.hpp` 内部持有握手线程，I
 - memfd 创建即封印（F_SEAL_SHRINK|F_SEAL_GROW）— 防恶意对端握手后 ftruncate 缩小文件使接收方读映射越界（SIGBUS）；seal 不影响已建立的可写映射
 - ~ShmAsyncClient 必须 Close 连接 — 摘除可能挂起的验证定时器（回调捕获裸 this，不摘除即 UAF；test_shm_app Part 3 回归）
 - ShmServer::Start 幂等 — Listen 入口 started_ 守卫，二次 Start 直接成功（否则对 joinable 握手线程 move 赋值 = std::terminate；test_shm_app Part 4 回归）
-- 握手校验对端 memfd 尺寸 — 收到 memfd 后先 fstat 比对 `Ring::shm_size` 再 mmap；两端 Capacity 不一致或恶意 0 字节 fd 会直接拒绝，而不是在环尾访问时 SIGBUS（test_codec Test 16 回归）
+- 握手校验对端 memfd 尺寸 — 收到 memfd 后先 fstat 比对 `Ring::kShmSize` 再 mmap；两端 Capacity 不一致或恶意 0 字节 fd 会直接拒绝，而不是在环尾访问时 SIGBUS（test_codec Test 16 回归）
 - FrameReader 回退缓冲按需增长 — `BufSize` 仅作初始 reserve，跨环尾的大帧（发送端允许到 Capacity/2）不再因 64KB 固定缓冲被判毒帧丢弃；`-2` 仅表示显式配置的 `MaxBufSize` 上限被超过
 - BatchWriter 契约收紧 — moved-from 对象拒绝写入；`CommitReserve` 在 release 下也校验"已 Reserve 且长度一致"；`CommitRead`/`RewindTo` 越界时 debug assert、release 钳制
 - SendFd/RecvFd 处理 SOCK_STREAM 短读短写 — SCM_RIGHTS 随首字节送达，剩余固定载荷循环补齐，避免后续握手消息流错位
@@ -121,5 +121,5 @@ Linux system headers plus pthread (`shm_server.hpp` 内部持有握手线程，I
 - `ShmClient::PeekMessage/CommitMessage` — 同步客户端的零拷贝读取；指针在 Commit/下一次 Peek/Close 前有效
 - `SimplePodCodec` 热路径 — 扁平注册表 + 普通函数指针，避免 `unordered_map`×2 + `std::function`；`Decode` 在数据不足时通过 `size` 出参报告当前帧所需长度
 - 同类型消息复用 `std::any` — `Decode` 写入已有 any（同类型原地覆盖）；`ShmConnection::DrainRing` 在整个 drain 中复用同一个 any，避免每条消息构造/析构与堆分配（大对象受益；回调内引用不得外存）
-- `SendCmd` 直写 ring — `comm::codec::Codec::EncodedSize` 报告精确长度时，`SendCmd` 对 ≥256B 消息直接 `Reserve + Encode` 写入 ring（单次拷贝），并支持到 `max_write_size`（默认 4MB）；未知长度的 codec 回退 `encode_buf_`
+- `SendCmd` 直写 ring — `comm::codec::Codec::EncodedSize` 报告精确长度时，`SendCmd` 对 ≥256B 消息直接 `Reserve + Encode` 写入 ring（单次拷贝），并支持到 `kMaxWriteSize`（默认 4MB）；未知长度的 codec 回退 `encode_buf_`
 - 按需通知（reader_wait）— RingHeader 增加独立缓存行的 `reader_wait`（192B）；读方读空后经 `RingChannel::PrepareWait(seen_write)`（置标志 → seq_cst 栅栏 → 复查 write_pos）声明睡眠，写方 `NotifyPeer` 内 `Ring::ShouldNotify` 仅在读方等待时写一次 eventfd。初值 `kReaderNotifyAlways`，未调用 PrepareWait 的读方（如 `src/server.cpp`/`client.cpp`、test_codec）行为不变。`ShmConnection::DrainRing`/`ShmClient::WaitForReadable` 已接入；基线 `seen` 必须在读环**之前**取，否则丢唤醒（test_ringbuf_boundary Test 17/18 回归）

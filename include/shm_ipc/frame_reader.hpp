@@ -102,7 +102,7 @@ class FrameReader
         // Cap - kMsgHeaderSize 的 hdr.len 在本环上永远不可能完整到达。
         // 这种帧头只可能来自损坏/恶意对端——若仅当"数据不足"等待会
         // 永久卡死字节流，必须立即报错。
-        // （注意不能按 max_write_size 限定：SendFrameBatch 允许分块写入
+        // （注意不能按 kMaxWriteSize 限定：SendFrameBatch 允许分块写入
         // 接近环容量的 payload，见 codec.hpp。）
         if (hdr.len > Cap - kMsgHeaderSize)
         {
