@@ -67,13 +67,6 @@ class ShmAsyncClient : public comm::ITcpAsyncClient
             loop_->RemoveFd(conn_->NotifyFd());
             loop_->RemoveFd(conn_->SocketFd());
         }
-        if (post_hook_ && loop_)
-        {
-            // 钩子捕获 this：析构前必须摘除，否则事件循环后续批次会
-            // 命中已释放的 client
-            loop_->RemovePostDispatchHook(post_hook_);
-            post_hook_ = 0;
-        }
     }
 
     // 禁止复制和移动（EventLoop 回调持有 this）
@@ -97,13 +90,6 @@ class ShmAsyncClient : public comm::ITcpAsyncClient
     const std::any &Context() const override { return context_; }
     void SetAutoReconnect(bool autoreconn) override { autoreconnect_ = autoreconn; }
 
-    /**
-     * @brief 是否把通知合并到事件循环批次末尾（默认关闭）
-     *
-     * 开启后，同一分发批次内的多次 SendCmd 只发一次 eventfd；
-     * 首条消息延迟上限为本批次剩余执行时间。必须在 Connect() 前设置。
-     */
-    void SetDeferredNotify(bool on) { deferred_notify_ = on; }
     void ResizeBuffer(size_t size, size_t max) override
     {
         init_buffer_size_ = size;
@@ -184,43 +170,18 @@ class ShmAsyncClient : public comm::ITcpAsyncClient
             loop_->AddFd(conn->SocketFd(),
                          [this](int fd, short revents) { OnSocket(fd, revents); });
 
-            if (deferred_notify_ && post_hook_ == 0)
-            {
-                ec = loop_->AddPostDispatchHook(
-                    [this] {
-                        if (conn_)
-                            conn_->FlushNotify();
-                    },
-                    &post_hook_);
-                if (ec != ErrorCode::kOk)
-                {
-                    loop_->RemoveFd(conn->NotifyFd());
-                    loop_->RemoveFd(conn->SocketFd());
-                    conn_.reset();
-                    FailConnect(uri, ec);
-                    return;
-                }
-            }
-            conn->SetDeferNotify(deferred_notify_);
 
             state_ = comm::TcpClientStates::established;
             conn->OnConnection();
-            // Connect 可能在事件循环启动前调用：显式 flush 连接回调里发出的消息
-            conn->FlushNotify();
         }
         catch (const std::bad_alloc &)
         {
-            // 分配失败：清理已注册的 fd/连接/钩子，按连接失败处理
+            // 分配失败：清理已注册的 fd/连接，按连接失败处理
             if (conn_)
             {
                 loop_->RemoveFd(conn_->NotifyFd());
                 loop_->RemoveFd(conn_->SocketFd());
                 conn_.reset();
-            }
-            if (post_hook_)
-            {
-                loop_->RemovePostDispatchHook(post_hook_);
-                post_hook_ = 0;
             }
             FailConnect(uri, ErrorCode::kNoMemory);
             // TODO 自动重连（与框架一致，暂未实现）
@@ -331,13 +292,7 @@ class ShmAsyncClient : public comm::ITcpAsyncClient
         {
             loop_->RemoveFd(conn->NotifyFd());
             loop_->RemoveFd(conn->SocketFd());
-            conn->FlushNotify();
             conn->OnClose();
-        }
-        if (post_hook_)
-        {
-            loop_->RemovePostDispatchHook(post_hook_);
-            post_hook_ = 0;
         }
     }
 
@@ -352,10 +307,8 @@ class ShmAsyncClient : public comm::ITcpAsyncClient
     comm::codec::CodecFactoryCallback codec_factory_;  ///< codec 工厂
     std::any context_;                 ///< 用户上下文（建连时同步到连接）
     bool autoreconnect_{false};        ///< 自动重连标志（透传给 error 回调）
-    bool deferred_notify_{false};      ///< 是否合并批次通知
     ErrorCode last_error_ = ErrorCode::kOk;  ///< 最近一次 Connect 错误码
     int last_sys_errno_   = 0;               ///< 最近一次 Connect 的 errno
-    EventLoop::HookId post_hook_ = 0;        ///< 延迟通知钩子 ID
     uint32_t init_buffer_size_{128 * 1024};    ///< 编码缓冲初始大小（同框架默认）
     uint32_t max_buffer_size_{1024 * 1024};    ///< 编码缓冲上限（同框架默认）
 };

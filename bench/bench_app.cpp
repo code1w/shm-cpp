@@ -3,12 +3,11 @@
  * @brief 上层接口吞吐基准：ShmServer + ShmAsyncClient + SimplePodCodec
  *
  * 服务端对每个 Heartbeat 请求回一个 Heartbeat；客户端按批发送请求，
- * 收到本批全部响应后发下一批。用于对比：
- *   - 每消息立即通知（--immediate）
- *   - 事件循环批次末尾合并通知（默认，延迟通知）
+ * 收到本批全部响应后发下一批。通知由 reader_wait 按需抑制：
+ * 读方处理中不写 eventfd，仅在其睡眠时通知。
  *
  * 用法：
- *   ./bench_app [batch_size] [--immediate]
+ *   ./bench_app [batch_size] [--big|--huge]
  */
 
 #include <shm_ipc/bench_common.hpp>
@@ -56,7 +55,6 @@ enum class BenchKind
 };
 
 int        g_batch     = 64;
-bool       g_immediate = false;
 BenchKind  g_kind      = BenchKind::kSmall;
 int        g_total     = 1000000;
 
@@ -153,9 +151,7 @@ int main(int argc, char *argv[])
 
     for (int i = 1; i < argc; ++i)
     {
-        if (std::strcmp(argv[i], "--immediate") == 0)
-            g_immediate = true;
-        else if (std::strcmp(argv[i], "--big") == 0)
+        if (std::strcmp(argv[i], "--big") == 0)
             g_kind = BenchKind::kBig4K;
         else if (std::strcmp(argv[i], "--huge") == 0)
             g_kind = BenchKind::kHuge1M;
@@ -179,7 +175,6 @@ int main(int argc, char *argv[])
     server.SetCodecFactory([] {
         return std::make_shared<shm::codec::SimplePodCodec>();
     });
-    server.SetDeferredNotify(!g_immediate);
     server.SetConnectionCallback([](const comm::TcpConnPtr &) {});
     server.SetCloseCallback([](const comm::TcpConnPtr &) {});
     server.SetMessageCallback([](const comm::TcpConnPtr &conn,
@@ -194,7 +189,6 @@ int main(int argc, char *argv[])
     client.SetCodecFactory([] {
         return std::make_shared<shm::codec::SimplePodCodec>();
     });
-    client.SetDeferredNotify(!g_immediate);
 
     client.SetConnectionCallback([&](const comm::TcpConnPtr &conn) {
         g_t0 = NowNs();
@@ -214,10 +208,9 @@ int main(int argc, char *argv[])
             double   mbps    = static_cast<double>(g_total) * KindPayloadSize() /
                             secs / (1024.0 * 1024.0);
             std::printf(
-                "type=%-6s batch=%4d mode=%-9s total=%d time=%7.3fs "
+                "type=%-6s batch=%4d total=%d time=%7.3fs "
                 "rate=%9.0f msg/s  %8.1f MB/s\n",
-                KindName(), g_batch,
-                g_immediate ? "immediate" : "deferred", g_total, secs,
+                KindName(), g_batch, g_total, secs,
                 g_total / secs, mbps);
             g_done.store(true, std::memory_order_release);
             client_loop.Stop();

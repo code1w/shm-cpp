@@ -120,11 +120,7 @@ class ShmConnection : public comm::ITcpConnection,
                     if (len == need)
                     {
                         batch.CommitReserve(static_cast<uint32_t>(len));
-                        batch.FlushNoNotify();  // 通知由下方策略统一处理
-                        if (defer_notify_)
-                            notify_pending_ = true;
-                        else
-                            channel_.NotifyPeer();
+                        batch.Flush();  // 发布 write_pos 并按需通知对端
                         return true;
                     }
 
@@ -180,8 +176,6 @@ class ShmConnection : public comm::ITcpConnection,
      */
     void Close() override
     {
-        // 关闭前把延迟通知发出去，避免已写入环中的数据静默滞留
-        FlushNotify();
         if (state_ == comm::TcpConnStates::established ||
             state_ == comm::TcpConnStates::verifing)
         {
@@ -282,26 +276,6 @@ class ShmConnection : public comm::ITcpConnection,
     /// @brief 访问底层通道（批量写入等高级用法）
     DefaultRingChannel &Channel() noexcept { return channel_; }
 
-    /**
-     * @brief 开启/关闭延迟通知（由 owner 在注册 post-dispatch 钩子后开启）
-     *
-     * 开启后，SendCmd 在事件循环分发批次内只标记 pending，由 owner 在
-     * 批次结束时调用 FlushNotify() 合并为一次 eventfd 通知。首条消息
-     * 的延迟上限为"当前分发批次剩余时间"，不会跨越 poll 等待。
-     */
-    void SetDeferNotify(bool on) noexcept { defer_notify_ = on; }
-
-    /**
-     * @brief 立即发送待处理的合并通知（幂等；无线程安全问题）
-     */
-    void FlushNotify() noexcept
-    {
-        if (!notify_pending_)
-            return;
-        notify_pending_ = false;
-        channel_.NotifyPeer();
-    }
-
     // ------------------------------------------------------------------
     // owner 驱动接口（ShmServer / ShmAsyncClient 调用，应用层勿直接调用）
     // ------------------------------------------------------------------
@@ -354,7 +328,6 @@ class ShmConnection : public comm::ITcpConnection,
      */
     void OnClose()
     {
-        FlushNotify();
         if (state_ != comm::TcpConnStates::closeed)
         {
             state_ = comm::TcpConnStates::closeed;
@@ -584,10 +557,7 @@ class ShmConnection : public comm::ITcpConnection,
             p += chunk;
             left -= chunk;
         }
-        if (defer_notify_)
-            notify_pending_ = true;  // 由 owner 的 post-dispatch 钩子合并发出
-        else
-            channel_.NotifyPeer();
+        channel_.NotifyPeer();
         return true;
     }
 
@@ -650,8 +620,6 @@ class ShmConnection : public comm::ITcpConnection,
     comm::CloseType close_type_{comm::CloseType::Passive};    ///< 关闭类型
     comm::TcpConnType conntype_{comm::TcpConnType::Unknown};  ///< 连接类型
     bool keepalive_{false};          ///< 是否自动响应心跳包
-    bool defer_notify_{false};       ///< 是否把通知延迟到事件循环批次末尾
-    bool notify_pending_{false};     ///< 是否存在待发送的合并通知
     std::vector<char> encode_buf_;   ///< 编码缓冲区
     std::vector<char> staging_;      ///< 跨环尾解码线性化缓冲（惰性分配）
     size_t max_buffer_size_ = 1024 * 1024;  ///< 编码缓冲上限

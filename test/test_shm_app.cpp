@@ -89,7 +89,6 @@ int main()
     shm::ShmServer server(&server_loop, kTestSock, "test_server");
 
     std::atomic<int> conn_count{0};
-    server.SetDeferredNotify(true);  // 覆盖事件循环批次合并通知路径
     server.SetCodecFactory([] {
         return std::make_shared<shm::codec::SimplePodCodec>();
     });
@@ -186,7 +185,6 @@ int main()
     {
         shm::EventLoop client_loop;
         shm::ShmAsyncClient async_client(&client_loop);
-        async_client.SetDeferredNotify(true);  // 覆盖客户端延迟通知路径
 
         std::atomic<int> client_msgs{0};
         std::atomic<bool> conn_ok{false};

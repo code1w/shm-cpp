@@ -140,14 +140,6 @@ class ChannelBatchWriter
         return n;
     }
 
-    /**
-     * @brief 发布所有累积写入，但不通知对端
-     *
-     * 供需要自行合并通知的调用方使用（如 ShmConnection 的延迟通知）。
-     * @return 自上次 Flush 以来的写入次数
-     */
-    int FlushNoNotify() { return batch_.Flush(); }
-
     /** @brief 自上次 Flush 以来已成功 TryWrite 的次数 */
     int Count() const noexcept { return batch_.Count(); }
 
