@@ -26,7 +26,9 @@ shm::EventLoop* gLoop = nullptr;
 void SignalHandler(int /*signo*/)
 {
     if (gLoop)
+    {
         gLoop->Stop();
+    }
 }
 
 }  // anonymous namespace
@@ -58,12 +60,16 @@ int main()
     client.SetCloseCallback([](const comm::TcpConnPtr&) {
         std::printf("client: connection closed\n");
         if (gLoop)
+        {
             gLoop->Stop();
+        }
     });
     client.SetConnectErrorCallback([](bool /*autoreconnect*/, const std::string& uri) {
         std::fprintf(stderr, "client: connect failed: %s\n", uri.c_str());
         if (gLoop)
+        {
             gLoop->Stop();
+        }
     });
     // 消息回调：std::any 模型，与框架 AnyMessageCallback 一致
     client.SetMessageCallback([](const comm::TcpConnPtr&, const std::any& pkg) {
@@ -76,7 +82,9 @@ int main()
 
     client.Connect(shm::kDefaultSocketPath);
     if (client.State() != comm::TcpClientStates::established)
+    {
         return 1;
+    }
 
     // 定时发送 ClientMsg
     int tick          = 0;
@@ -101,7 +109,9 @@ int main()
             std::memset(msg.payload, 'C', msg.payload_len);
 
             if (!client.SendCmd(msg))
+            {
                 std::fprintf(stderr, "client: [tick=%d] send failed\n", tick);
+            }
         },
         &timer_fd);
     if (ec != shm::ErrorCode::kOk)

@@ -30,13 +30,13 @@
 struct TestBigPod
 {
     uint64_t seq;
-    uint8_t  data[4096];
+    uint8_t data[4096];
 };
 SHM_IPC_REGISTER_POD(TestBigPod, 0x54424750);
 
 namespace {
 
-constexpr const char *kTestSock = "/tmp/test-shm-app.socket";
+constexpr const char* kTestSock = "/tmp/test-shm-app.socket";
 
 /// 等待条件成立，最多 timeout_ms 毫秒
 template <typename Pred>
@@ -45,7 +45,9 @@ bool WaitFor(Pred pred, int timeout_ms)
     for (int i = 0; i * 10 < timeout_ms; ++i)
     {
         if (pred())
+        {
             return true;
+        }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     return pred();
@@ -72,12 +74,12 @@ int main()
 
         std::any out;
         assert(codec.Decode(buf.data(), static_cast<size_t>(n), out, &sz) == n);
-        auto *first = std::any_cast<TestBigPod>(&out);
+        auto* first = std::any_cast<TestBigPod>(&out);
         assert(first != nullptr && first->seq == 42);
 
         // 同类型再次解码：应复用同一块 any 存储（地址不变）
         assert(codec.Decode(buf.data(), static_cast<size_t>(n), out, &sz) == n);
-        auto *second = std::any_cast<TestBigPod>(&out);
+        auto* second = std::any_cast<TestBigPod>(&out);
         assert(second == first && second->seq == 42);
         std::printf("part0: big-pod any reuse OK\n");
     }
@@ -89,14 +91,11 @@ int main()
     shm::ShmServer server(&server_loop, kTestSock, "test_server");
 
     std::atomic<int> conn_count{0};
-    server.SetCodecFactory([] {
-        return std::make_shared<shm::codec::SimplePodCodec>();
-    });
-    server.SetConnectionCallback([&](const comm::TcpConnPtr &) { ++conn_count; });
-    server.SetCloseCallback([&](const comm::TcpConnPtr &) { --conn_count; });
-    server.SetMessageCallback([](const comm::TcpConnPtr &conn,
-                                 const std::any &pkg) {
-        if (const auto *hb = std::any_cast<Heartbeat>(&pkg))
+    server.SetCodecFactory([] { return std::make_shared<shm::codec::SimplePodCodec>(); });
+    server.SetConnectionCallback([&](const comm::TcpConnPtr&) { ++conn_count; });
+    server.SetCloseCallback([&](const comm::TcpConnPtr&) { --conn_count; });
+    server.SetMessageCallback([](const comm::TcpConnPtr& conn, const std::any& pkg) {
+        if (const auto* hb = std::any_cast<Heartbeat>(&pkg))
         {
             Heartbeat reply = *hb;
             reply.client_id = static_cast<int32_t>(conn->Id());
@@ -124,8 +123,7 @@ int main()
             Heartbeat hb{0, i, 1000 + i};
 
             size_t size = 0;
-            int32_t len = codec.Encode(hb, reinterpret_cast<comm::byte *>(buf),
-                                       sizeof(buf), &size);
+            int32_t len = codec.Encode(hb, reinterpret_cast<comm::byte*>(buf), sizeof(buf), &size);
             assert(len > 0);
             assert(client.SendMessage(buf, len) == len);
 
@@ -134,10 +132,10 @@ int main()
 
             std::any pkg;
             size_t consumed = 0;
-            int32_t dlen = codec.Decode(reinterpret_cast<const comm::byte *>(buf),
-                                        static_cast<size_t>(n), pkg, &consumed);
+            int32_t dlen =
+                codec.Decode(reinterpret_cast<const comm::byte*>(buf), static_cast<size_t>(n), pkg, &consumed);
             assert(dlen == n);
-            const auto &out = std::any_cast<const Heartbeat &>(pkg);
+            const auto& out = std::any_cast<const Heartbeat&>(pkg);
             assert(out.seq == i);
             assert(out.timestamp == 1000 + i);
             assert(out.client_id > 0);  // server 回填了连接 ID
@@ -147,28 +145,28 @@ int main()
         {
             Heartbeat hb{0, 6, 1006};
             size_t size = 0;
-            int32_t len = codec.Encode(hb, reinterpret_cast<comm::byte *>(buf),
-                                       sizeof(buf), &size);
+            int32_t len = codec.Encode(hb, reinterpret_cast<comm::byte*>(buf), sizeof(buf), &size);
             assert(len > 0);
             assert(client.SendMessage(buf, len) == len);
 
-            const void *s1 = nullptr;
-            const void *s2 = nullptr;
+            const void* s1 = nullptr;
+            const void* s2 = nullptr;
             uint32_t l1 = 0, l2 = 0;
             int total = client.PeekMessage(&s1, &l1, &s2, &l2, 3000);
             assert(total > 0 && static_cast<size_t>(total) <= sizeof(buf));
 
             std::memcpy(buf, s1, l1);
             if (l2 > 0)
+            {
                 std::memcpy(buf + l1, s2, l2);
+            }
 
             std::any pkg;
             size_t consumed = 0;
-            int32_t dlen = codec.Decode(
-                reinterpret_cast<const comm::byte *>(buf),
-                static_cast<size_t>(total), pkg, &consumed);
+            int32_t dlen =
+                codec.Decode(reinterpret_cast<const comm::byte*>(buf), static_cast<size_t>(total), pkg, &consumed);
             assert(dlen == total);
-            const auto &out = std::any_cast<const Heartbeat &>(pkg);
+            const auto& out = std::any_cast<const Heartbeat&>(pkg);
             assert(out.seq == 6 && out.timestamp == 1006);
             client.CommitMessage(static_cast<uint32_t>(total));
             std::printf("part1b: zero-copy peek/commit OK\n");
@@ -190,23 +188,20 @@ int main()
         std::atomic<bool> conn_ok{false};
         std::atomic<bool> closed{false};
 
-        async_client.SetCodecFactory([] {
-            return std::make_shared<shm::codec::SimplePodCodec>();
-        });
-        async_client.SetConnectionCallback([&](const comm::TcpConnPtr &conn) {
+        async_client.SetCodecFactory([] { return std::make_shared<shm::codec::SimplePodCodec>(); });
+        async_client.SetConnectionCallback([&](const comm::TcpConnPtr& conn) {
             conn_ok = true;
             Heartbeat hb{0, 99, 7777};
             assert(conn->SendCmd(hb));
         });
-        async_client.SetMessageCallback([&](const comm::TcpConnPtr &,
-                                            const std::any &pkg) {
-            const auto &hb = std::any_cast<const Heartbeat &>(pkg);
+        async_client.SetMessageCallback([&](const comm::TcpConnPtr&, const std::any& pkg) {
+            const auto& hb = std::any_cast<const Heartbeat&>(pkg);
             assert(hb.seq == 99);
             assert(hb.timestamp == 7777);
             ++client_msgs;
             async_client.Close();  // 回调内主动关闭
         });
-        async_client.SetCloseCallback([&](const comm::TcpConnPtr &) {
+        async_client.SetCloseCallback([&](const comm::TcpConnPtr&) {
             closed = true;
             client_loop.Stop();
         });
@@ -219,7 +214,9 @@ int main()
         });
 
         if (!WaitFor([&] { return client_msgs.load() >= 1; }, 3000))
+        {
             client_loop.Stop();  // 兜底，避免挂死
+        }
         client_thread.join();
 
         assert(client_msgs.load() >= 1);
@@ -231,7 +228,7 @@ int main()
 
     // ------------------------------------------------------------------
     // Part 3: verifing 中析构 ShmAsyncClient，挂起的验证定时器必须被摘除
-    //（回归：析构曾只 RemoveFd 不 Close，验证定时器回调捕获裸 this，
+    // （回归：析构曾只 RemoveFd 不 Close，验证定时器回调捕获裸 this，
     //  连接释放后触发即 use-after-free）
     // ------------------------------------------------------------------
     {
@@ -241,20 +238,15 @@ int main()
         {
             shm::ShmAsyncClient async_client(&client_loop);
 
-            async_client.SetCodecFactory([] {
-                return std::make_shared<shm::codec::SimplePodCodec>();
-            });
-            async_client.SetConnectionCallback([](const comm::TcpConnPtr &) {});
-            async_client.SetMessageCallback([](const comm::TcpConnPtr &,
-                                               const std::any &) {});
-            async_client.SetCloseCallback([](const comm::TcpConnPtr &) {});
-            async_client.SetVerifyCallback([&](const comm::TcpConnPtr &conn) {
+            async_client.SetCodecFactory([] { return std::make_shared<shm::codec::SimplePodCodec>(); });
+            async_client.SetConnectionCallback([](const comm::TcpConnPtr&) {});
+            async_client.SetMessageCallback([](const comm::TcpConnPtr&, const std::any&) {});
+            async_client.SetCloseCallback([](const comm::TcpConnPtr&) {});
+            async_client.SetVerifyCallback([&](const comm::TcpConnPtr& conn) {
                 // 挂 500ms 验证超时定时器，故意不回调 OnVerify。
                 // 时序：Stop 在 ~60ms 内生效（Run 用 50ms poll 粒度），
                 // 定时器 500ms 才到期，保证它活到析构之后
-                conn->StartVerifyTimer(500, 0, [&](int64_t) {
-                    timer_fired = true;
-                });
+                conn->StartVerifyTimer(500, 0, [&](int64_t) { timer_fired = true; });
                 verify_started = true;
             });
 
@@ -285,13 +277,10 @@ int main()
     {
         shm::EventLoop idle_loop;
         shm::ShmServer server2(&idle_loop, "/tmp/test-shm-app-dbl.socket", "dbl");
-        server2.SetCodecFactory([] {
-            return std::make_shared<shm::codec::SimplePodCodec>();
-        });
-        server2.SetConnectionCallback([](const comm::TcpConnPtr &) {});
-        server2.SetMessageCallback([](const comm::TcpConnPtr &,
-                                      const std::any &) {});
-        server2.SetCloseCallback([](const comm::TcpConnPtr &) {});
+        server2.SetCodecFactory([] { return std::make_shared<shm::codec::SimplePodCodec>(); });
+        server2.SetConnectionCallback([](const comm::TcpConnPtr&) {});
+        server2.SetMessageCallback([](const comm::TcpConnPtr&, const std::any&) {});
+        server2.SetCloseCallback([](const comm::TcpConnPtr&) {});
 
         assert(server2.Start());
         assert(server2.Start());  // 回归：此处曾 std::terminate

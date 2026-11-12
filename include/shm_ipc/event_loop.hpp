@@ -78,7 +78,9 @@ class EventLoop
     ErrorCode AddPostDispatchHook(Hook hook, HookId* out)
     {
         if (!out || !hook)
+        {
             return ErrorCode::kInvalidArgument;
+        }
         HookId id = next_hook_id_++;
         try
         {
@@ -96,10 +98,14 @@ class EventLoop
     void RemovePostDispatchHook(HookId id)
     {
         if (id == 0)
+        {
             return;
+        }
         auto it = std::find_if(post_hooks_.begin(), post_hooks_.end(), [id](const auto& p) { return p.first == id; });
         if (it != post_hooks_.end())
+        {
             post_hooks_.erase(it);
+        }
     }
 
     /**
@@ -114,8 +120,12 @@ class EventLoop
     void RemoveFd(int fd)
     {
         for (auto& e : entries_)
+        {
             if (e.fd == fd)
+            {
                 e.dead = true;
+            }
+        }
     }
 
     /**
@@ -132,12 +142,16 @@ class EventLoop
     ErrorCode AddTimer(int interval_ms, Callback cb, int* out_tfd, int* sys_errno = nullptr)
     {
         if (!out_tfd)
+        {
             return ErrorCode::kInvalidArgument;
+        }
 
         int tfd      = -1;
         ErrorCode ec = CreateTimerfd(interval_ms, interval_ms, &tfd, sys_errno);
         if (ec != ErrorCode::kOk)
+        {
             return ec;
+        }
 
         try
         {
@@ -175,12 +189,16 @@ class EventLoop
     ErrorCode AddOneShotTimer(int delay_ms, Callback cb, int* out_tfd, int* sys_errno = nullptr)
     {
         if (!out_tfd)
+        {
             return ErrorCode::kInvalidArgument;
+        }
 
         int tfd      = -1;
         ErrorCode ec = CreateTimerfd(delay_ms, 0, &tfd, sys_errno);
         if (ec != ErrorCode::kOk)
+        {
             return ec;
+        }
 
         try
         {
@@ -259,7 +277,9 @@ class EventLoop
                 for (std::size_t k = 0; k < entries_.size(); ++k)
                 {
                     if (entries_[k].dead)
+                    {
                         continue;
+                    }
                     pfds.push_back({entries_[k].fd, entries_[k].events, 0});
                     idx.push_back(k);
                 }
@@ -274,9 +294,13 @@ class EventLoop
             if (ret < 0)
             {
                 if (errno == EINTR)
+                {
                     continue;
+                }
                 if (sys_errno)
+                {
                     *sys_errno = errno;
+                }
                 running_.store(false, std::memory_order_relaxed);
                 return ErrnoToErrorCode(errno);
             }
@@ -289,7 +313,9 @@ class EventLoop
                 {
                     Entry& e = entries_[idx[i]];
                     if (!e.dead && pfds[i].revents != 0 && e.cb)
+                    {
                         e.cb(pfds[i].fd, pfds[i].revents);
+                    }
                 }
             }
             catch (const std::bad_alloc&)
@@ -345,13 +371,17 @@ class EventLoop
     static ErrorCode CreateTimerfd(int initial_ms, int interval_ms, int* out_fd, int* sys_errno) noexcept
     {
         if (!out_fd)
+        {
             return ErrorCode::kInvalidArgument;
+        }
 
         int tfd = ::timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC);
         if (tfd < 0)
         {
             if (sys_errno)
+            {
                 *sys_errno = errno;
+            }
             return ErrnoToErrorCode(errno);
         }
 
@@ -379,7 +409,9 @@ class EventLoop
             const int err = errno;
             ::close(tfd);
             if (sys_errno)
+            {
                 *sys_errno = err;
+            }
             return ErrnoToErrorCode(err);
         }
         *out_fd = tfd;
@@ -401,7 +433,9 @@ class EventLoop
         try
         {
             for (auto& h : post_hooks_)
+            {
                 h.second();
+            }
         }
         catch (...)
         {
@@ -415,7 +449,9 @@ class EventLoop
         auto it = std::find_if(owned_timerfds_.begin(), owned_timerfds_.end(),
                                [tfd](const UniqueFd& u) { return u.Get() == tfd; });
         if (it != owned_timerfds_.end())
+        {
             owned_timerfds_.erase(it);
+        }
     }
 
     /** @brief 回收所有墓碑条目（仅在非分发阶段调用） */

@@ -52,19 +52,18 @@ Ch CreateChannelOrAbort(int fd, shm::ChannelRole role)
     shm::ErrorCode ec = Ch::CreateRingChannel(fd, role, &ch);
     if (ec != shm::ErrorCode::kOk)
     {
-        std::fprintf(stderr, "FAIL: CreateRingChannel: %s\n",
-                     shm::ErrorCodeName(ec));
+        std::fprintf(stderr, "FAIL: CreateRingChannel: %s\n", shm::ErrorCodeName(ec));
         std::abort();
     }
     return ch;
 }
 
 constexpr uint32_t kMagicPayloadLen = 2048;
-constexpr char     kFillByte        = 'X';
-constexpr int32_t  kSeq             = 42;
-constexpr int32_t  kTick            = 7;
-constexpr int64_t  kTimestamp       = 1234567890;
-constexpr uint32_t kMsgSeq         = 99;
+constexpr char kFillByte            = 'X';
+constexpr int32_t kSeq              = 42;
+constexpr int32_t kTick             = 7;
+constexpr int64_t kTimestamp        = 1234567890;
+constexpr uint32_t kMsgSeq          = 99;
 
 /// 构造一个已知内容的 ClientMsg
 ClientMsg MakeTestMsg()
@@ -81,13 +80,33 @@ ClientMsg MakeTestMsg()
 /// 校验解码出的 ClientMsg 内容完全一致
 void VerifyMsg(const ClientMsg& msg)
 {
-    if (msg.seq != kSeq) { std::fprintf(stderr, "FAIL: seq\n"); std::abort(); }
-    if (msg.tick != kTick) { std::fprintf(stderr, "FAIL: tick\n"); std::abort(); }
-    if (msg.timestamp != kTimestamp) { std::fprintf(stderr, "FAIL: timestamp\n"); std::abort(); }
-    if (msg.payload_len != kMagicPayloadLen) { std::fprintf(stderr, "FAIL: payload_len\n"); std::abort(); }
+    if (msg.seq != kSeq)
+    {
+        std::fprintf(stderr, "FAIL: seq\n");
+        std::abort();
+    }
+    if (msg.tick != kTick)
+    {
+        std::fprintf(stderr, "FAIL: tick\n");
+        std::abort();
+    }
+    if (msg.timestamp != kTimestamp)
+    {
+        std::fprintf(stderr, "FAIL: timestamp\n");
+        std::abort();
+    }
+    if (msg.payload_len != kMagicPayloadLen)
+    {
+        std::fprintf(stderr, "FAIL: payload_len\n");
+        std::abort();
+    }
     for (uint32_t i = 0; i < kMagicPayloadLen; ++i)
     {
-        if (msg.payload[i] != kFillByte) { std::fprintf(stderr, "FAIL: payload[%u]\n", i); std::abort(); }
+        if (msg.payload[i] != kFillByte)
+        {
+            std::fprintf(stderr, "FAIL: payload[%u]\n", i);
+            std::abort();
+        }
     }
     std::printf("  PASS: all fields match\n");
 }
@@ -100,29 +119,27 @@ void TestEncodeDecode()
 {
     std::printf("--- Test 1: Encode/Decode round-trip ---\n");
 
-    const char data[] = "hello codec";
-    uint32_t data_len = static_cast<uint32_t>(std::strlen(data));
+    const char data[]      = "hello codec";
+    uint32_t data_len      = static_cast<uint32_t>(std::strlen(data));
     constexpr uint32_t seq = 777;
 
     char buf[256];
     uint32_t frame_size = shm::Encode(data, data_len, buf, sizeof(buf), seq);
-    if (frame_size == 0 ||
-        frame_size != shm::kMsgHeaderSize + data_len)
+    if (frame_size == 0 || frame_size != shm::kMsgHeaderSize + data_len)
     {
         std::fprintf(stderr, "FAIL: Encode\n");
         std::abort();
     }
 
-    const void *out_payload = nullptr;
-    uint32_t out_len = 0;
-    uint32_t out_seq = 0;
+    const void* out_payload = nullptr;
+    uint32_t out_len        = 0;
+    uint32_t out_seq        = 0;
     if (!shm::Decode(buf, frame_size, &out_payload, &out_len, &out_seq))
     {
         std::fprintf(stderr, "FAIL: Decode\n");
         std::abort();
     }
-    if (out_len != data_len || out_seq != seq ||
-        std::memcmp(out_payload, data, data_len) != 0)
+    if (out_len != data_len || out_seq != seq || std::memcmp(out_payload, data, data_len) != 0)
     {
         std::fprintf(stderr, "FAIL: field mismatch\n");
         std::abort();
@@ -172,9 +189,9 @@ void TestEncodePodDecodePod()
     }
 
     // Decode 帧头
-    const void *payload = nullptr;
+    const void* payload  = nullptr;
     uint32_t payload_len = 0;
-    uint32_t recv_seq = 0;
+    uint32_t recv_seq    = 0;
     if (!shm::Decode(buf, frame_size, &payload, &payload_len, &recv_seq))
     {
         std::fprintf(stderr, "FAIL: Decode\n");
@@ -187,8 +204,8 @@ void TestEncodePodDecodePod()
         std::fprintf(stderr, "FAIL: payload too small\n");
         std::abort();
     }
-    const void *pod_data = static_cast<const char *>(payload) + shm::kTagSize;
-    uint32_t pod_len = payload_len - shm::kTagSize;
+    const void* pod_data = static_cast<const char*>(payload) + shm::kTagSize;
+    uint32_t pod_len     = payload_len - shm::kTagSize;
 
     // DecodePod
     Heartbeat out{};
@@ -249,8 +266,8 @@ void RunReceiverBasic(int socket_fd)
     }
     Channel::DrainNotify(efd);
 
-    uint32_t tag = 0;
-    const void *payload = nullptr;
+    uint32_t tag         = 0;
+    const void* payload  = nullptr;
     uint32_t payload_len = 0;
     if (reader.TryRecv(ch, &payload, &payload_len) != 0)
     {
@@ -260,8 +277,8 @@ void RunReceiverBasic(int socket_fd)
 
     // payload = [tag u32][ClientMsg bytes]
     std::memcpy(&tag, payload, shm::kTagSize);
-    const void *pod_data = static_cast<const char *>(payload) + shm::kTagSize;
-    uint32_t pod_len = payload_len - shm::kTagSize;
+    const void* pod_data = static_cast<const char*>(payload) + shm::kTagSize;
+    uint32_t pod_len     = payload_len - shm::kTagSize;
 
     ClientMsg out{};
     if (!shm::PodCodec<ClientMsg>::DecodeFrom(pod_data, pod_len, &out))
@@ -329,7 +346,7 @@ void RunReceiverByteByByte(int socket_fd)
     constexpr uint32_t frame_size = shm::kMsgHeaderSize + shm::kTagSize + sizeof(ClientMsg);
     std::printf("receiver(byte-by-byte): expecting frame_size=%u, polling...\n", frame_size);
 
-    const void *payload = nullptr;
+    const void* payload  = nullptr;
     uint32_t payload_len = 0;
 
     while (!decoded)
@@ -347,12 +364,14 @@ void RunReceiverByteByByte(int socket_fd)
         ++wakeups;
 
         if (reader.TryRecv(ch, &payload, &payload_len) == 0)
+        {
             decoded = true;
+        }
     }
 
     // payload = [tag u32][ClientMsg bytes]
-    const void *pod_data = static_cast<const char *>(payload) + shm::kTagSize;
-    uint32_t pod_len = payload_len - shm::kTagSize;
+    const void* pod_data = static_cast<const char*>(payload) + shm::kTagSize;
+    uint32_t pod_len     = payload_len - shm::kTagSize;
 
     ClientMsg out{};
     if (!shm::PodCodec<ClientMsg>::DecodeFrom(pod_data, pod_len, &out))
@@ -379,7 +398,7 @@ void RunSenderVar(int socket_fd)
 {
     auto ch = CreateChannelOrAbort<Channel>(socket_fd, shm::ChannelRole::kServer);
 
-    const char *msgs[] = {"short", "medium length message for testing",
+    const char* msgs[] = {"short", "medium length message for testing",
                           "a]longer]payload]with]various]characters]0123456789"};
     for (int i = 0; i < 3; ++i)
     {
@@ -406,14 +425,14 @@ void RunReceiverVar(int socket_fd)
 
     shm::FrameReader<> reader;
 
-    const char *expected[] = {"short", "medium length message for testing",
+    const char* expected[] = {"short", "medium length message for testing",
                               "a]longer]payload]with]various]characters]0123456789"};
 
     for (int i = 0; i < 3; ++i)
     {
-        const void *payload = nullptr;
+        const void* payload  = nullptr;
         uint32_t payload_len = 0;
-        int rc = reader.TryRecv(ch, &payload, &payload_len);
+        int rc               = reader.TryRecv(ch, &payload, &payload_len);
 
         while (rc != 0)
         {
@@ -430,11 +449,9 @@ void RunReceiverVar(int socket_fd)
         }
 
         uint32_t expected_len = static_cast<uint32_t>(std::strlen(expected[i]));
-        if (payload_len != expected_len ||
-            std::memcmp(payload, expected[i], expected_len) != 0)
+        if (payload_len != expected_len || std::memcmp(payload, expected[i], expected_len) != 0)
         {
-            std::fprintf(stderr, "FAIL: msg[%d] content mismatch (len=%u)\n",
-                         i, payload_len);
+            std::fprintf(stderr, "FAIL: msg[%d] content mismatch (len=%u)\n", i, payload_len);
             std::abort();
         }
         if (reader.LastSeq() != kVarSeq + static_cast<uint32_t>(i))
@@ -461,7 +478,7 @@ void TestTagValidation()
     std::printf("--- Test 6: type tag validation + Decode overflow guard ---\n");
 
     // 编码一条 ClientMsg 帧
-    ClientMsg msg = MakeTestMsg();
+    ClientMsg msg             = MakeTestMsg();
     constexpr uint32_t kFrame = shm::kMsgHeaderSize + shm::kTagSize + sizeof(ClientMsg);
     char buf[kFrame];
     if (shm::PodCodec<ClientMsg>::EncodeTo(msg, buf, kFrame, kMsgSeq) != kFrame)
@@ -470,7 +487,7 @@ void TestTagValidation()
         std::abort();
     }
 
-    const void *payload = nullptr;
+    const void* payload  = nullptr;
     uint32_t payload_len = 0;
     if (!shm::Decode(buf, kFrame, &payload, &payload_len, nullptr))
     {
@@ -480,12 +497,11 @@ void TestTagValidation()
 
     shm::PodCodec<ClientMsg> good_codec;
     shm::PodCodec<Heartbeat> bad_codec;
-    const void *data = nullptr;
+    const void* data  = nullptr;
     uint32_t data_len = 0;
 
     // 类型匹配：必须通过
-    if (!good_codec.DecodePayload(payload, payload_len, &data, &data_len) ||
-        data_len != sizeof(ClientMsg))
+    if (!good_codec.DecodePayload(payload, payload_len, &data, &data_len) || data_len != sizeof(ClientMsg))
     {
         std::fprintf(stderr, "FAIL: matching tag wrongly rejected\n");
         std::abort();
@@ -634,7 +650,7 @@ void RunReceiverLargeFrame(int socket_fd)
 
     // 回退缓冲区仅 128B，但帧连续存放在环内，零拷贝快速路径不应受限
     shm::FrameReader<128> reader;
-    const void *payload = nullptr;
+    const void* payload  = nullptr;
     uint32_t payload_len = 0;
     if (reader.TryRecv(ch, &payload, &payload_len) != 0)
     {
@@ -646,7 +662,7 @@ void RunReceiverLargeFrame(int socket_fd)
         std::fprintf(stderr, "FAIL: large frame len=%u\n", payload_len);
         std::abort();
     }
-    auto *p = static_cast<const char *>(payload);
+    auto* p = static_cast<const char*>(payload);
     for (uint32_t i = 0; i < kLargePayloadLen; ++i)
     {
         if (p[i] != 'L')
@@ -656,8 +672,7 @@ void RunReceiverLargeFrame(int socket_fd)
         }
     }
 
-    std::printf("  PASS: %u-byte frame zero-copied with BufSize=128\n",
-                kLargePayloadLen);
+    std::printf("  PASS: %u-byte frame zero-copied with BufSize=128\n", kLargePayloadLen);
 
     char ack = 1;
     ::write(socket_fd, &ack, 1);
@@ -679,8 +694,7 @@ void RunSenderPoison(int socket_fd)
 
     // 阶段 1：两条填充帧把写位置推到环尾附近
     std::vector<char> filler(kFillerLen, 'F');
-    if (shm::Send(ch, filler.data(), kFillerLen, 1) != 0 ||
-        shm::Send(ch, filler.data(), kFillerLen, 2) != 0)
+    if (shm::Send(ch, filler.data(), kFillerLen, 1) != 0 || shm::Send(ch, filler.data(), kFillerLen, 2) != 0)
     {
         std::fprintf(stderr, "FAIL: Send filler\n");
         std::abort();
@@ -720,7 +734,7 @@ void RunReceiverPoison(int socket_fd)
     pfd.fd     = efd;
     pfd.events = POLLIN;
 
-    const void *payload = nullptr;
+    const void* payload  = nullptr;
     uint32_t payload_len = 0;
 
     // 事件通知与数据到达不严格同步：发送方每条 Send 各写一次 eventfd，
@@ -728,13 +742,14 @@ void RunReceiverPoison(int socket_fd)
     // （彼时数据尚未写入环，TryRecv 返回 -1）。统一采用"先试读，
     // -1 再 poll 等待"的次序（与 ShmClient::ReadMessage 一致），
     // 只有超时才是失败
-    auto recv_wait = [&](const char *what) -> int
-    {
+    auto recv_wait = [&](const char* what) -> int {
         for (;;)
         {
             int rc = reader.TryRecv(ch, &payload, &payload_len);
             if (rc != -1)
+            {
                 return rc;
+            }
             if (::poll(&pfd, 1, 5000) <= 0)
             {
                 std::fprintf(stderr, "FAIL: poll timeout (%s)\n", what);
@@ -767,30 +782,24 @@ void RunReceiverPoison(int socket_fd)
     int rc = recv_wait("wrapped large");
     if (rc != 0)
     {
-        std::fprintf(stderr,
-                     "FAIL: mirrored wrapped frame should be zero-copy, got %d\n",
-                     rc);
+        std::fprintf(stderr, "FAIL: mirrored wrapped frame should be zero-copy, got %d\n", rc);
         std::abort();
     }
-    if (payload_len != kPoisonLen ||
-        std::memcmp(payload, std::string(kPoisonLen, 'P').data(),
-                    kPoisonLen) != 0)
+    if (payload_len != kPoisonLen || std::memcmp(payload, std::string(kPoisonLen, 'P').data(), kPoisonLen) != 0)
     {
         std::fprintf(stderr, "FAIL: wrapped large frame content\n");
         std::abort();
     }
 
     // 后续帧仍按序到达
-    if (recv_wait("after") != 0 || payload_len != 5 ||
-        std::memcmp(payload, "after", 5) != 0)
+    if (recv_wait("after") != 0 || payload_len != 5 || std::memcmp(payload, "after", 5) != 0)
     {
         std::fprintf(stderr, "FAIL: frame after wrapped large\n");
         std::abort();
     }
     if (reader.LastSeq() != 4)
     {
-        std::fprintf(stderr, "FAIL: seq after wrapped large = %u\n",
-                     reader.LastSeq());
+        std::fprintf(stderr, "FAIL: seq after wrapped large = %u\n", reader.LastSeq());
         std::abort();
     }
 
@@ -815,16 +824,17 @@ void RunReceiverWrappedLarge(int socket_fd)
     pfd.fd     = efd;
     pfd.events = POLLIN;
 
-    const void *payload = nullptr;
+    const void* payload  = nullptr;
     uint32_t payload_len = 0;
 
-    auto recv_wait = [&](const char *what) -> int
-    {
+    auto recv_wait = [&](const char* what) -> int {
         for (;;)
         {
             int rc = reader.TryRecv(ch, &payload, &payload_len);
             if (rc != -1)
+            {
                 return rc;
+            }
             if (::poll(&pfd, 1, 5000) <= 0)
             {
                 std::fprintf(stderr, "FAIL: poll timeout (%s)\n", what);
@@ -859,7 +869,7 @@ void RunReceiverWrappedLarge(int socket_fd)
         std::fprintf(stderr, "FAIL: wrapped large len=%u\n", payload_len);
         std::abort();
     }
-    auto *p = static_cast<const char *>(payload);
+    auto* p = static_cast<const char*>(payload);
     for (uint32_t i = 0; i < kPoisonLen; ++i)
     {
         if (p[i] != 'P')
@@ -870,15 +880,13 @@ void RunReceiverWrappedLarge(int socket_fd)
     }
 
     // 后续帧仍按序到达
-    if (recv_wait("after") != 0 || payload_len != 5 ||
-        std::memcmp(payload, "after", 5) != 0)
+    if (recv_wait("after") != 0 || payload_len != 5 || std::memcmp(payload, "after", 5) != 0)
     {
         std::fprintf(stderr, "FAIL: frame after wrapped large\n");
         std::abort();
     }
 
-    std::printf("  PASS: wrapped %u-byte frame received via dynamic fallback\n",
-                kPoisonLen);
+    std::printf("  PASS: wrapped %u-byte frame received via dynamic fallback\n", kPoisonLen);
 
     ::write(socket_fd, &ack, 1);
     ::close(socket_fd);
@@ -893,9 +901,8 @@ void TestBatchRewindCount()
     std::printf("--- Test 10: SendFrameBatch rewind restores count ---\n");
 
     // max_write_size = 2048
-    void *shm = ::mmap(nullptr, SmallChannel::Ring::shm_size,
-                       PROT_READ | PROT_WRITE,
-                       MAP_ANONYMOUS | MAP_SHARED, -1, 0);
+    void* shm =
+        ::mmap(nullptr, SmallChannel::Ring::shm_size, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_SHARED, -1, 0);
     if (shm == MAP_FAILED)
     {
         std::perror("mmap");
@@ -904,15 +911,12 @@ void TestBatchRewindCount()
     SmallChannel::Ring::Init(shm);
 
     // 直接构造通道级批量写入器（channel 指针仅用于 Flush 时通知，传 nullptr）
-    SmallChannel::ChannelBatchWriter batch(
-        SmallChannel::Ring::BatchWriter(shm), nullptr);
+    SmallChannel::ChannelBatchWriter batch(SmallChannel::Ring::BatchWriter(shm), nullptr);
 
     char data[2100]{};
 
     // 第 1 帧：合法帧（header + payload，两次 TryWrite 成功）
-    if (shm::SendFrameBatch<4096>(batch, 100, 1, [&](auto &b) {
-            b.TryWrite(data, 100);
-        }) != 0)
+    if (shm::SendFrameBatch<4096>(batch, 100, 1, [&](auto& b) { b.TryWrite(data, 100); }) != 0)
     {
         std::fprintf(stderr, "FAIL: frame1 SendFrameBatch\n");
         std::abort();
@@ -920,13 +924,12 @@ void TestBatchRewindCount()
     int count_after_frame1 = batch.Count();
     if (count_after_frame1 != 2)  // header + payload
     {
-        std::fprintf(stderr, "FAIL: count after frame1 = %d\n",
-                     count_after_frame1);
+        std::fprintf(stderr, "FAIL: count after frame1 = %d\n", count_after_frame1);
         std::abort();
     }
 
     // 第 2 帧：callback 第一次写成功、第二次写超长失败 → 触发回滚
-    int rc = shm::SendFrameBatch<4096>(batch, 4 + 2100, 2, [&](auto &b) {
+    int rc = shm::SendFrameBatch<4096>(batch, 4 + 2100, 2, [&](auto& b) {
         b.TryWrite(data, 4);     // 成功
         b.TryWrite(data, 2100);  // 失败：> max_write_size(2048)
     });
@@ -944,8 +947,7 @@ void TestBatchRewindCount()
     // 回滚必须恢复 Count：旧实现只减 1，会残留为 3
     if (batch.Count() != count_after_frame1)
     {
-        std::fprintf(stderr, "FAIL: Count after rewind = %d, expect %d\n",
-                     batch.Count(), count_after_frame1);
+        std::fprintf(stderr, "FAIL: Count after rewind = %d, expect %d\n", batch.Count(), count_after_frame1);
         std::abort();
     }
     if (batch.Flush() != count_after_frame1)
@@ -999,13 +1001,12 @@ void RunReceiverBadLen(int socket_fd)
     Channel::DrainNotify(efd);
 
     shm::FrameReader<> reader;
-    const void *payload = nullptr;
+    const void* payload  = nullptr;
     uint32_t payload_len = 0;
-    int rc = reader.TryRecv(ch, &payload, &payload_len);
+    int rc               = reader.TryRecv(ch, &payload, &payload_len);
     if (rc != -3)
     {
-        std::fprintf(stderr, "FAIL: expected -3 for impossible frame len, got %d\n",
-                     rc);
+        std::fprintf(stderr, "FAIL: expected -3 for impossible frame len, got %d\n", rc);
         std::abort();
     }
 
@@ -1110,11 +1111,12 @@ void RunSenderSplit(int socket_fd)
     // 预编码完整帧
     char payload[kSplitPayloadLen];
     for (uint32_t i = 0; i < kSplitPayloadLen; ++i)
+    {
         payload[i] = SplitByte(i);
+    }
     constexpr uint32_t kFrameSize = shm::kMsgHeaderSize + kSplitPayloadLen;
     char frame[kFrameSize];
-    if (shm::Encode(payload, kSplitPayloadLen, frame, kFrameSize, kMsgSeq)
-            != kFrameSize)
+    if (shm::Encode(payload, kSplitPayloadLen, frame, kFrameSize, kMsgSeq) != kFrameSize)
     {
         std::fprintf(stderr, "FAIL: Encode\n");
         std::abort();
@@ -1132,7 +1134,9 @@ void RunSenderSplit(int socket_fd)
         ch.NotifyPeer();
         char sync = 'a';
         if (::write(socket_fd, &sync, 1) != 1)
+        {
             std::abort();
+        }
 
         char ack = 0;
         if (::read(socket_fd, &ack, 1) != 1 || ack != '1')
@@ -1149,7 +1153,9 @@ void RunSenderSplit(int socket_fd)
         ch.NotifyPeer();
         sync = 'b';
         if (::write(socket_fd, &sync, 1) != 1)
+        {
             std::abort();
+        }
 
         if (::read(socket_fd, &ack, 1) != 1 || ack != '2')
         {
@@ -1174,34 +1180,37 @@ void RunReceiverSplit(int socket_fd)
         // 第一段到达：帧不完整，必须返回 -1 且不消费任何字节
         char sync = 0;
         if (::read(socket_fd, &sync, 1) != 1 || sync != 'a')
+        {
             std::abort();
-        const void *payload = nullptr;
+        }
+        const void* payload  = nullptr;
         uint32_t payload_len = 0;
-        int rc = reader.TryRecv(ch, &payload, &payload_len);
+        int rc               = reader.TryRecv(ch, &payload, &payload_len);
         if (rc != -1)
         {
-            std::fprintf(stderr,
-                         "FAIL: split=%u incomplete frame rc=%d (expect -1)\n",
-                         s, rc);
+            std::fprintf(stderr, "FAIL: split=%u incomplete frame rc=%d (expect -1)\n", s, rc);
             std::abort();
         }
         char ack = '1';
         if (::write(socket_fd, &ack, 1) != 1)
+        {
             std::abort();
+        }
 
         // 第二段到达：必须拆出完整帧
         if (::read(socket_fd, &sync, 1) != 1 || sync != 'b')
+        {
             std::abort();
+        }
         rc = reader.TryRecv(ch, &payload, &payload_len);
         if (rc != 0 || payload_len != kSplitPayloadLen)
         {
-            std::fprintf(stderr, "FAIL: split=%u reassembly rc=%d len=%u\n",
-                         s, rc, payload_len);
+            std::fprintf(stderr, "FAIL: split=%u reassembly rc=%d len=%u\n", s, rc, payload_len);
             std::abort();
         }
         for (uint32_t i = 0; i < kSplitPayloadLen; ++i)
         {
-            if (static_cast<const char *>(payload)[i] != SplitByte(i))
+            if (static_cast<const char*>(payload)[i] != SplitByte(i))
             {
                 std::fprintf(stderr, "FAIL: split=%u payload[%u]\n", s, i);
                 std::abort();
@@ -1214,11 +1223,12 @@ void RunReceiverSplit(int socket_fd)
         }
         ack = '2';
         if (::write(socket_fd, &ack, 1) != 1)
+        {
             std::abort();
+        }
     }
 
-    std::printf("  PASS: all %u split points reassembled correctly\n",
-                kFrameSize - 1);
+    std::printf("  PASS: all %u split points reassembled correctly\n", kFrameSize - 1);
     ::close(socket_fd);
 }
 
@@ -1233,16 +1243,10 @@ void RunReceiverSplit(int socket_fd)
 constexpr int kStreamMsgCount = 30;
 
 /// 第 k 条消息的 payload 长度（确定性）
-uint32_t StreamMsgLen(int k)
-{
-    return 7u + (static_cast<uint32_t>(k) * 137u) % 2993u;
-}
+uint32_t StreamMsgLen(int k) { return 7u + (static_cast<uint32_t>(k) * 137u) % 2993u; }
 
 /// 第 k 条消息的第 i 个内容字节（确定性）
-char StreamMsgByte(int k, uint32_t i)
-{
-    return static_cast<char>(k * 31 + static_cast<int>(i));
-}
+char StreamMsgByte(int k, uint32_t i) { return static_cast<char>(k * 31 + static_cast<int>(i)); }
 
 void RunSenderStream(int socket_fd)
 {
@@ -1255,11 +1259,11 @@ void RunSenderStream(int socket_fd)
         uint32_t len = StreamMsgLen(k);
         std::vector<char> payload(len);
         for (uint32_t i = 0; i < len; ++i)
+        {
             payload[i] = StreamMsgByte(k, i);
+        }
         std::vector<char> frame(shm::kMsgHeaderSize + len);
-        shm::Encode(payload.data(), len, frame.data(),
-                    static_cast<uint32_t>(frame.size()),
-                    static_cast<uint32_t>(k));
+        shm::Encode(payload.data(), len, frame.data(), static_cast<uint32_t>(frame.size()), static_cast<uint32_t>(k));
         stream.insert(stream.end(), frame.begin(), frame.end());
     }
 
@@ -1267,13 +1271,15 @@ void RunSenderStream(int socket_fd)
     std::mt19937 rng{42};
     std::uniform_int_distribution<uint32_t> chunk_dist(1, 113);
     uint32_t offset = 0;
-    int chunks = 0;
+    int chunks      = 0;
     while (offset < stream.size())
     {
         uint32_t remain = static_cast<uint32_t>(stream.size()) - offset;
-        uint32_t n = chunk_dist(rng);
+        uint32_t n      = chunk_dist(rng);
         if (n > remain)
+        {
             n = remain;
+        }
         if (ch.TryWrite(stream.data() + offset, n) != 0)
         {
             std::fprintf(stderr, "FAIL: TryWrite chunk at offset %u\n", offset);
@@ -1283,8 +1289,7 @@ void RunSenderStream(int socket_fd)
         offset += n;
         ++chunks;
     }
-    std::printf("sender(stream): %zu bytes in %d random chunks\n",
-                stream.size(), chunks);
+    std::printf("sender(stream): %zu bytes in %d random chunks\n", stream.size(), chunks);
 
     char ack = 0;
     ::read(socket_fd, &ack, 1);
@@ -1301,15 +1306,14 @@ void RunReceiverStream(int socket_fd)
     int received = 0;
     while (received < kStreamMsgCount)
     {
-        const void *payload = nullptr;
+        const void* payload  = nullptr;
         uint32_t payload_len = 0;
-        int rc = reader.TryRecv(ch, &payload, &payload_len);
+        int rc               = reader.TryRecv(ch, &payload, &payload_len);
         if (rc != 0)
         {
             if (rc != -1)
             {
-                std::fprintf(stderr, "FAIL: stream rc=%d at msg %d\n",
-                             rc, received);
+                std::fprintf(stderr, "FAIL: stream rc=%d at msg %d\n", rc, received);
                 std::abort();
             }
             pollfd pfd{};
@@ -1326,31 +1330,26 @@ void RunReceiverStream(int socket_fd)
         uint32_t expect_len = StreamMsgLen(received);
         if (payload_len != expect_len)
         {
-            std::fprintf(stderr, "FAIL: msg %d len=%u expect=%u\n",
-                         received, payload_len, expect_len);
+            std::fprintf(stderr, "FAIL: msg %d len=%u expect=%u\n", received, payload_len, expect_len);
             std::abort();
         }
         for (uint32_t i = 0; i < expect_len; ++i)
         {
-            if (static_cast<const char *>(payload)[i]
-                    != StreamMsgByte(received, i))
+            if (static_cast<const char*>(payload)[i] != StreamMsgByte(received, i))
             {
-                std::fprintf(stderr, "FAIL: msg %d payload[%u]\n",
-                             received, i);
+                std::fprintf(stderr, "FAIL: msg %d payload[%u]\n", received, i);
                 std::abort();
             }
         }
         if (reader.LastSeq() != static_cast<uint32_t>(received))
         {
-            std::fprintf(stderr, "FAIL: msg %d seq=%u\n",
-                         received, reader.LastSeq());
+            std::fprintf(stderr, "FAIL: msg %d seq=%u\n", received, reader.LastSeq());
             std::abort();
         }
         ++received;
     }
 
-    std::printf("  PASS: %d frames reassembled in order from random chunks\n",
-                received);
+    std::printf("  PASS: %d frames reassembled in order from random chunks\n", received);
 
     char ack = 1;
     ::write(socket_fd, &ack, 1);
@@ -1378,13 +1377,13 @@ void RunSenderThrow(int socket_fd)
     bool threw = false;
     try
     {
-        shm::SendFrame(ch, 100, 2, [](SmallChannel::ChannelBatchWriter &batch) {
+        shm::SendFrame(ch, 100, 2, [](SmallChannel::ChannelBatchWriter& batch) {
             char half[50] = {};
             batch.TryWrite(half, sizeof(half));
             throw std::runtime_error("user callback failed mid-payload");
         });
     }
-    catch (const std::exception &)
+    catch (const std::exception&)
     {
         threw = true;
     }
@@ -1440,8 +1439,9 @@ void RunReceiverThrow(int socket_fd)
 
     if (got != kExpectTotal)
     {
-        std::fprintf(stderr, "FAIL: stream has %u bytes, expected %u"
-                             " (partial frame leaked)\n",
+        std::fprintf(stderr,
+                     "FAIL: stream has %u bytes, expected %u"
+                     " (partial frame leaked)\n",
                      got, kExpectTotal);
         std::abort();
     }
@@ -1450,14 +1450,12 @@ void RunReceiverThrow(int socket_fd)
     for (int frame = 0; frame < 2; ++frame)
     {
         uint32_t len = 0, seq = 0;
-        const char *p = buf + frame * (shm::kMsgHeaderSize + 32);
+        const char* p = buf + frame * (shm::kMsgHeaderSize + 32);
         std::memcpy(&len, p, sizeof(len));
         std::memcpy(&seq, p + sizeof(len), sizeof(seq));
         if (len != 32 || seq != static_cast<uint32_t>(frame * 2 + 1))
         {
-            std::fprintf(stderr,
-                         "FAIL: frame %d len=%u seq=%u (partial frame leaked)\n",
-                         frame, len, seq);
+            std::fprintf(stderr, "FAIL: frame %d len=%u seq=%u (partial frame leaked)\n", frame, len, seq);
             std::abort();
         }
     }
@@ -1479,15 +1477,13 @@ void RunReceiverThrow(int socket_fd)
 void RunSenderCapMismatch(int socket_fd)
 {
     shm::RingChannel<4096> ch;
-    shm::ErrorCode ec = shm::RingChannel<4096>::CreateRingChannel(
-        socket_fd, shm::ChannelRole::kServer, &ch);
+    shm::ErrorCode ec = shm::RingChannel<4096>::CreateRingChannel(socket_fd, shm::ChannelRole::kServer, &ch);
     if (ec == shm::ErrorCode::kOk)
     {
         std::fprintf(stderr, "FAIL: 4096 side accepted 8192 peer ring\n");
         std::abort();
     }
-    std::printf("sender(mismatch): rejected as expected: %s\n",
-                shm::ErrorCodeName(ec));
+    std::printf("sender(mismatch): rejected as expected: %s\n", shm::ErrorCodeName(ec));
     ::close(socket_fd);
     std::_Exit(0);
 }
@@ -1495,15 +1491,13 @@ void RunSenderCapMismatch(int socket_fd)
 void RunReceiverCapMismatch(int socket_fd)
 {
     shm::RingChannel<8192> ch;
-    shm::ErrorCode ec = shm::RingChannel<8192>::CreateRingChannel(
-        socket_fd, shm::ChannelRole::kClient, &ch);
+    shm::ErrorCode ec = shm::RingChannel<8192>::CreateRingChannel(socket_fd, shm::ChannelRole::kClient, &ch);
     if (ec == shm::ErrorCode::kOk)
     {
         std::fprintf(stderr, "FAIL: 8192 side accepted 4096 peer ring\n");
         std::abort();
     }
-    std::printf("receiver(mismatch): rejected as expected: %s\n",
-                shm::ErrorCodeName(ec));
+    std::printf("receiver(mismatch): rejected as expected: %s\n", shm::ErrorCodeName(ec));
     std::printf("  PASS: capacity mismatch rejected during handshake\n");
     ::close(socket_fd);
 }
@@ -1512,9 +1506,7 @@ void RunReceiverCapMismatch(int socket_fd)
 // 辅助：fork + 运行测试对
 // =========================================================================
 
-void RunForkTest(const char *name,
-                 void (*sender_fn)(int),
-                 void (*receiver_fn)(int))
+void RunForkTest(const char* name, void (*sender_fn)(int), void (*receiver_fn)(int))
 {
     std::printf("--- %s ---\n", name);
 
@@ -1547,8 +1539,9 @@ void RunForkTest(const char *name,
         ::waitpid(pid, &status, 0);
         if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
         {
-            std::fprintf(stderr, "FAIL: %s sender exited abnormally"
-                                 " (killed=%d exit=%d)\n",
+            std::fprintf(stderr,
+                         "FAIL: %s sender exited abnormally"
+                         " (killed=%d exit=%d)\n",
                          name, WIFSIGNALED(status), WEXITSTATUS(status));
             std::_Exit(1);
         }
@@ -1570,59 +1563,46 @@ int main()
     std::printf("\n");
 
     // fork 测试
-    RunForkTest("Test 3: SendPod + FrameReader",
-                RunSenderBasic, RunReceiverBasic);
+    RunForkTest("Test 3: SendPod + FrameReader", RunSenderBasic, RunReceiverBasic);
     std::printf("\n");
 
-    RunForkTest("Test 4: byte-by-byte stream decode",
-                RunSenderByteByByte, RunReceiverByteByByte);
+    RunForkTest("Test 4: byte-by-byte stream decode", RunSenderByteByByte, RunReceiverByteByByte);
     std::printf("\n");
 
-    RunForkTest("Test 5: variable-length Send + FrameReader",
-                RunSenderVar, RunReceiverVar);
+    RunForkTest("Test 5: variable-length Send + FrameReader", RunSenderVar, RunReceiverVar);
     std::printf("\n");
 
-    RunForkTest("Test 7: oversized Send rejected, stream intact",
-                RunSenderOversized, RunReceiverOversized);
+    RunForkTest("Test 7: oversized Send rejected, stream intact", RunSenderOversized, RunReceiverOversized);
     std::printf("\n");
 
-    RunForkTest("Test 8: large frame zero-copy beyond BufSize",
-                RunSenderLargeFrame, RunReceiverLargeFrame);
+    RunForkTest("Test 8: large frame zero-copy beyond BufSize", RunSenderLargeFrame, RunReceiverLargeFrame);
     std::printf("\n");
 
-    RunForkTest("Test 9: mirrored wrap ignores MaxBufSize",
-                RunSenderPoison, RunReceiverPoison);
+    RunForkTest("Test 9: mirrored wrap ignores MaxBufSize", RunSenderPoison, RunReceiverPoison);
     std::printf("\n");
 
-    RunForkTest("Test 9b: wrapped large frame via dynamic fallback",
-                RunSenderPoison, RunReceiverWrappedLarge);
+    RunForkTest("Test 9b: wrapped large frame via dynamic fallback", RunSenderPoison, RunReceiverWrappedLarge);
     std::printf("\n");
 
     TestBatchRewindCount();
     std::printf("\n");
 
-    RunForkTest("Test 11: impossible frame length rejected (-3)",
-                RunSenderBadLen, RunReceiverBadLen);
+    RunForkTest("Test 11: impossible frame length rejected (-3)", RunSenderBadLen, RunReceiverBadLen);
     std::printf("\n");
 
-    RunForkTest("Test 12: poison frame eagerly skipped",
-                RunSenderMixedTypes, RunReceiverMixedTypes);
+    RunForkTest("Test 12: poison frame eagerly skipped", RunSenderMixedTypes, RunReceiverMixedTypes);
     std::printf("\n");
 
-    RunForkTest("Test 13: exhaustive two-chunk split reassembly",
-                RunSenderSplit, RunReceiverSplit);
+    RunForkTest("Test 13: exhaustive two-chunk split reassembly", RunSenderSplit, RunReceiverSplit);
     std::printf("\n");
 
-    RunForkTest("Test 16: handshake rejects capacity mismatch",
-                RunSenderCapMismatch, RunReceiverCapMismatch);
+    RunForkTest("Test 16: handshake rejects capacity mismatch", RunSenderCapMismatch, RunReceiverCapMismatch);
     std::printf("\n");
 
-    RunForkTest("Test 14: random-chunk stream reassembly",
-                RunSenderStream, RunReceiverStream);
+    RunForkTest("Test 14: random-chunk stream reassembly", RunSenderStream, RunReceiverStream);
     std::printf("\n");
 
-    RunForkTest("Test 15: SendFrame exception publishes no partial frame",
-                RunSenderThrow, RunReceiverThrow);
+    RunForkTest("Test 15: SendFrame exception publishes no partial frame", RunSenderThrow, RunReceiverThrow);
 
     std::printf("\n=== TEST PASSED ===\n");
     return 0;

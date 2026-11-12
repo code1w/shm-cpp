@@ -106,7 +106,9 @@ inline char* EncodeFrame(void* buf, uint32_t buf_size, uint32_t payload_len, uin
     // payload_len 接近 UINT32_MAX 时 frame_size 会回绕成小数，绕过
     // buf_size 检查后由调用方按原始 payload_len 写入 → 堆溢出。
     if (buf_size < kMsgHeaderSize || payload_len > buf_size - kMsgHeaderSize)
+    {
         return nullptr;
+    }
 
     auto* p = static_cast<char*>(buf);
     MsgHeader hdr{};
@@ -139,12 +141,16 @@ int SendFrame(RingChannel<Cap>& ch, uint32_t payload_len, uint32_t seq, WriteFn&
     // （溢出后 frame_size 变成小数，会绕过空间检查）
     uint64_t frame_size64 = static_cast<uint64_t>(kMsgHeaderSize) + payload_len;
     if (ch.WritableBytes() < frame_size64)
+    {
         return -1;
+    }
     uint32_t frame_size = static_cast<uint32_t>(frame_size64);  // 已 <= Capacity
 
     typename RingChannel<Cap>::ChannelBatchWriter batch;
     if (ch.StartBatch(&batch) != ErrorCode::kOk)
+    {
         return -1;
+    }
 
     MsgHeader hdr{};
     hdr.len = payload_len;
@@ -197,7 +203,9 @@ int SendFrameBatch(typename RingChannel<Cap>::ChannelBatchWriter& batch, uint32_
     // 同 SendFrame：64 位计算避免帧长在 uint32 溢出
     uint64_t frame_size64 = static_cast<uint64_t>(kMsgHeaderSize) + payload_len;
     if (batch.FreeBytes() < frame_size64)
+    {
         return -1;
+    }
     uint32_t frame_size = static_cast<uint32_t>(frame_size64);  // 已 <= Capacity
 
     uint64_t before  = batch.PendingBytes();
@@ -249,9 +257,13 @@ inline uint32_t Encode(const void* payload, uint32_t payload_len, void* buf, uin
 {
     char* p = EncodeFrame(buf, buf_size, payload_len, seq);
     if (!p)
+    {
         return 0;
+    }
     if (payload_len > 0)
+    {
         std::memcpy(p, payload, payload_len);
+    }
     return kMsgHeaderSize + payload_len;
 }
 
@@ -271,7 +283,9 @@ inline bool Decode(const void* buf, uint32_t buf_len, const void** payload, uint
                    uint32_t* seq = nullptr)
 {
     if (buf_len < kMsgHeaderSize)
+    {
         return false;
+    }
 
     auto* p = static_cast<const char*>(buf);
 
@@ -280,12 +294,16 @@ inline bool Decode(const void* buf, uint32_t buf_len, const void** payload, uint
 
     // 减法形式避免 hdr.len 接近 UINT32_MAX 时 kMsgHeaderSize + hdr.len 溢出回绕
     if (hdr.len > buf_len - kMsgHeaderSize)
+    {
         return false;
+    }
 
     *payload     = p + kMsgHeaderSize;
     *payload_len = hdr.len;
     if (seq)
+    {
         *seq = hdr.seq;
+    }
     return true;
 }
 
@@ -303,10 +321,14 @@ template <std::size_t Cap>
 int Send(RingChannel<Cap>& ch, const void* payload, uint32_t payload_len, uint32_t seq)
 {
     if (payload_len > RingChannel<Cap>::max_write_size)
+    {
         return -1;
+    }
     return SendFrame(ch, payload_len, seq, [&](auto& batch) {
         if (payload_len > 0)
+        {
             batch.TryWrite(payload, payload_len);
+        }
     });
 }
 
@@ -319,10 +341,14 @@ template <std::size_t Cap>
 int Send(typename RingChannel<Cap>::ChannelBatchWriter& batch, const void* payload, uint32_t payload_len, uint32_t seq)
 {
     if (payload_len > RingChannel<Cap>::max_write_size)
+    {
         return -1;
+    }
     return SendFrameBatch<Cap>(batch, payload_len, seq, [&](auto& b) {
         if (payload_len > 0)
+        {
             b.TryWrite(payload, payload_len);
+        }
     });
 }
 

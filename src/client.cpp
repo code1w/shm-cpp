@@ -57,7 +57,9 @@ shm::ProtoCodec<shm_ipc::ClientMsgProto> gProtoClientMsgCodec;
 void SignalHandler(int /*signo*/)
 {
     if (gLoop)
+    {
         gLoop->Stop();
+    }
 }
 
 /// 写入统计
@@ -165,7 +167,9 @@ void OnServerNotify(int efd, shm::ClientState& cs, shm::EventLoop& loop)
                 return;
             }
             if (rc != 0)
+            {
                 break;
+            }
             PrintHeartbeat(hb);
             ++cs.total_read;
             hb = shm_ipc::HeartbeatProto{};
@@ -184,7 +188,9 @@ void OnServerNotify(int efd, shm::ClientState& cs, shm::EventLoop& loop)
             return;
         }
         if (rc != 0)
+        {
             break;
+        }
         PrintHeartbeat(hb);
         ++cs.total_read;
         hb = Heartbeat{};
@@ -273,7 +279,9 @@ void RunBench()
                 shm::BenchPayloadHeader hdr{i};
                 std::memcpy(body.data() + shm::kTagSize, &hdr, sizeof(hdr));
                 if (shm::Send<Channel::Ring::capacity>(batch, body.data(), body_len, static_cast<uint32_t>(i)) != 0)
+                {
                     break;  // ring 满，Flush 这批后重新开始
+                }
                 ++i;
             }
             batch.Flush();
@@ -286,7 +294,9 @@ void RunBench()
             shm::BenchPayloadHeader end_hdr{-1};
             std::memcpy(end_body + shm::kTagSize, &end_hdr, sizeof(end_hdr));
             while (shm::Send(ch, end_body, sizeof(end_body), 0) != 0)
+            {
                 ;
+            }
         }
 
         // 等 server ack
@@ -327,7 +337,9 @@ int main(int argc, char* argv[])
             if (std::strcmp(argv[i], "--cmd") == 0 && i + 1 < argc)
             {
                 if (std::strcmp(argv[i + 1], "proto") == 0)
+                {
                     gUseProto = true;
+                }
                 ++i;
             }
         }
@@ -359,10 +371,14 @@ int main(int argc, char* argv[])
 
 #ifdef SHM_IPC_HAS_PROTOBUF
         if (gUseProto)
+        {
             cs.codec = std::make_unique<shm::ProtoCodec<shm_ipc::HeartbeatProto>>();
+        }
         else
+        {
 #endif
             cs.codec = std::make_unique<shm::PodCodec<Heartbeat>>();
+        }
 
         std::printf("client: ring channel established (capacity=%zuMB, "
                     "eventfd notify)\n\n",

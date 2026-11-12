@@ -71,13 +71,17 @@ class FrameReader
         uint32_t seg2_len = 0;
 
         if (ch.Peek(&seg1, &seg1_len, &seg2, &seg2_len) != 0)
+        {
             return -1;
+        }
 
         uint32_t total_avail = seg1_len + seg2_len;
 
         // 至少需要 MsgHeader
         if (total_avail < kMsgHeaderSize)
+        {
             return -1;
+        }
 
         // 解析 MsgHeader（可能跨段）
         MsgHeader hdr{};
@@ -101,12 +105,16 @@ class FrameReader
         // （注意不能按 max_write_size 限定：SendFrameBatch 允许分块写入
         // 接近环容量的 payload，见 codec.hpp。）
         if (hdr.len > Cap - kMsgHeaderSize)
+        {
             return -3;
+        }
 
         // 完整性校验（减法形式，避免 hdr.len 接近 UINT32_MAX 时
         // kMsgHeaderSize + hdr.len 溢出回绕绕过检查）
         if (hdr.len > total_avail - kMsgHeaderSize)
+        {
             return -1;
+        }
 
         uint32_t frame_size = kMsgHeaderSize + hdr.len;
 
@@ -138,7 +146,9 @@ class FrameReader
             // 按需增长（BufSize 仅是初始 reserve 大小的提示）。
             // 默认上限 UINT32_MAX 下，合法的跨环尾大帧不再被丢弃。
             if (buf_.size() < body_len)
+            {
                 buf_.resize(body_len);
+            }
             CopyFromSegments(s1, seg1_len, static_cast<const char*>(seg2), seg2_len, body_offset, buf_.data(),
                              body_len);
             *payload     = buf_.data();

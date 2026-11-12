@@ -33,8 +33,11 @@ void WriteAll(int fd, const void* buf, std::size_t len)
     while (len > 0)
     {
         auto n = ::write(fd, p, len);
-        if (n <= 0) std::_Exit(1);
-        p   += n;
+        if (n <= 0)
+        {
+            std::_Exit(1);
+        }
+        p += n;
         len -= static_cast<std::size_t>(n);
     }
 }
@@ -51,8 +54,11 @@ void ReadAll(int fd, void* buf, std::size_t len)
     while (len > 0)
     {
         auto n = ::read(fd, p, len);
-        if (n <= 0) std::_Exit(1);
-        p   += n;
+        if (n <= 0)
+        {
+            std::_Exit(1);
+        }
+        p += n;
         len -= static_cast<std::size_t>(n);
     }
 }
@@ -62,32 +68,31 @@ uint64_t NowNs()
 {
     timespec ts{};
     ::clock_gettime(CLOCK_MONOTONIC, &ts);
-    return static_cast<uint64_t>(ts.tv_sec) * 1000000000ULL
-         + static_cast<uint64_t>(ts.tv_nsec);
+    return static_cast<uint64_t>(ts.tv_sec) * 1000000000ULL + static_cast<uint64_t>(ts.tv_nsec);
 }
 
 /** @brief 单个测试用例 */
 struct TestCase
 {
-    std::size_t msg_size; ///< 消息大小（字节）
-    int         rounds;   ///< 测试轮次
+    std::size_t msg_size;  ///< 消息大小（字节）
+    int rounds;            ///< 测试轮次
 };
 
 constexpr std::array<TestCase, 11> kTests = {{
-    {     64, 100000},
-    {    128, 100000},
-    {    256, 100000},
-    {    512,  75000},
-    {   1024,  50000},
-    {   2048,  50000},
-    {   4096,  50000},
-    {  16384,  20000},
-    {  65536,  10000},
-    { 262144,   7000},
-    { 524288,   5000},
+    {64, 100000},
+    {128, 100000},
+    {256, 100000},
+    {512, 75000},
+    {1024, 50000},
+    {2048, 50000},
+    {4096, 50000},
+    {16384, 20000},
+    {65536, 10000},
+    {262144, 7000},
+    {524288, 5000},
 }};
 
-constexpr int kWarmup = 1000; ///< 预热轮次
+constexpr int kWarmup = 1000;  ///< 预热轮次
 
 /**
  * @brief 服务端运行逻辑：接收后原样回写
@@ -121,8 +126,7 @@ void RunClient(int fd)
     std::memset(send_buf.get(), 'A', 524288);
 
     std::printf("=== Unix Socket Echo Benchmark ===\n");
-    std::printf("%10s %10s %12s %14s %16s\n",
-                "msg_size", "rounds", "total_us", "avg_rtt_ns", "throughput_MB/s");
+    std::printf("%10s %10s %12s %14s %16s\n", "msg_size", "rounds", "total_us", "avg_rtt_ns", "throughput_MB/s");
 
     for (auto& tc : kTests)
     {
@@ -145,17 +149,16 @@ void RunClient(int fd)
         double total_us   = static_cast<double>(elapsed_ns) / 1000.0;
         double avg_rtt_ns = static_cast<double>(elapsed_ns) / tc.rounds;
         // 每轮传输 msg_size * 2（发送 + 回声）
-        double throughput = static_cast<double>(tc.msg_size) * 2.0 * tc.rounds
-                          / (static_cast<double>(elapsed_ns) / 1e9) / (1024.0 * 1024.0);
+        double throughput = static_cast<double>(tc.msg_size) * 2.0 * tc.rounds /
+                            (static_cast<double>(elapsed_ns) / 1e9) / (1024.0 * 1024.0);
 
-        std::printf("%10zu %10d %12.0f %14.0f %16.2f\n",
-                    tc.msg_size, tc.rounds, total_us, avg_rtt_ns, throughput);
+        std::printf("%10zu %10d %12.0f %14.0f %16.2f\n", tc.msg_size, tc.rounds, total_us, avg_rtt_ns, throughput);
     }
 
     ::close(fd);
 }
 
-} // anonymous namespace
+}  // anonymous namespace
 
 int main()
 {

@@ -48,38 +48,41 @@ namespace {
 
 // 使用小容量环以低成本覆盖边界
 constexpr std::size_t kSmallCap = 4096;
-using SmallRing = shm::RingBuf<kSmallCap>;
+using SmallRing                 = shm::RingBuf<kSmallCap>;
 
 int g_pass_count = 0;
 
-#define CHECK(cond, ...)                                     \
-    do {                                                     \
-        if (!(cond)) {                                       \
-            std::fprintf(stderr, "FAIL: " __VA_ARGS__);      \
-            std::fprintf(stderr, " (line %d)\n", __LINE__);  \
-            std::abort();                                    \
-        }                                                    \
+#define CHECK(cond, ...)                                    \
+    do                                                      \
+    {                                                       \
+        if (!(cond))                                        \
+        {                                                   \
+            std::fprintf(stderr, "FAIL: " __VA_ARGS__);     \
+            std::fprintf(stderr, " (line %d)\n", __LINE__); \
+            std::abort();                                   \
+        }                                                   \
     } while (0)
 
 /// 分配并初始化一块 shm
-void *AllocShm()
+void* AllocShm()
 {
-    void *shm = std::aligned_alloc(64, SmallRing::shm_size);
+    void* shm = std::aligned_alloc(64, SmallRing::shm_size);
     CHECK(shm != nullptr, "aligned_alloc");
     SmallRing::Init(shm);
     return shm;
 }
 
 /// 构造可预测内容的缓冲区：buf[i] = (seed + i) & 0xFF
-void FillPattern(char *buf, uint32_t len, uint8_t seed)
+void FillPattern(char* buf, uint32_t len, uint8_t seed)
 {
     for (uint32_t i = 0; i < len; ++i)
+    {
         buf[i] = static_cast<char>((seed + i) & 0xFF);
+    }
 }
 
 /// 校验缓冲区内容
-void VerifyPattern(const char *buf, uint32_t len, uint8_t seed,
-                   const char *ctx)
+void VerifyPattern(const char* buf, uint32_t len, uint8_t seed, const char* ctx)
 {
     for (uint32_t i = 0; i < len; ++i)
     {
@@ -92,7 +95,7 @@ void VerifyPattern(const char *buf, uint32_t len, uint8_t seed,
 }
 
 /// 推进 ring 到指定物理偏移（写入 advance 字节再读走）
-void AdvanceRing(void *shm, uint32_t advance)
+void AdvanceRing(void* shm, uint32_t advance)
 {
     char tmp[512];
     std::memset(tmp, 0, sizeof(tmp));
@@ -114,7 +117,7 @@ void TestFullRing()
 {
     std::printf("--- Test 1: full ring (used == Capacity) ---\n");
 
-    void *shm = AllocShm();
+    void* shm = AllocShm();
 
     // 让 phys_r 非零，使满环 Peek 走两段路径（r = w = 100）
     AdvanceRing(shm, 100);
@@ -138,8 +141,7 @@ void TestFullRing()
     // 满环 Peek：phys_r=100 → seg1=3996（尾部），seg2=100（头部）
     const void *seg1 = nullptr, *seg2 = nullptr;
     uint32_t seg1_len = 0, seg2_len = 0;
-    CHECK(SmallRing::Peek(shm, &seg1, &seg1_len, &seg2, &seg2_len) == 0,
-          "Peek full ring");
+    CHECK(SmallRing::Peek(shm, &seg1, &seg1_len, &seg2, &seg2_len) == 0, "Peek full ring");
     CHECK(seg1_len == kSmallCap - 100, "seg1_len=%u", seg1_len);
     CHECK(seg2_len == 100, "seg2_len=%u", seg2_len);
 
@@ -150,8 +152,7 @@ void TestFullRing()
     expected.insert(expected.end(), w3.begin(), w3.end());
     CHECK(expected.size() == kSmallCap, "expected size");
     CHECK(std::memcmp(seg1, expected.data(), seg1_len) == 0, "seg1 content");
-    CHECK(std::memcmp(seg2, expected.data() + seg1_len, seg2_len) == 0,
-          "seg2 content");
+    CHECK(std::memcmp(seg2, expected.data() + seg1_len, seg2_len) == 0, "seg2 content");
 
     // 全部读走，环恢复为空
     SmallRing::CommitRead(shm, kSmallCap);
@@ -171,7 +172,7 @@ void TestFullRingCycle()
 {
     std::printf("--- Test 2: full ring cycle (fill/drain/refill) ---\n");
 
-    void *shm = AllocShm();
+    void* shm = AllocShm();
     AdvanceRing(shm, 700);  // 非零物理偏移起步
 
     std::vector<char> wa(2048), wb(2048), wc(1500);
@@ -197,8 +198,7 @@ void TestFullRingCycle()
     CHECK(SmallRing::TryRead(shm, rbuf.data(), 4096) == 4096, "drain all");
     CHECK(std::memcmp(rbuf.data(), wa.data() + 1500, 548) == 0, "A tail");
     CHECK(std::memcmp(rbuf.data() + 548, wb.data(), 2048) == 0, "B body");
-    CHECK(std::memcmp(rbuf.data() + 548 + 2048, wc.data(), 1500) == 0,
-          "C body");
+    CHECK(std::memcmp(rbuf.data() + 548 + 2048, wc.data(), 1500) == 0, "C body");
     CHECK(SmallRing::Available(shm) == 0, "empty at end");
 
     std::free(shm);
@@ -214,7 +214,7 @@ void TestBatchWriterLenBounds()
 {
     std::printf("--- Test 3: BatchWriter length bounds ---\n");
 
-    void *shm = AllocShm();
+    void* shm = AllocShm();
     std::vector<char> buf(SmallRing::max_write_size + 1, 'B');
 
     {
@@ -223,19 +223,15 @@ void TestBatchWriterLenBounds()
         // len == 0 拒绝
         CHECK(batch.TryWrite(buf.data(), 0) == -1, "len=0");
         // len == max_write_size + 1 拒绝
-        CHECK(batch.TryWrite(buf.data(), SmallRing::max_write_size + 1) == -1,
-              "len=max+1");
+        CHECK(batch.TryWrite(buf.data(), SmallRing::max_write_size + 1) == -1, "len=max+1");
         // data == nullptr 拒绝
         CHECK(batch.TryWrite(nullptr, 10) == -1, "null data");
-        CHECK(batch.Count() == 0 && batch.PendingBytes() == 0,
-              "rejected writes must not count");
+        CHECK(batch.Count() == 0 && batch.PendingBytes() == 0, "rejected writes must not count");
 
         // len == max_write_size 恰好成功
-        CHECK(batch.TryWrite(buf.data(), SmallRing::max_write_size) == 0,
-              "len=max");
+        CHECK(batch.TryWrite(buf.data(), SmallRing::max_write_size) == 0, "len=max");
         // 再写一个 max_write_size：恰好填满
-        CHECK(batch.TryWrite(buf.data(), SmallRing::max_write_size) == 0,
-              "len=max second (fills ring)");
+        CHECK(batch.TryWrite(buf.data(), SmallRing::max_write_size) == 0, "len=max second (fills ring)");
         CHECK(batch.FreeBytes() == 0, "full after 2 x max");
         // 满环再写 1 字节拒绝
         CHECK(batch.TryWrite(buf.data(), 1) == -1, "full ring write");
@@ -257,7 +253,7 @@ void TestReserveBoundaries()
 {
     std::printf("--- Test 4: Reserve boundaries ---\n");
 
-    void *shm = AllocShm();
+    void* shm               = AllocShm();
     constexpr uint32_t kMax = SmallRing::max_write_size;  // 2048
 
     // phys=0：基本拒绝项 + 正常 Reserve/CommitReserve 直写校验
@@ -266,7 +262,7 @@ void TestReserveBoundaries()
         CHECK(b.Reserve(0) == nullptr, "Reserve(0)");
         CHECK(b.Reserve(kMax + 1) == nullptr, "Reserve(max+1)");
 
-        char *p = b.Reserve(kMax);
+        char* p = b.Reserve(kMax);
         CHECK(p != nullptr, "Reserve(max)");
         FillPattern(p, kMax, 0x55);  // 直写环内
         b.CommitReserve(kMax);
@@ -284,7 +280,7 @@ void TestReserveBoundaries()
     {
         SmallRing::BatchWriter b(shm);
         // len == tail：精确贴合，允许（不跨环尾）
-        char *p = b.Reserve(100);
+        char* p = b.Reserve(100);
         CHECK(p != nullptr, "Reserve(tail) exact fit");
         FillPattern(p, 100, 0x66);
         b.CommitReserve(100);
@@ -297,8 +293,7 @@ void TestReserveBoundaries()
     }
     {
         std::vector<char> rbuf(150);
-        CHECK(SmallRing::ReadExact(shm, rbuf.data(), 150) == 0,
-              "read wrapped reserves");
+        CHECK(SmallRing::ReadExact(shm, rbuf.data(), 150) == 0, "read wrapped reserves");
         VerifyPattern(rbuf.data(), 100, 0x66, "reserve seg1");
         VerifyPattern(rbuf.data() + 100, 50, 0x77, "reserve seg2");
     }
@@ -337,14 +332,13 @@ void TestEmptyOps()
 {
     std::printf("--- Test 5: empty/zero-length ops ---\n");
 
-    void *shm = AllocShm();
+    void* shm = AllocShm();
     char buf[128];
 
     // 空环
     const void *seg1 = nullptr, *seg2 = nullptr;
     uint32_t seg1_len = 0, seg2_len = 0;
-    CHECK(SmallRing::Peek(shm, &seg1, &seg1_len, &seg2, &seg2_len) == -1,
-          "Peek empty ring");
+    CHECK(SmallRing::Peek(shm, &seg1, &seg1_len, &seg2, &seg2_len) == -1, "Peek empty ring");
     CHECK(SmallRing::TryRead(shm, buf, sizeof(buf)) == 0, "TryRead empty");
     CHECK(SmallRing::ReadExact(shm, buf, 10) == -1, "ReadExact empty");
 
@@ -382,7 +376,7 @@ void TestBatchWriterMisc()
 {
     std::printf("--- Test 6: BatchWriter misc ---\n");
 
-    void *shm = AllocShm();
+    void* shm = AllocShm();
 
     {
         SmallRing::BatchWriter b(shm);
@@ -421,10 +415,14 @@ void TestCommitReadOverrunAssert()
     std::printf("--- Test 7: CommitRead overrun assert (death test) ---\n");
 
     pid_t pid = ::fork();
-    if (pid < 0) { std::perror("fork"); std::abort(); }
+    if (pid < 0)
+    {
+        std::perror("fork");
+        std::abort();
+    }
     if (pid == 0)
     {
-        void *shm = AllocShm();
+        void* shm    = AllocShm();
         char buf[10] = {};
         (void)SmallRing::TryWrite(shm, buf, 10);
         SmallRing::CommitRead(shm, 11);  // 越界提交 → assert → SIGABRT
@@ -433,8 +431,8 @@ void TestCommitReadOverrunAssert()
 
     int status = 0;
     CHECK(::waitpid(pid, &status, 0) == pid, "waitpid");
-    CHECK(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT,
-          "expected SIGABRT from overrun CommitRead, status=0x%x", status);
+    CHECK(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT, "expected SIGABRT from overrun CommitRead, status=0x%x",
+          status);
 
     ++g_pass_count;
     std::printf("  PASS: overrun CommitRead aborts in debug build\n");
@@ -449,10 +447,14 @@ void TestRewindOverrunAssert()
     std::printf("--- Test 8: RewindTo overrun assert (death test) ---\n");
 
     pid_t pid = ::fork();
-    if (pid < 0) { std::perror("fork"); std::abort(); }
+    if (pid < 0)
+    {
+        std::perror("fork");
+        std::abort();
+    }
     if (pid == 0)
     {
-        void *shm = AllocShm();
+        void* shm = AllocShm();
         SmallRing::BatchWriter b(shm);
         char buf[10] = {};
         (void)b.TryWrite(buf, 10);
@@ -463,8 +465,8 @@ void TestRewindOverrunAssert()
 
     int status = 0;
     CHECK(::waitpid(pid, &status, 0) == pid, "waitpid");
-    CHECK(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT,
-          "expected SIGABRT from overrun RewindTo, status=0x%x", status);
+    CHECK(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT, "expected SIGABRT from overrun RewindTo, status=0x%x",
+          status);
 
     ++g_pass_count;
     std::printf("  PASS: overrun RewindTo aborts in debug build\n");
@@ -478,7 +480,7 @@ void TestNullReadBuffer()
 {
     std::printf("--- Test 9: null read buffer guards ---\n");
 
-    void *shm = AllocShm();
+    void* shm = AllocShm();
     char buf[50];
     FillPattern(buf, 50, 0x42);
     CHECK(SmallRing::TryWrite(shm, buf, 50) == 0, "write 50");
@@ -492,13 +494,11 @@ void TestNullReadBuffer()
     CHECK(SmallRing::Available(shm) == 50, "ReadExact null must not consume");
 
     // Peek 输出参数为空：拒绝而不是解引用
-    const void *seg1 = nullptr;
-    const void *seg2 = nullptr;
+    const void* seg1 = nullptr;
+    const void* seg2 = nullptr;
     uint32_t l1 = 0, l2 = 0;
-    CHECK(SmallRing::Peek(shm, nullptr, &l1, &seg2, &l2) == -1,
-          "Peek null seg1 out");
-    CHECK(SmallRing::Peek(shm, &seg1, &l1, &seg2, nullptr) == -1,
-          "Peek null seg2_len out");
+    CHECK(SmallRing::Peek(shm, nullptr, &l1, &seg2, &l2) == -1, "Peek null seg1 out");
+    CHECK(SmallRing::Peek(shm, &seg1, &l1, &seg2, nullptr) == -1, "Peek null seg2_len out");
     CHECK(SmallRing::Available(shm) == 50, "Peek null out must not consume");
 
     // 数据仍完整可读
@@ -519,7 +519,7 @@ void TestMovedFromWriterInert()
 {
     std::printf("--- Test 10: moved-from BatchWriter is inert ---\n");
 
-    void *shm = AllocShm();
+    void* shm = AllocShm();
     {
         SmallRing::BatchWriter live(shm);
         CHECK(live.TryWrite("12345", 5) == 0, "live write");
@@ -553,7 +553,7 @@ void TestCommitReserveValidation()
 {
     std::printf("--- Test 11: CommitReserve validation ---\n");
 
-    void *shm = AllocShm();
+    void* shm = AllocShm();
     {
         SmallRing::BatchWriter b(shm);
 
@@ -563,7 +563,7 @@ void TestCommitReserveValidation()
         CHECK(b.Count() == 0, "commit without reserve must not count");
 
         // Reserve 后提交长度不符：必须被忽略
-        char *p = b.Reserve(20);
+        char* p = b.Reserve(20);
         CHECK(p != nullptr, "Reserve(20)");
         b.CommitReserve(19);
         CHECK(b.PendingBytes() == 0, "mismatched len must not publish");
@@ -591,7 +591,7 @@ void TestSpscStress()
 {
     std::printf("--- Test 12: two-thread SPSC stress ---\n");
 
-    void *shm = AllocShm();
+    void* shm           = AllocShm();
     constexpr int kMsgs = 20000;
 
     std::atomic<bool> producer_done{false};
@@ -610,7 +610,9 @@ void TestSpscStress()
             while (SmallRing::TryWrite(shm, msg.data(), 4 + len) != 0)
             {
                 if (failed.load())
+                {
                     return;
+                }
                 std::this_thread::yield();
             }
             seed = seed * 1103515245u + 12345u;
@@ -625,8 +627,7 @@ void TestSpscStress()
             uint32_t len = 0;
             while (SmallRing::ReadExact(shm, &len, 4) != 0)
             {
-                if (producer_done.load(std::memory_order_acquire) &&
-                    SmallRing::Available(shm) == 0)
+                if (producer_done.load(std::memory_order_acquire) && SmallRing::Available(shm) == 0)
                 {
                     failed.store(true, std::memory_order_release);
                     return;
@@ -641,7 +642,9 @@ void TestSpscStress()
 
             std::vector<char> got(len);
             while (SmallRing::ReadExact(shm, got.data(), len) != 0)
+            {
                 std::this_thread::yield();
+            }
 
             std::vector<char> expected(len);
             FillPattern(expected.data(), len, static_cast<uint8_t>(seed));
@@ -663,8 +666,7 @@ void TestSpscStress()
 
     std::free(shm);
     ++g_pass_count;
-    std::printf("  PASS: %d messages across concurrent producer/consumer\n",
-                kMsgs);
+    std::printf("  PASS: %d messages across concurrent producer/consumer\n", kMsgs);
 }
 
 // =========================================================================
@@ -673,35 +675,30 @@ void TestSpscStress()
 
 struct MirroredRing
 {
-    shm::UniqueFd   fd;
+    shm::UniqueFd fd;
     shm::MmapRegion region;
 
     bool Init()
     {
-        if (shm::CreateMemfd("ring-mirror-test", SmallRing::shm_size, &fd) !=
-            shm::ErrorCode::kOk)
+        if (shm::CreateMemfd("ring-mirror-test", SmallRing::shm_size, &fd) != shm::ErrorCode::kOk)
+        {
             return false;
-        return region.MapMirrored(fd.Get(), SmallRing::shm_size,
-                                  shm::kRingDataOffset, SmallRing::capacity,
-                                  PROT_READ | PROT_WRITE, MAP_SHARED) ==
-               shm::ErrorCode::kOk;
+        }
+        return region.MapMirrored(fd.Get(), SmallRing::shm_size, shm::kRingDataOffset, SmallRing::capacity,
+                                  PROT_READ | PROT_WRITE, MAP_SHARED) == shm::ErrorCode::kOk;
     }
-    void *Get() { return region.Get(); }
+    void* Get() { return region.Get(); }
 };
 
-void AdvanceMirrored(void *shm, uint32_t advance)
+void AdvanceMirrored(void* shm, uint32_t advance)
 {
-    char tmp[512] = {};
+    char tmp[512]      = {};
     uint32_t remaining = advance;
     while (remaining > 0)
     {
-        uint32_t chunk = (remaining > sizeof(tmp))
-                             ? static_cast<uint32_t>(sizeof(tmp))
-                             : remaining;
-        CHECK(SmallRing::TryWriteContig(shm, tmp, chunk) == 0,
-              "AdvanceMirrored write");
-        CHECK(SmallRing::ReadExactContig(shm, tmp, chunk) == 0,
-              "AdvanceMirrored read");
+        uint32_t chunk = (remaining > sizeof(tmp)) ? static_cast<uint32_t>(sizeof(tmp)) : remaining;
+        CHECK(SmallRing::TryWriteContig(shm, tmp, chunk) == 0, "AdvanceMirrored write");
+        CHECK(SmallRing::ReadExactContig(shm, tmp, chunk) == 0, "AdvanceMirrored read");
         remaining -= chunk;
     }
 }
@@ -719,38 +716,32 @@ void TestContigWrap()
     {
         MirroredRing ring;
         CHECK(ring.Init(), "mirror map");
-        void *shm = ring.Get();
-        AdvanceMirrored(shm,
-                        static_cast<uint32_t>(SmallRing::capacity - tail));
+        void* shm = ring.Get();
+        AdvanceMirrored(shm, static_cast<uint32_t>(SmallRing::capacity - tail));
 
         const uint32_t len = SmallRing::max_write_size;  // 2048
         std::vector<char> wbuf(len);
         FillPattern(wbuf.data(), len, static_cast<uint8_t>(tail & 0xFF));
-        CHECK(SmallRing::TryWriteContig(shm, wbuf.data(), len) == 0,
-              "contig write tail=%u", tail);
+        CHECK(SmallRing::TryWriteContig(shm, wbuf.data(), len) == 0, "contig write tail=%u", tail);
 
-        const void *seg = nullptr;
+        const void* seg  = nullptr;
         uint32_t seg_len = 0;
         CHECK(SmallRing::PeekContig(shm, &seg, &seg_len) == 0, "peek contig");
         CHECK(seg_len == len, "peek len tail=%u got %u", tail, seg_len);
-        VerifyPattern(static_cast<const char *>(seg), len,
-                      static_cast<uint8_t>(tail & 0xFF), "peek contig");
+        VerifyPattern(static_cast<const char*>(seg), len, static_cast<uint8_t>(tail & 0xFF), "peek contig");
 
         std::vector<char> rbuf(len);
-        CHECK(SmallRing::ReadExactContig(shm, rbuf.data(), len) == 0,
-              "read contig tail=%u", tail);
-        VerifyPattern(rbuf.data(), len, static_cast<uint8_t>(tail & 0xFF),
-                      "read contig");
+        CHECK(SmallRing::ReadExactContig(shm, rbuf.data(), len) == 0, "read contig tail=%u", tail);
+        VerifyPattern(rbuf.data(), len, static_cast<uint8_t>(tail & 0xFF), "read contig");
         CHECK(SmallRing::Available(shm) == 0, "empty after contig read");
 
-        const void *d = nullptr;
-        uint32_t l = 0;
+        const void* d = nullptr;
+        uint32_t l    = 0;
         CHECK(SmallRing::PeekContig(shm, &d, &l) == -1, "peek empty contig");
     }
 
     ++g_pass_count;
-    std::printf("  PASS: %zu tail offsets\n",
-                sizeof(tails) / sizeof(tails[0]));
+    std::printf("  PASS: %zu tail offsets\n", sizeof(tails) / sizeof(tails[0]));
 }
 
 // =========================================================================
@@ -763,7 +754,7 @@ void TestContigFullRing()
 
     MirroredRing ring;
     CHECK(ring.Init(), "mirror map");
-    void *shm = ring.Get();
+    void* shm = ring.Get();
     AdvanceMirrored(shm, 100);  // 非零物理起点，满环必然跨镜像边界
 
     const uint32_t half = SmallRing::max_write_size;  // 2048
@@ -776,16 +767,15 @@ void TestContigFullRing()
     CHECK(SmallRing::Available(shm) == SmallRing::capacity, "full");
     CHECK(SmallRing::TryWriteContig(shm, "x", 1) == -1, "full reject");
 
-    const void *seg = nullptr;
+    const void* seg  = nullptr;
     uint32_t seg_len = 0;
     CHECK(SmallRing::PeekContig(shm, &seg, &seg_len) == 0, "peek full");
     CHECK(seg_len == SmallRing::capacity, "peek full len=%u", seg_len);
-    VerifyPattern(static_cast<const char *>(seg), half, 0x31, "full a");
-    VerifyPattern(static_cast<const char *>(seg) + half, half, 0x32, "full b");
+    VerifyPattern(static_cast<const char*>(seg), half, 0x31, "full a");
+    VerifyPattern(static_cast<const char*>(seg) + half, half, 0x32, "full b");
 
     std::vector<char> out(SmallRing::capacity);
-    CHECK(SmallRing::TryReadContig(shm, out.data(), SmallRing::capacity) ==
-              SmallRing::capacity, "read full");
+    CHECK(SmallRing::TryReadContig(shm, out.data(), SmallRing::capacity) == SmallRing::capacity, "read full");
     VerifyPattern(out.data(), half, 0x31, "read full a");
     VerifyPattern(out.data() + half, half, 0x32, "read full b");
     CHECK(SmallRing::Available(shm) == 0, "empty after full read");
@@ -804,12 +794,12 @@ void TestMirroredBatchWriter()
 
     MirroredRing ring;
     CHECK(ring.Init(), "mirror map");
-    void *shm = ring.Get();
+    void* shm = ring.Get();
     AdvanceMirrored(shm, static_cast<uint32_t>(SmallRing::capacity - 100));
 
     {
         SmallRing::BatchWriter b(shm, true);
-        char *p = b.Reserve(SmallRing::max_write_size);  // tail=100，跨尾
+        char* p = b.Reserve(SmallRing::max_write_size);  // tail=100，跨尾
         CHECK(p != nullptr, "mirrored Reserve cross tail");
         FillPattern(p, SmallRing::max_write_size, 0x41);
         b.CommitReserve(SmallRing::max_write_size);
@@ -822,11 +812,9 @@ void TestMirroredBatchWriter()
 
     const uint32_t total = SmallRing::max_write_size + 300;
     std::vector<char> out(total);
-    CHECK(SmallRing::ReadExactContig(shm, out.data(), total) == 0,
-          "read reserve+write");
+    CHECK(SmallRing::ReadExactContig(shm, out.data(), total) == 0, "read reserve+write");
     VerifyPattern(out.data(), SmallRing::max_write_size, 0x41, "reserve part");
-    VerifyPattern(out.data() + SmallRing::max_write_size, 300, 0x42,
-                  "tail part");
+    VerifyPattern(out.data() + SmallRing::max_write_size, 300, 0x42, "tail part");
     CHECK(SmallRing::Available(shm) == 0, "empty after batch");
 
     ++g_pass_count;
@@ -843,21 +831,18 @@ void TestContigGuards()
 
     MirroredRing ring;
     CHECK(ring.Init(), "mirror map");
-    void *shm = ring.Get();
+    void* shm = ring.Get();
 
     char x = 'x';
     CHECK(SmallRing::TryWriteContig(shm, nullptr, 10) == -1, "null src");
     CHECK(SmallRing::TryWriteContig(shm, &x, 0) == -1, "len 0");
-    CHECK(SmallRing::TryWriteContig(shm, &x,
-                                    SmallRing::max_write_size + 1) == -1,
-          "oversize");
+    CHECK(SmallRing::TryWriteContig(shm, &x, SmallRing::max_write_size + 1) == -1, "oversize");
     CHECK(SmallRing::TryReadContig(shm, nullptr, 10) == 0, "read null");
-    CHECK(SmallRing::ReadExactContig(shm, nullptr, 10) == -1,
-          "read exact null");
+    CHECK(SmallRing::ReadExactContig(shm, nullptr, 10) == -1, "read exact null");
     CHECK(SmallRing::ReadExactContig(shm, nullptr, 0) == 0, "read exact 0");
 
-    const void *d = nullptr;
-    uint32_t l = 0;
+    const void* d = nullptr;
+    uint32_t l    = 0;
     CHECK(SmallRing::PeekContig(shm, nullptr, &l) == -1, "peek null data");
     CHECK(SmallRing::PeekContig(shm, &d, nullptr) == -1, "peek null len");
     CHECK(SmallRing::PeekContig(shm, &d, &l) == -1, "peek empty");
@@ -874,22 +859,21 @@ void TestReaderWaitStateMachine()
 {
     std::printf("--- Test 17: reader_wait state machine ---\n");
 
-    void *shm = AllocShm();
+    void* shm = AllocShm();
 
     // 读方未启用按需通知：写方每次都通知（兼容裸读方）
     CHECK(SmallRing::ShouldNotify(shm), "default notifies (1)");
     CHECK(SmallRing::ShouldNotify(shm), "default notifies (2)");
 
     // 读空后武装：可睡眠；写方只通知一次
-    CHECK(SmallRing::ArmReaderWait(shm, SmallRing::WritePos(shm)),
-          "arm on empty ring -> may sleep");
+    CHECK(SmallRing::ArmReaderWait(shm, SmallRing::WritePos(shm)), "arm on empty ring -> may sleep");
     CHECK(SmallRing::ShouldNotify(shm), "waiting reader gets a notify");
     CHECK(!SmallRing::ShouldNotify(shm), "notify is one-shot per sleep");
     CHECK(!SmallRing::ShouldNotify(shm), "awake reader not notified");
 
     // 武装时基线已过期（write_pos 已推进）：拒绝睡眠且撤销标志
     uint64_t stale = SmallRing::WritePos(shm);
-    char b[8] = {};
+    char b[8]      = {};
     CHECK(SmallRing::TryWrite(shm, b, sizeof(b)) == 0, "write");
     CHECK(!SmallRing::ArmReaderWait(shm, stale), "stale baseline -> no sleep");
     CHECK(!SmallRing::ShouldNotify(shm), "disarmed after failed arm");
@@ -915,7 +899,7 @@ void TestReaderWaitNoLostWakeup()
     std::printf("--- Test 18: reader_wait lost-wakeup stress ---\n");
 
     constexpr uint64_t kMsgs = 400000;
-    void *shm = AllocShm();
+    void* shm                = AllocShm();
 
     shm::UniqueFd efd;
     CHECK(shm::CreateEventfd(&efd) == shm::ErrorCode::kOk, "eventfd");
@@ -928,19 +912,23 @@ void TestReaderWaitNoLostWakeup()
         for (uint64_t i = 0; i < kMsgs; ++i)
         {
             while (SmallRing::TryWrite(shm, &i, sizeof(i)) != 0)
+            {
                 std::this_thread::yield();  // 环满：等读方消费
+            }
             if (SmallRing::ShouldNotify(shm))
             {
                 uint64_t one = 1;
-                CHECK(::write(efd.Get(), &one, sizeof(one)) == sizeof(one),
-                      "eventfd write");
+                CHECK(::write(efd.Get(), &one, sizeof(one)) == sizeof(one), "eventfd write");
                 notifies.fetch_add(1, std::memory_order_relaxed);
             }
-            rng ^= rng << 13; rng ^= rng >> 7; rng ^= rng << 17;
+            rng ^= rng << 13;
+            rng ^= rng >> 7;
+            rng ^= rng << 17;
             // 约 1/512 的概率停顿，让读方真正进入睡眠
             if ((rng & 511) == 0)
-                std::this_thread::sleep_for(
-                    std::chrono::microseconds(20 + (rng >> 20) % 200));
+            {
+                std::this_thread::sleep_for(std::chrono::microseconds(20 + (rng >> 20) % 200));
+            }
         }
         writer_done.store(true, std::memory_order_release);
     });
@@ -952,14 +940,17 @@ void TestReaderWaitNoLostWakeup()
         uint64_t v;
         while (SmallRing::ReadExact(shm, &v, sizeof(v)) == 0)
         {
-            CHECK(v == expect, "order: got %lu want %lu",
-                  (unsigned long)v, (unsigned long)expect);
+            CHECK(v == expect, "order: got %lu want %lu", (unsigned long)v, (unsigned long)expect);
             ++expect;
         }
         if (expect == kMsgs)
+        {
             break;
+        }
         if (!SmallRing::ArmReaderWait(shm, seen))
+        {
             continue;  // 武装期间有新数据到达，不睡眠
+        }
 
         pollfd pfd{efd.Get(), POLLIN, 0};
         int pr = ::poll(&pfd, 1, 3000);
@@ -967,10 +958,8 @@ void TestReaderWaitNoLostWakeup()
         if (pr == 0)
         {
             // 超时：环里有数据，或写方已全部写完但读方没被唤醒 = 丢唤醒
-            CHECK(SmallRing::Available(shm) == 0 &&
-                      !writer_done.load(std::memory_order_acquire),
-                  "lost wakeup: poll timeout with data pending (expect=%lu)",
-                  (unsigned long)expect);
+            CHECK(SmallRing::Available(shm) == 0 && !writer_done.load(std::memory_order_acquire),
+                  "lost wakeup: poll timeout with data pending (expect=%lu)", (unsigned long)expect);
             continue;
         }
         uint64_t drained;
@@ -982,17 +971,15 @@ void TestReaderWaitNoLostWakeup()
     CHECK(notifies.load() < kMsgs, "no notification suppression observed");
     std::free(shm);
     ++g_pass_count;
-    std::printf("  PASS: %lu msgs, %lu notifies (%.2f%%), %lu sleeps\n",
-                (unsigned long)kMsgs, (unsigned long)notifies.load(),
-                100.0 * notifies.load() / kMsgs, (unsigned long)polls);
+    std::printf("  PASS: %lu msgs, %lu notifies (%.2f%%), %lu sleeps\n", (unsigned long)kMsgs,
+                (unsigned long)notifies.load(), 100.0 * notifies.load() / kMsgs, (unsigned long)polls);
 }
 
 }  // anonymous namespace
 
 int main()
 {
-    std::printf("=== RingBuf boundary test suite (Capacity=%zu) ===\n\n",
-                kSmallCap);
+    std::printf("=== RingBuf boundary test suite (Capacity=%zu) ===\n\n", kSmallCap);
 
     TestFullRing();
     TestFullRingCycle();

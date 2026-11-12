@@ -227,15 +227,23 @@ class BatchWriter
      */
     int TryWrite(const void* data, uint32_t len)
     {
-        if (!hdr_ || !base_)  // moved-from / 已失效：不得写入
+        if (!hdr_ || !base_)
+        {  // moved-from / 已失效：不得写入
             return -1;
+        }
         if (len == 0 || len > max_write_size)
+        {
             return -1;
-        if (data == nullptr)  // memcpy(dst, nullptr, n) 是 UB，防御性拒绝
+        }
+        if (data == nullptr)
+        {  // memcpy(dst, nullptr, n) 是 UB，防御性拒绝
             return -1;
+        }
 
         if ((w_ + len) - r_ > Capacity)
+        {
             return -1;
+        }
 
         std::size_t phys_w = RingPhys<Capacity>(w_);
         std::size_t tail   = Capacity - phys_w;
@@ -267,7 +275,9 @@ class BatchWriter
     int Flush()
     {
         if (!hdr_)
+        {
             return 0;
+        }
         int n = count_;
         if (w_ != w_start_)
         {
@@ -312,13 +322,17 @@ class BatchWriter
     void RewindTo(uint64_t pending, int count) noexcept
     {
         if (!hdr_)
+        {
             return;  // moved-from
+        }
         // pending 超过当前未发布字节数会虚增 w_，
         // Flush 时把未写入的垃圾数据发布给对端。
         // assert 仅在 debug 生效，release 下钳制到实际未发布字节数。
         assert(pending <= PendingBytes());
         if (pending > PendingBytes())
+        {
             pending = PendingBytes();
+        }
         w_            = w_start_ + pending;
         count_        = (count < 0) ? 0 : count;
         reserved_     = nullptr;
@@ -340,16 +354,24 @@ class BatchWriter
      */
     char* Reserve(uint32_t len)
     {
-        if (!hdr_ || !base_)  // moved-from / 已失效
+        if (!hdr_ || !base_)
+        {  // moved-from / 已失效
             return nullptr;
+        }
         if (len == 0 || len > max_write_size)
+        {
             return nullptr;
+        }
         if ((w_ + len) - r_ > Capacity)
+        {
             return nullptr;
+        }
         std::size_t phys_w = RingPhys<Capacity>(w_);
         std::size_t tail   = Capacity - phys_w;
         if (!mirrored_ && len > tail)
+        {
             return nullptr;  // 非镜像映射跨环尾，调用者应回退
+        }
         reserved_     = base_ + phys_w;
         reserved_len_ = len;
         return reserved_;
@@ -367,7 +389,9 @@ class BatchWriter
         // 注意：这里不做 assert。非法提交在 debug/release 下都应当被
         // 安全拒绝（而不是 abort），否则调试构建与发布构建行为不一致。
         if (!hdr_ || !reserved_ || len != reserved_len_)
+        {
             return;  // 非法提交：调用方未 Reserve 或长度不符
+        }
         w_ += len;
         ++count_;
         reserved_     = nullptr;
@@ -469,9 +493,13 @@ class RingBuf
     static int TryWrite(void* shm, const void* data, uint32_t len)
     {
         if (len == 0 || len > max_write_size)
+        {
             return -1;
-        if (data == nullptr)  // memcpy(dst, nullptr, n) 是 UB，防御性拒绝
+        }
+        if (data == nullptr)
+        {  // memcpy(dst, nullptr, n) 是 UB，防御性拒绝
             return -1;
+        }
 
         auto* hdr  = detail::RingHdr(shm);
         char* base = detail::RingData(shm);
@@ -480,7 +508,9 @@ class RingBuf
         uint64_t r = hdr->read_pos.load(std::memory_order_acquire);
 
         if ((w + len) - r > Capacity)
+        {
             return -1;
+        }
 
         std::size_t phys_w = detail::RingPhys<Capacity>(w);
         std::size_t tail   = Capacity - phys_w;
@@ -516,7 +546,9 @@ class RingBuf
     {
         // memcpy(dst, src, n>0) 对空指针属 UB；与 TryWrite 的防御保持一致
         if (data == nullptr)
+        {
             return 0;
+        }
 
         auto* hdr        = detail::RingHdr(shm);
         const char* base = detail::RingData(shm);
@@ -526,12 +558,16 @@ class RingBuf
         uint64_t avail = w - r;
 
         if (avail == 0)
+        {
             return 0;
+        }
 
         uint32_t to_read = (avail < max_len) ? static_cast<uint32_t>(avail) : max_len;
         // max_len == 0：不拷贝不推进
         if (to_read == 0)
+        {
             return 0;
+        }
         detail::RingCopyOut<Capacity>(base, detail::RingPhys<Capacity>(r), data, to_read);
 
         hdr->read_pos.store(r + to_read, std::memory_order_release);
@@ -549,9 +585,13 @@ class RingBuf
     {
         // 读 0 字节平凡成功；提前返回避免 memcpy(dst, src, 0) 的 UB 边界
         if (len == 0)
+        {
             return 0;
-        if (data == nullptr)  // 非零长度读入空指针：拒绝而不是崩溃
+        }
+        if (data == nullptr)
+        {  // 非零长度读入空指针：拒绝而不是崩溃
             return -1;
+        }
 
         auto* hdr        = detail::RingHdr(shm);
         const char* base = detail::RingData(shm);
@@ -561,7 +601,9 @@ class RingBuf
         uint64_t avail = w - r;
 
         if (avail < len)
+        {
             return -1;
+        }
 
         detail::RingCopyOut<Capacity>(base, detail::RingPhys<Capacity>(r), data, len);
 
@@ -577,14 +619,18 @@ class RingBuf
     static int TryWriteContig(void* shm, const void* data, uint32_t len)
     {
         if (len == 0 || len > max_write_size || data == nullptr)
+        {
             return -1;
+        }
 
         auto* hdr  = detail::RingHdr(shm);
         char* base = detail::RingData(shm);
         uint64_t w = hdr->write_pos.load(std::memory_order_relaxed);
         uint64_t r = hdr->read_pos.load(std::memory_order_acquire);
         if ((w + len) - r > Capacity)
+        {
             return -1;
+        }
 
         std::memcpy(base + detail::RingPhys<Capacity>(w), data, len);
         hdr->write_pos.store(w + len, std::memory_order_release);
@@ -595,7 +641,9 @@ class RingBuf
     static uint32_t TryReadContig(void* shm, void* data, uint32_t max_len)
     {
         if (data == nullptr)
+        {
             return 0;
+        }
 
         auto* hdr        = detail::RingHdr(shm);
         const char* base = detail::RingData(shm);
@@ -603,11 +651,15 @@ class RingBuf
         uint64_t w       = hdr->write_pos.load(std::memory_order_acquire);
         uint64_t avail   = w - r;
         if (avail == 0)
+        {
             return 0;
+        }
 
         uint32_t to_read = (avail < max_len) ? static_cast<uint32_t>(avail) : max_len;
         if (to_read == 0)
+        {
             return 0;
+        }
 
         std::memcpy(data, base + detail::RingPhys<Capacity>(r), to_read);
         hdr->read_pos.store(r + to_read, std::memory_order_release);
@@ -618,16 +670,22 @@ class RingBuf
     static int ReadExactContig(void* shm, void* data, uint32_t len)
     {
         if (len == 0)
+        {
             return 0;
+        }
         if (data == nullptr)
+        {
             return -1;
+        }
 
         auto* hdr        = detail::RingHdr(shm);
         const char* base = detail::RingData(shm);
         uint64_t r       = hdr->read_pos.load(std::memory_order_relaxed);
         uint64_t w       = hdr->write_pos.load(std::memory_order_acquire);
         if (w - r < len)
+        {
             return -1;
+        }
 
         std::memcpy(data, base + detail::RingPhys<Capacity>(r), len);
         hdr->read_pos.store(r + len, std::memory_order_release);
@@ -638,7 +696,9 @@ class RingBuf
     static int PeekContig(const void* shm, const void** data, uint32_t* len)
     {
         if (!data || !len)
+        {
             return -1;
+        }
 
         auto* hdr        = detail::RingHdr(shm);
         const char* base = detail::RingData(shm);
@@ -646,7 +706,9 @@ class RingBuf
         uint64_t w       = hdr->write_pos.load(std::memory_order_acquire);
         uint64_t avail   = w - r;
         if (avail == 0)
+        {
             return -1;
+        }
 
         *data = base + detail::RingPhys<Capacity>(r);
         *len  = static_cast<uint32_t>(avail);
@@ -670,7 +732,9 @@ class RingBuf
     {
         // 输出参数为空时安全拒绝（debug/release 行为一致）
         if (!seg1 || !seg1_len || !seg2 || !seg2_len)
+        {
             return -1;
+        }
 
         auto* hdr        = detail::RingHdr(shm);
         const char* base = detail::RingData(shm);
@@ -680,7 +744,9 @@ class RingBuf
         uint64_t avail = w - r;
 
         if (avail == 0)
+        {
             return -1;
+        }
 
         std::size_t phys_r = detail::RingPhys<Capacity>(r);
         std::size_t contig = Capacity - phys_r;
@@ -717,7 +783,9 @@ class RingBuf
         uint64_t avail = hdr->write_pos.load(std::memory_order_acquire) - r;
         assert(static_cast<uint64_t>(len) <= avail);
         if (static_cast<uint64_t>(len) > avail)
+        {
             len = static_cast<uint32_t>(avail);  // release 防御：不越过写位置
+        }
         hdr->read_pos.store(r + len, std::memory_order_release);
     }
 
@@ -788,9 +856,13 @@ class RingBuf
         std::atomic_thread_fence(std::memory_order_seq_cst);
         uint32_t v = hdr->reader_wait.load(std::memory_order_relaxed);
         if (v == kReaderAwake)
+        {
             return false;
+        }
         if (v == kReaderNotifyAlways)
+        {
             return true;
+        }
         // kReaderWaiting：抢占清零，只有抢到的一方发通知
         return hdr->reader_wait.exchange(kReaderAwake, std::memory_order_acq_rel) != kReaderAwake;
     }

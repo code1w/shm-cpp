@@ -132,7 +132,9 @@ class ChannelBatchWriter
     {
         int n = batch_.Flush();
         if (n > 0 && channel_)
+        {
             channel_->NotifyPeer();
+        }
         return n;
     }
 
@@ -207,7 +209,9 @@ class RingChannel
                                        int* sys_errno = nullptr) noexcept
     {
         if (!out || socket_fd < 0)
+        {
             return ErrorCode::kInvalidArgument;
+        }
 
         RingChannel ch;
         detail::HandshakeGuard guard{socket_fd};  // 握手超时，返回时恢复
@@ -217,31 +221,47 @@ class RingChannel
         {
             ec = ch.CreateWriteRing("client_to_server", sys_errno);
             if (ec != ErrorCode::kOk)
+            {
                 return ec;
+            }
             ec = CreateEventfd(&ch.notify_read_efd_, sys_errno);
             if (ec != ErrorCode::kOk)
+            {
                 return ec;
+            }
             ec = ch.SendLocalFds(socket_fd, sys_errno);  // 先发：memfd_c2s、efd_client
             if (ec != ErrorCode::kOk)
+            {
                 return ec;
+            }
             ec = ch.RecvPeerFds(socket_fd, sys_errno);  // 后收：memfd_s2c、efd_server
             if (ec != ErrorCode::kOk)
+            {
                 return ec;
+            }
         }
         else
         {
             ec = ch.RecvPeerFds(socket_fd, sys_errno);  // 先收：memfd_c2s、efd_client
             if (ec != ErrorCode::kOk)
+            {
                 return ec;
+            }
             ec = ch.CreateWriteRing("server_to_client", sys_errno);
             if (ec != ErrorCode::kOk)
+            {
                 return ec;
+            }
             ec = CreateEventfd(&ch.notify_read_efd_, sys_errno);
             if (ec != ErrorCode::kOk)
+            {
                 return ec;
+            }
             ec = ch.SendLocalFds(socket_fd, sys_errno);  // 后发：memfd_s2c、efd_server
             if (ec != ErrorCode::kOk)
+            {
                 return ec;
+            }
         }
 
         *out = std::move(ch);
@@ -258,10 +278,14 @@ class RingChannel
      */
     int TryWrite(const void* data, uint32_t len)
     {
-        if (!write_region_)  // 默认构造 / moved-from：无写环
+        if (!write_region_)
+        {  // 默认构造 / moved-from：无写环
             return -1;
+        }
         if (write_region_.Mirrored())
+        {
             return Ring::TryWriteContig(write_region_.Get(), data, len);
+        }
         return Ring::TryWrite(write_region_.Get(), data, len);
     }
 
@@ -274,9 +298,13 @@ class RingChannel
     uint32_t TryRead(void* data, uint32_t max_len)
     {
         if (!read_region_)
+        {
             return 0;
+        }
         if (read_region_.Mirrored())
+        {
             return Ring::TryReadContig(read_region_.Get(), data, max_len);
+        }
         return Ring::TryRead(read_region_.Get(), data, max_len);
     }
 
@@ -289,9 +317,13 @@ class RingChannel
     int ReadExact(void* data, uint32_t len)
     {
         if (!read_region_)
+        {
             return -1;
+        }
         if (read_region_.Mirrored())
+        {
             return Ring::ReadExactContig(read_region_.Get(), data, len);
+        }
         return Ring::ReadExact(read_region_.Get(), data, len);
     }
 
@@ -306,11 +338,15 @@ class RingChannel
     int Peek(const void** seg1, uint32_t* seg1_len, const void** seg2, uint32_t* seg2_len)
     {
         if (!read_region_)
+        {
             return -1;
+        }
         if (read_region_.Mirrored())
         {
             if (!seg1 || !seg1_len || !seg2 || !seg2_len)
+            {
                 return -1;
+            }
             int rc    = Ring::PeekContig(read_region_.Get(), seg1, seg1_len);
             *seg2     = nullptr;
             *seg2_len = 0;
@@ -326,7 +362,9 @@ class RingChannel
     void CommitRead(uint32_t len)
     {
         if (!read_region_)
+        {
             return;
+        }
         Ring::CommitRead(read_region_.Get(), len);
     }
 
@@ -341,9 +379,13 @@ class RingChannel
     ErrorCode StartBatch(ChannelBatchWriter* out) noexcept
     {
         if (!out)
+        {
             return ErrorCode::kInvalidArgument;
+        }
         if (!write_region_)
+        {
             return ErrorCode::kNotInitialized;
+        }
         *out = ChannelBatchWriter(typename Ring::BatchWriter(write_region_.Get(), write_region_.Mirrored()), this);
         return ErrorCode::kOk;
     }
@@ -377,10 +419,14 @@ class RingChannel
      */
     void NotifyPeer() const
     {
-        if (!notify_write_efd_)  // 未完成握手 / moved-from
+        if (!notify_write_efd_)
+        {  // 未完成握手 / moved-from
             return;
+        }
         if (write_region_ && !Ring::ShouldNotify(write_region_.Get()))
+        {
             return;
+        }
         uint64_t v = 1;
         ssize_t r;
         do
@@ -403,7 +449,9 @@ class RingChannel
     bool PrepareWait(uint64_t seen_write)
     {
         if (!read_region_)
+        {
             return true;
+        }
         return Ring::ArmReaderWait(read_region_.Get(), seen_write);
     }
 
@@ -454,7 +502,9 @@ class RingChannel
     {
         ErrorCode ec = CreateMemfd(name, Ring::shm_size, &write_memfd_, sys_errno);
         if (ec != ErrorCode::kOk)
+        {
             return ec;
+        }
         ec = write_region_.MapMirrored(write_memfd_.Get(), Ring::shm_size, kRingDataOffset, Ring::capacity,
                                        PROT_READ | PROT_WRITE, MAP_SHARED, sys_errno);
         if (ec != ErrorCode::kOk)
@@ -462,7 +512,9 @@ class RingChannel
             // 镜像仅影响本地 VA 布局；失败时退化为普通单次映射
             ec = write_region_.Map(write_memfd_.Get(), Ring::shm_size, PROT_READ | PROT_WRITE, MAP_SHARED, sys_errno);
             if (ec != ErrorCode::kOk)
+            {
                 return ec;
+            }
         }
         Ring::Init(write_region_.Get());
         return ErrorCode::kOk;
@@ -473,7 +525,9 @@ class RingChannel
     {
         ErrorCode ec = SendFd(socket_fd, write_memfd_.Get(), FdTag::kMemfd, sys_errno);
         if (ec != ErrorCode::kOk)
+        {
             return ec;
+        }
         return SendFd(socket_fd, notify_read_efd_.Get(), FdTag::kEventfd, sys_errno);
     }
 
@@ -482,7 +536,9 @@ class RingChannel
     {
         ErrorCode ec = RecvFdExpect(socket_fd, FdTag::kMemfd, &read_memfd_, sys_errno);
         if (ec != ErrorCode::kOk)
+        {
             return ec;
+        }
 
         // 必须先校验对端 memfd 尺寸再 mmap/访问：
         // 两端 Capacity 不一致或对端发送 0 字节/被截断的 memfd 时，
@@ -493,7 +549,9 @@ class RingChannel
         if (::fstat(read_memfd_.Get(), &st) != 0)
         {
             if (sys_errno)
+            {
                 *sys_errno = errno;
+            }
             return ErrnoToErrorCode(errno);
         }
         if (!S_ISREG(st.st_mode) || st.st_size != static_cast<off_t>(Ring::shm_size))
@@ -507,7 +565,9 @@ class RingChannel
         {
             ec = read_region_.Map(read_memfd_.Get(), Ring::shm_size, PROT_READ | PROT_WRITE, MAP_SHARED, sys_errno);
             if (ec != ErrorCode::kOk)
+            {
                 return ec;
+            }
         }
         return RecvFdExpect(socket_fd, FdTag::kEventfd, &notify_write_efd_, sys_errno);
     }

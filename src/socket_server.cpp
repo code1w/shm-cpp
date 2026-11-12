@@ -56,7 +56,9 @@ bool RunBench()
 {
     shm::UniqueFd listen_fd;
     if (!CreateListenSocket(kSocketPath, &listen_fd))
+    {
         return false;
+    }
     std::printf("socket_server(bench): waiting for client on %s ...\n", kSocketPath);
 
     shm::UniqueFd cfd{::accept(listen_fd.Get(), nullptr, nullptr)};
@@ -79,7 +81,9 @@ bool RunBench()
         shm::BenchCmd cmd{};
         ReadAll(cfd.Get(), &cmd, sizeof(cmd));
         if (cmd.rounds == 0)
+        {
             break;
+        }
 
         // 命令来自对端：payload_size 超过 16MB 或 rounds 为负视为协议违规。
         // 不校验时 payload_size 接近 UINT32_MAX 会令 max_body 回绕成极小值

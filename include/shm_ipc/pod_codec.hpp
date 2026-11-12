@@ -65,10 +65,14 @@ class PodCodec : public ICodec
         const void* raw_payload = nullptr;
         uint32_t raw_len        = 0;
         if (!shm::Decode(buf, buf_len, &raw_payload, &raw_len, seq))
+        {
             return false;
+        }
         uint32_t tag = 0;
         if (!CheckTag(raw_payload, raw_len, &tag))
+        {
             return false;
+        }
         auto* p      = static_cast<const char*>(raw_payload);
         *payload     = p + kTagSize;
         *payload_len = raw_len - kTagSize;
@@ -94,7 +98,9 @@ class PodCodec : public ICodec
     {
         uint32_t tag = 0;
         if (!CheckTag(payload, payload_len, &tag))
+        {
             return false;
+        }
         *data     = static_cast<const char*>(payload) + kTagSize;
         *data_len = payload_len - kTagSize;
         return true;
@@ -127,7 +133,9 @@ class PodCodec : public ICodec
         uint32_t payload_len = kTagSize + sizeof(T);
         char* p              = EncodeFrame(buf, buf_size, payload_len, seq);
         if (!p)
+        {
             return 0;
+        }
         std::memcpy(p, &tag, kTagSize);
         std::memcpy(p + kTagSize, &obj, sizeof(T));
         return kMsgHeaderSize + payload_len;
@@ -144,7 +152,9 @@ class PodCodec : public ICodec
     static bool DecodeFrom(const void* payload, uint32_t payload_len, T* out)
     {
         if (payload_len != sizeof(T))
+        {
             return false;
+        }
         std::memcpy(out, payload, sizeof(T));
         return true;
     }
@@ -199,7 +209,9 @@ class PodCodec : public ICodec
             uint32_t payload_len = 0;
             int rc               = reader_.TryRecv(ch, &payload, &payload_len);
             if (rc == -1 || rc == -2 || rc == -3)
+            {
                 return rc;
+            }
             const void* data  = nullptr;
             uint32_t data_len = 0;
             if (!DecodePayload(payload, payload_len, &data, &data_len) || data_len != sizeof(T))
@@ -220,7 +232,9 @@ class PodCodec : public ICodec
     static bool CheckTag(const void* payload, uint32_t payload_len, uint32_t* tag_out)
     {
         if (payload_len < kTagSize)
+        {
             return false;
+        }
         std::memcpy(tag_out, payload, kTagSize);
         return *tag_out == TypeTag<T>::value;
     }

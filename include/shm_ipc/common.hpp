@@ -76,7 +76,9 @@ class [[nodiscard]] UniqueFd
     void Reset(int fd = -1) noexcept
     {
         if (fd_ >= 0)
+        {
             ::close(fd_);
+        }
         fd_ = fd;
     }
     explicit operator bool() const noexcept { return fd_ >= 0; }
@@ -97,7 +99,9 @@ class MmapRegion
     ~MmapRegion()
     {
         if (addr_ != MAP_FAILED)
+        {
             ::munmap(addr_, size_);
+        }
     }
 
     MmapRegion(MmapRegion&& o) noexcept
@@ -114,7 +118,9 @@ class MmapRegion
         if (this != &o)
         {
             if (addr_ != MAP_FAILED)
+            {
                 ::munmap(addr_, size_);
+            }
             addr_          = std::exchange(o.addr_, MAP_FAILED);
             size_          = std::exchange(o.size_, 0);
             mirrored_      = o.mirrored_;
@@ -135,17 +141,23 @@ class MmapRegion
     ErrorCode Map(int fd, std::size_t size, int prot, int flags, int* sys_errno = nullptr) noexcept
     {
         if (fd < 0 || size == 0)
+        {
             return ErrorCode::kInvalidArgument;
+        }
 
         void* addr = ::mmap(nullptr, size, prot, flags, fd, 0);
         if (addr == MAP_FAILED)
         {
             if (sys_errno)
+            {
                 *sys_errno = errno;
+            }
             return ErrnoToErrorCode(errno);
         }
         if (addr_ != MAP_FAILED)
+        {
             ::munmap(addr_, size_);
+        }
         addr_        = addr;
         size_        = size;
         mirrored_    = false;
@@ -174,12 +186,16 @@ class MmapRegion
                           int flags, int* sys_errno = nullptr) noexcept
     {
         if (fd < 0 || capacity == 0 || data_offset + capacity != file_size)
+        {
             return ErrorCode::kInvalidArgument;
+        }
 
         const long page             = ::sysconf(_SC_PAGESIZE);
         const std::size_t page_size = (page > 0) ? static_cast<std::size_t>(page) : 4096u;
         if (data_offset % page_size != 0)
+        {
             return ErrorCode::kInvalidArgument;
+        }
 
         // VA 预留：header 页 + 两圈 data
         const std::size_t reserve = file_size + capacity;
@@ -187,7 +203,9 @@ class MmapRegion
         if (base == MAP_FAILED)
         {
             if (sys_errno)
+            {
                 *sys_errno = errno;
+            }
             return ErrnoToErrorCode(errno);
         }
 
@@ -197,7 +215,9 @@ class MmapRegion
             const int err = errno;
             ::munmap(base, reserve);
             if (sys_errno)
+            {
                 *sys_errno = err;
+            }
             return ErrnoToErrorCode(err);
         }
         // 第二圈：仅 data 区，紧接在第一圈 data 末尾
@@ -207,12 +227,16 @@ class MmapRegion
             const int err = errno;
             ::munmap(base, reserve);
             if (sys_errno)
+            {
                 *sys_errno = err;
+            }
             return ErrnoToErrorCode(err);
         }
 
         if (addr_ != MAP_FAILED)
+        {
             ::munmap(addr_, size_);
+        }
         addr_        = base;
         size_        = reserve;
         mirrored_    = true;
@@ -290,18 +314,24 @@ struct TaggedFd
 inline ErrorCode CreateMemfd(const char* name, std::size_t size, UniqueFd* out, int* sys_errno = nullptr) noexcept
 {
     if (!out || !name || size == 0)
+    {
         return ErrorCode::kInvalidArgument;
+    }
 
     // MFD_ALLOW_SEALING 允许随后 fcntl(F_ADD_SEALS)；内核不识别该标志
     // （EINVAL）时退化为普通 memfd，仅失去防 truncate 硬化
     int fd =
         static_cast<int>(::syscall(__NR_memfd_create, name, static_cast<unsigned>(MFD_CLOEXEC | MFD_ALLOW_SEALING)));
     if (fd < 0 && errno == EINVAL)
+    {
         fd = static_cast<int>(::syscall(__NR_memfd_create, name, static_cast<unsigned>(MFD_CLOEXEC)));
+    }
     if (fd < 0)
     {
         if (sys_errno)
+        {
             *sys_errno = errno;
+        }
         return ErrnoToErrorCode(errno);
     }
     if (::ftruncate(fd, static_cast<off_t>(size)) < 0)
@@ -309,7 +339,9 @@ inline ErrorCode CreateMemfd(const char* name, std::size_t size, UniqueFd* out, 
         const int err = errno;
         ::close(fd);
         if (sys_errno)
+        {
             *sys_errno = err;
+        }
         return ErrnoToErrorCode(err);
     }
     // 封印尺寸（尽力而为：不支持 seal 的内核静默跳过，与历史行为一致）
@@ -329,7 +361,9 @@ inline ErrorCode CreateMemfd(const char* name, std::size_t size, UniqueFd* out, 
 inline ErrorCode SendFd(int socket, int fd, FdTag tag, int* sys_errno = nullptr) noexcept
 {
     if (socket < 0 || fd < 0)
+    {
         return ErrorCode::kInvalidArgument;
+    }
 
     std::array<char, 256> dummy{};
     auto tag_val = static_cast<uint32_t>(tag);
@@ -367,11 +401,15 @@ inline ErrorCode SendFd(int socket, int fd, FdTag tag, int* sys_errno = nullptr)
         if (n < 0)
         {
             if (sys_errno)
+            {
                 *sys_errno = errno;
+            }
             return ErrnoToErrorCode(errno);
         }
         if (n == 0)
+        {
             return ErrorCode::kPeerClosed;
+        }
         sent += static_cast<std::size_t>(n);
     }
     return ErrorCode::kOk;
@@ -391,7 +429,9 @@ inline ErrorCode SendFd(int socket, int fd, FdTag tag, int* sys_errno = nullptr)
 inline ErrorCode RecvFd(int socket, TaggedFd* out, int* sys_errno = nullptr) noexcept
 {
     if (socket < 0 || !out)
+    {
         return ErrorCode::kInvalidArgument;
+    }
 
     std::array<char, 256> data{};
     alignas(cmsghdr) std::array<char, CMSG_SPACE(sizeof(int))> ctrl{};
@@ -425,24 +465,34 @@ inline ErrorCode RecvFd(int socket, TaggedFd* out, int* sys_errno = nullptr) noe
         if (n < 0)
         {
             if (sys_errno)
+            {
                 *sys_errno = errno;
+            }
             return ErrnoToErrorCode(errno);
         }
         if (n == 0)
+        {
             return ErrorCode::kPeerClosed;
+        }
 
         if (!have_cmsg)
         {
             // 控制消息被截断（对端一次发送了多个 fd 或缓冲区不足）时
             // 静默继续会导致 fd 泄漏或标签错位，必须显式报错
             if (msg.msg_flags & MSG_CTRUNC)
+            {
                 return ErrorCode::kProtocol;
+            }
 
             auto* cmsg = CMSG_FIRSTHDR(&msg);
             if (!cmsg || cmsg->cmsg_level != SOL_SOCKET || cmsg->cmsg_type != SCM_RIGHTS)
+            {
                 return ErrorCode::kProtocol;
+            }
             if (cmsg->cmsg_len < CMSG_LEN(sizeof(int)))
+            {
                 return ErrorCode::kProtocol;
+            }
 
             // 对端一条消息携带多个 fd 时只取第一个会造成其余 fd 泄漏，
             // 属协议违规：关闭全部并报错
@@ -454,7 +504,9 @@ inline ErrorCode RecvFd(int socket, TaggedFd* out, int* sys_errno = nullptr) noe
                     int extra = -1;
                     std::memcpy(&extra, CMSG_DATA(cmsg) + i * sizeof(int), sizeof(int));
                     if (extra >= 0)
+                    {
                         ::close(extra);
+                    }
                 }
                 return ErrorCode::kMultipleFds;
             }
@@ -484,14 +536,20 @@ inline ErrorCode RecvFd(int socket, TaggedFd* out, int* sys_errno = nullptr) noe
 inline ErrorCode RecvFdExpect(int socket, FdTag expected, UniqueFd* out, int* sys_errno = nullptr) noexcept
 {
     if (!out)
+    {
         return ErrorCode::kInvalidArgument;
+    }
 
     TaggedFd tagged{};
     ErrorCode ec = RecvFd(socket, &tagged, sys_errno);
     if (ec != ErrorCode::kOk)
+    {
         return ec;
+    }
     if (tagged.tag != expected)
+    {
         return ErrorCode::kProtocol;  // tagged.fd 由 RAII 关闭
+    }
 
     *out = std::move(tagged.fd);
     return ErrorCode::kOk;
@@ -506,13 +564,17 @@ inline ErrorCode RecvFdExpect(int socket, FdTag expected, UniqueFd* out, int* sy
 inline ErrorCode CreateEventfd(UniqueFd* out, int* sys_errno = nullptr) noexcept
 {
     if (!out)
+    {
         return ErrorCode::kInvalidArgument;
+    }
 
     int fd = ::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
     if (fd < 0)
     {
         if (sys_errno)
+        {
             *sys_errno = errno;
+        }
         return ErrnoToErrorCode(errno);
     }
     *out = UniqueFd{fd};
@@ -530,7 +592,9 @@ inline std::string_view UriToPath(std::string_view uri) noexcept
 {
     auto pos = uri.find("://");
     if (pos == std::string_view::npos)
+    {
         return uri;
+    }
     return uri.substr(pos + 3);
 }
 
@@ -541,7 +605,9 @@ inline std::string_view UriToPath(std::string_view uri) noexcept
 inline bool CopyUnixPath(std::string_view path, char* buf, std::size_t buf_size) noexcept
 {
     if (path.empty() || path.size() >= buf_size)
+    {
         return false;
+    }
     std::memcpy(buf, path.data(), path.size());
     buf[path.size()] = '\0';
     return true;
@@ -559,13 +625,17 @@ inline ErrorCode ListenUnixSocket(std::string_view path, UniqueFd* out, int back
                                   int* sys_errno = nullptr) noexcept
 {
     if (!out)
+    {
         return ErrorCode::kInvalidArgument;
+    }
 
     char cpath[sizeof(sockaddr_un::sun_path)];
     if (!CopyUnixPath(path, cpath, sizeof(cpath)))
     {
         if (sys_errno)
+        {
             *sys_errno = ENAMETOOLONG;
+        }
         return ErrorCode::kInvalidArgument;
     }
 
@@ -573,7 +643,9 @@ inline ErrorCode ListenUnixSocket(std::string_view path, UniqueFd* out, int back
     if (!sfd)
     {
         if (sys_errno)
+        {
             *sys_errno = errno;
+        }
         return ErrnoToErrorCode(errno);
     }
 
@@ -586,13 +658,17 @@ inline ErrorCode ListenUnixSocket(std::string_view path, UniqueFd* out, int back
     if (::bind(sfd.Get(), reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0)
     {
         if (sys_errno)
+        {
             *sys_errno = errno;
+        }
         return ErrnoToErrorCode(errno);
     }
     if (::listen(sfd.Get(), backlog) < 0)
     {
         if (sys_errno)
+        {
             *sys_errno = errno;
+        }
         return ErrnoToErrorCode(errno);
     }
 
@@ -610,13 +686,17 @@ inline ErrorCode ListenUnixSocket(std::string_view path, UniqueFd* out, int back
 inline ErrorCode ConnectUnixSocket(std::string_view path, UniqueFd* out, int* sys_errno = nullptr) noexcept
 {
     if (!out)
+    {
         return ErrorCode::kInvalidArgument;
+    }
 
     char cpath[sizeof(sockaddr_un::sun_path)];
     if (!CopyUnixPath(path, cpath, sizeof(cpath)))
     {
         if (sys_errno)
+        {
             *sys_errno = ENAMETOOLONG;
+        }
         return ErrorCode::kInvalidArgument;
     }
 
@@ -624,7 +704,9 @@ inline ErrorCode ConnectUnixSocket(std::string_view path, UniqueFd* out, int* sy
     if (!sfd)
     {
         if (sys_errno)
+        {
             *sys_errno = errno;
+        }
         return ErrnoToErrorCode(errno);
     }
 
@@ -635,7 +717,9 @@ inline ErrorCode ConnectUnixSocket(std::string_view path, UniqueFd* out, int* sy
     if (::connect(sfd.Get(), reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0)
     {
         if (sys_errno)
+        {
             *sys_errno = errno;
+        }
         return ErrnoToErrorCode(errno);
     }
 
@@ -651,7 +735,9 @@ inline bool UnlinkUnixSocket(std::string_view path) noexcept
 {
     char cpath[sizeof(sockaddr_un::sun_path)];
     if (!CopyUnixPath(path, cpath, sizeof(cpath)))
+    {
         return false;
+    }
     return ::unlink(cpath) == 0 || errno == ENOENT;
 }
 

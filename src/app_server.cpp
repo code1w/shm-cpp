@@ -22,7 +22,9 @@ shm::EventLoop* gLoop = nullptr;
 void SignalHandler(int /*signo*/)
 {
     if (gLoop)
+    {
         gLoop->Stop();
+    }
 }
 
 }  // anonymous namespace
@@ -74,7 +76,9 @@ int main()
     server.SetStartFailedCallback([](std::string err) { std::fprintf(stderr, "server: %s\n", err.c_str()); });
 
     if (!server.Start())
+    {
         return 1;
+    }
 
     std::printf("server: listening on %s (max 16 clients)\n", shm::kDefaultSocketPath);
     if (loop.Run() != shm::ErrorCode::kOk)

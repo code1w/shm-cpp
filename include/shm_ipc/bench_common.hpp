@@ -71,11 +71,15 @@ inline bool ReadFull(int fd, void* buf, std::size_t len)
         if (n < 0)
         {
             if (errno == EINTR)
+            {
                 continue;
+            }
             return false;
         }
         if (n == 0)
+        {
             return false;  // 对端关闭
+        }
         got += static_cast<std::size_t>(n);
     }
     return true;
@@ -93,7 +97,9 @@ inline bool WriteFull(int fd, const void* buf, std::size_t len)
         if (n < 0)
         {
             if (errno == EINTR)
+            {
                 continue;
+            }
             return false;
         }
         sent += static_cast<std::size_t>(n);

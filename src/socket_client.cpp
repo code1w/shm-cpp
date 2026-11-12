@@ -56,7 +56,9 @@ bool RunBench()
 {
     shm::UniqueFd sfd;
     if (!ConnectToServer(kSocketPath, &sfd))
+    {
         return false;
+    }
     std::printf("socket_client(bench): connected\n\n");
 
     // 扩大 socket 缓冲区

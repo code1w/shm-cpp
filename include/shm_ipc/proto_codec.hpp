@@ -52,7 +52,9 @@ class ProtoCodec : public ICodec
         const char* type_name  = nullptr;
         uint32_t type_name_len = 0;
         if (!DecodeHeader(buf, buf_len, &type_name, &type_name_len, payload, payload_len, seq))
+        {
             return false;
+        }
         // 校验 type_name，防止类型混淆
         return TypeNameMatches(type_name, type_name_len);
     }
@@ -71,15 +73,21 @@ class ProtoCodec : public ICodec
     bool DecodePayload(const void* payload, uint32_t payload_len, const void** data, uint32_t* data_len) override
     {
         if (payload_len < kTypeNameLenSize)
+        {
             return false;
+        }
         auto* p           = static_cast<const char*>(payload);
         uint16_t name_len = 0;
         std::memcpy(&name_len, p, kTypeNameLenSize);
         uint32_t prefix_len = kTypeNameLenSize + name_len;
         if (payload_len < prefix_len)
+        {
             return false;
+        }
         if (!TypeNameMatches(p + kTypeNameLenSize, name_len))
+        {
             return false;
+        }
         *data     = p + prefix_len;
         *data_len = payload_len - prefix_len;
         return true;
@@ -115,7 +123,9 @@ class ProtoCodec : public ICodec
         uint32_t payload_len = kTypeNameLenSize + name_len + pb_len;
         char* p              = EncodeFrame(buf, buf_size, payload_len, seq);
         if (!p)
+        {
             return 0;
+        }
 
         std::memcpy(p, &name_len, kTypeNameLenSize);
         p += kTypeNameLenSize;
@@ -134,7 +144,9 @@ class ProtoCodec : public ICodec
                              const void** payload, uint32_t* payload_len, uint32_t* seq = nullptr)
     {
         if (buf_len < kMsgHeaderSize + kTypeNameLenSize)
+        {
             return false;
+        }
 
         auto* p = static_cast<const char*>(buf);
 
@@ -142,23 +154,31 @@ class ProtoCodec : public ICodec
         std::memcpy(&hdr, p, kMsgHeaderSize);
 
         if (hdr.len < kTypeNameLenSize)
+        {
             return false;
+        }
         // 减法形式避免 hdr.len 接近 UINT32_MAX 时加法溢出回绕
         if (hdr.len > buf_len - kMsgHeaderSize)
+        {
             return false;
+        }
 
         uint16_t name_len = 0;
         std::memcpy(&name_len, p + kMsgHeaderSize, kTypeNameLenSize);
 
         if (hdr.len < kTypeNameLenSize + name_len)
+        {
             return false;
+        }
 
         *type_name     = p + kMsgHeaderSize + kTypeNameLenSize;
         *type_name_len = name_len;
         *payload       = p + kMsgHeaderSize + kTypeNameLenSize + name_len;
         *payload_len   = hdr.len - kTypeNameLenSize - name_len;
         if (seq)
+        {
             *seq = hdr.seq;
+        }
         return true;
     }
 
@@ -187,14 +207,18 @@ class ProtoCodec : public ICodec
         auto name_len    = static_cast<uint16_t>(name.size());
         auto pb_len      = static_cast<uint32_t>(msg.ByteSizeLong());
         if (pb_len > RingChannel<Cap>::max_write_size)
+        {
             return -1;
+        }
         uint32_t payload_len = kTypeNameLenSize + name_len + pb_len;
 
         return SendFrame(ch, payload_len, seq, [&](auto& batch) {
             batch.TryWrite(&name_len, kTypeNameLenSize);
             batch.TryWrite(name.data(), name_len);
             if (pb_len > 0)
+            {
                 SerializeToBatch(batch, msg, pb_len);
+            }
         });
     }
 
@@ -210,14 +234,18 @@ class ProtoCodec : public ICodec
         auto name_len    = static_cast<uint16_t>(name.size());
         auto pb_len      = static_cast<uint32_t>(msg.ByteSizeLong());
         if (pb_len > RingChannel<Cap>::max_write_size)
+        {
             return -1;
+        }
         uint32_t payload_len = kTypeNameLenSize + name_len + pb_len;
 
         return SendFrameBatch<Cap>(batch, payload_len, seq, [&](auto& b) {
             b.TryWrite(&name_len, kTypeNameLenSize);
             b.TryWrite(name.data(), name_len);
             if (pb_len > 0)
+            {
                 SerializeToBatch(b, msg, pb_len);
+            }
         });
     }
 
@@ -241,7 +269,9 @@ class ProtoCodec : public ICodec
             uint32_t payload_len = 0;
             int rc               = reader_.TryRecv(ch, &payload, &payload_len);
             if (rc == -1 || rc == -2 || rc == -3)
+            {
                 return rc;
+            }
             const void* data  = nullptr;
             uint32_t data_len = 0;
             if (!DecodePayload(payload, payload_len, &data, &data_len) ||

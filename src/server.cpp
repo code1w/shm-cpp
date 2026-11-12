@@ -62,7 +62,9 @@ bool gUseProto = false;
 void SignalHandler(int /*signo*/)
 {
     if (gLoop)
+    {
         gLoop->Stop();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -111,9 +113,13 @@ int DrainClientRing(ClientState* csp)
         {
             int rc = csp->codec->Recv(csp->channel, &msg);
             if (rc == -3)
+            {
                 return -1;  // 协议错误：非法帧头，连接不可恢复
+            }
             if (rc != 0)
+            {
                 break;
+            }
             PrintMsg(csp->id, msg);
             ++csp->total_read;
             ++count;
@@ -127,9 +133,13 @@ int DrainClientRing(ClientState* csp)
     {
         int rc = csp->codec->Recv(csp->channel, &msg);
         if (rc == -3)
+        {
             return -1;  // 协议错误：非法帧头，连接不可恢复
+        }
         if (rc != 0)
+        {
             break;
+        }
         PrintMsg(csp->id, msg);
         ++csp->total_read;
         ++count;
@@ -151,7 +161,9 @@ void OnHeartbeatTimer(int timer_fd, shm::EventLoop& loop, Clients& clients, int 
 
     auto it = clients.find(client_fd);
     if (it == clients.end())
+    {
         return;
+    }
     ClientState* csp = it->second.get();
 
     if (++csp->tick > kMaxTicks)
@@ -195,7 +207,9 @@ void OnClientNotify(int efd, shm::EventLoop& loop, Clients& clients, int client_
     Channel::DrainNotify(efd);
     auto it = clients.find(client_fd);
     if (it == clients.end())
+    {
         return;
+    }
     ClientState* csp = it->second.get();
     int count        = DrainClientRing(csp);
     if (count < 0)
@@ -217,7 +231,9 @@ void OnClientSocket(int fd, short revents, shm::EventLoop& loop, Clients& client
 {
     auto it = clients.find(client_fd);
     if (it == clients.end())
+    {
         return;
+    }
     ClientState* csp = it->second.get();
 
     if (revents & (POLLHUP | POLLERR))
@@ -234,14 +250,18 @@ void OnClientSocket(int fd, short revents, shm::EventLoop& loop, Clients& client
         {
             int remaining = DrainClientRing(csp);
             if (remaining < 0)
+            {
                 std::fprintf(stderr,
                              "server: client #%d protocol error, "
                              "total read=%d\n",
                              csp->id, csp->total_read);
+            }
             else
+            {
                 std::printf("server: client #%d disconnected, "
                             "drained %d remaining, total read=%d\n",
                             csp->id, remaining, csp->total_read);
+            }
             RemoveClient(loop, clients, client_fd, csp);
             return;
         }
@@ -262,7 +282,9 @@ void OnAccept(int lfd, shm::EventLoop& loop, Clients& clients, int& next_client_
 
     shm::UniqueFd cfd{::accept(lfd, nullptr, nullptr)};
     if (!cfd)
+    {
         return;
+    }
 
     int cid = next_client_id++;
     std::printf("server: client #%d connected (fd=%d)\n", cid, cfd.Get());
@@ -284,10 +306,14 @@ void OnAccept(int lfd, shm::EventLoop& loop, Clients& clients, int& next_client_
 
 #ifdef SHM_IPC_HAS_PROTOBUF
     if (gUseProto)
+    {
         cs->codec = std::make_unique<shm::ProtoCodec<shm_ipc::ClientMsgProto>>();
+    }
     else
+    {
 #endif
         cs->codec = std::make_unique<shm::PodCodec<ClientMsg>>();
+    }
 
     int client_fd  = cfd.Get();
     cs->socket_fd  = std::move(cfd);
@@ -369,7 +395,9 @@ void RunBench()
         // 阻塞 stream socket 的 read 可能短读，必须循环读满
         shm::BenchCmd cmd{};
         if (!shm::ReadFull(cfd.Get(), &cmd, sizeof(cmd)) || cmd.rounds == 0)
+        {
             break;
+        }
 
         int32_t received     = 0;
         const void* payload  = nullptr;
@@ -402,7 +430,9 @@ void RunBench()
         // 发 ack
         char ack = 1;
         if (!shm::WriteFull(cfd.Get(), &ack, 1))
+        {
             break;  // 对端已关闭
+        }
 
         shm::PrintBenchRow(cmd.payload_size, received, elapsed);
     }
@@ -430,7 +460,9 @@ int main(int argc, char* argv[])
             if (std::strcmp(argv[i], "--cmd") == 0 && i + 1 < argc)
             {
                 if (std::strcmp(argv[i + 1], "proto") == 0)
+                {
                     gUseProto = true;
+                }
                 ++i;
             }
         }

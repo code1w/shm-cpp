@@ -117,7 +117,9 @@ class ShmAsyncClient : public comm::ITcpAsyncClient
         assert(codec_factory_);
 
         if (state_ == comm::TcpClientStates::connecting || state_ == comm::TcpClientStates::established)
+        {
             return;
+        }
 
         state_          = comm::TcpClientStates::connecting;
         last_error_     = ErrorCode::kOk;
@@ -159,7 +161,9 @@ class ShmAsyncClient : public comm::ITcpAsyncClient
             conn->SetConnType(comm::TcpConnType::TcpConn_Client);
             conn->ResizeBuffer(init_buffer_size_, max_buffer_size_);
             if (context_.has_value())
+            {
                 conn->SetContext(context_);
+            }
             conn_ = conn;
 
             loop_->AddFd(conn->NotifyFd(), [this](int fd, short revents) { OnNotify(fd, revents); });
@@ -190,7 +194,9 @@ class ShmAsyncClient : public comm::ITcpAsyncClient
     {
         auto conn = conn_;
         if (conn && state_ == comm::TcpClientStates::established)
+        {
             return conn->SendCmd(pkg);
+        }
         return false;
     }
 
@@ -200,12 +206,16 @@ class ShmAsyncClient : public comm::ITcpAsyncClient
     void Close() override
     {
         if (state_ != comm::TcpClientStates::established)
+        {
             return;
+        }
 
         state_    = comm::TcpClientStates::closeing;
         auto conn = conn_;
         if (conn)
+        {
             conn->Close();
+        }
         Teardown();
     }
 
@@ -229,7 +239,9 @@ class ShmAsyncClient : public comm::ITcpAsyncClient
         last_error_ = ec;
         state_      = comm::TcpClientStates::close;
         if (!errorcb_)
+        {
             return;
+        }
         try
         {
             errorcb_(autoreconnect_, std::string(uri));
@@ -248,11 +260,15 @@ class ShmAsyncClient : public comm::ITcpAsyncClient
         // 若直接用 conn_ 访问会在 DrainRing 返回后踩空
         auto conn = conn_;
         if (!conn)
+        {
             return;
+        }
         int n = conn->DrainRing();
         // 协议错误，或消息回调内调用了 Close()（连接进入 closeing）
         if (n < 0 || conn->State() == comm::TcpConnStates::closeing)
+        {
             Teardown();
+        }
     }
 
     /// @brief socket 回调：断连检测（socket 在握手后不再承载数据）
@@ -260,7 +276,9 @@ class ShmAsyncClient : public comm::ITcpAsyncClient
     {
         auto conn = conn_;  // 同 OnNotify，防止回调内 Teardown 后踩空
         if (!conn)
+        {
             return;
+        }
         if (revents & (POLLHUP | POLLERR | POLLIN))
         {
             char buf{};
@@ -278,7 +296,9 @@ class ShmAsyncClient : public comm::ITcpAsyncClient
     void Teardown()
     {
         if (state_ == comm::TcpClientStates::close)
+        {
             return;
+        }
         state_ = comm::TcpClientStates::close;
         // 先复位连接再触发回调：close 回调内允许立即重新 Connect()
         auto conn = std::move(conn_);

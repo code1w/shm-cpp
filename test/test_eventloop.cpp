@@ -28,15 +28,17 @@
 
 namespace {
 
-#define CHECK(cond, msg)                                              \
-    do {                                                              \
-        if (!(cond)) {                                                \
+#define CHECK(cond, msg)                                                 \
+    do                                                                   \
+    {                                                                    \
+        if (!(cond))                                                     \
+        {                                                                \
             std::fprintf(stderr, "FAIL: %s (line %d)\n", msg, __LINE__); \
-            std::abort();                                             \
-        }                                                             \
+            std::abort();                                                \
+        }                                                                \
     } while (0)
 
-void AddTimerOrAbort(shm::EventLoop &loop, int ms, shm::EventLoop::Callback cb)
+void AddTimerOrAbort(shm::EventLoop& loop, int ms, shm::EventLoop::Callback cb)
 {
     int tfd = 0;
     if (loop.AddTimer(ms, std::move(cb), &tfd) != shm::ErrorCode::kOk)
@@ -46,8 +48,7 @@ void AddTimerOrAbort(shm::EventLoop &loop, int ms, shm::EventLoop::Callback cb)
     }
 }
 
-void AddOneShotOrAbort(shm::EventLoop &loop, int ms,
-                       shm::EventLoop::Callback cb, int *out = nullptr)
+void AddOneShotOrAbort(shm::EventLoop& loop, int ms, shm::EventLoop::Callback cb, int* out = nullptr)
 {
     int tfd = 0;
     if (loop.AddOneShotTimer(ms, std::move(cb), &tfd) != shm::ErrorCode::kOk)
@@ -56,7 +57,9 @@ void AddOneShotOrAbort(shm::EventLoop &loop, int ms,
         std::abort();
     }
     if (out)
+    {
         *out = tfd;
+    }
 }
 
 }  // anonymous namespace
@@ -125,8 +128,8 @@ static void TestSameBatchAddRemove()
     CHECK(::pipe(pfd) == 0, "pipe");
 
     int stale_dispatch = 0;
-    bool armed = false;
-    int ticks  = 0;
+    bool armed         = false;
+    int ticks          = 0;
     AddTimerOrAbort(loop, 20, [&](int tfd, short) {
         shm::EventLoop::DrainTimerfd(tfd);
         if (++ticks == 1)

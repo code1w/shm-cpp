@@ -123,7 +123,9 @@ class ShmClient : public comm::ITcpClient
     {
         closed_.store(true, std::memory_order_release);
         if (socket_fd_.Get() >= 0)
+        {
             ::shutdown(socket_fd_.Get(), SHUT_RDWR);
+        }
     }
 
     /**
@@ -133,9 +135,13 @@ class ShmClient : public comm::ITcpClient
     int SendMessage(const char* message, const int len) override
     {
         if (!Connected() || !message || len <= 0)
+        {
             return -1;
+        }
         if (channel_.WritableBytes() < static_cast<uint64_t>(len))
+        {
             return -1;  // 环满（对端消费过慢），整体失败
+        }
 
         int sent = 0;
         while (sent < len)
@@ -143,9 +149,13 @@ class ShmClient : public comm::ITcpClient
             // 单次 TryWrite 上限为 max_write_size（Capacity/2）
             uint32_t chunk = static_cast<uint32_t>(len - sent);
             if (chunk > DefaultRingChannel::max_write_size)
+            {
                 chunk = static_cast<uint32_t>(DefaultRingChannel::max_write_size);
+            }
             if (channel_.TryWrite(message + sent, chunk) != 0)
+            {
                 return -1;  // 理论不可达（已预检空间）
+            }
             sent += static_cast<int>(chunk);
         }
         channel_.NotifyPeer();
@@ -172,7 +182,9 @@ class ShmClient : public comm::ITcpClient
     int ReadMessage(char* buf, size_t bsize, int timeout_ms)
     {
         if (!Connected())
+        {
             return -1;
+        }
 
         timespec deadline{};
         timespec* dl = InitDeadline(timeout_ms, &deadline);
@@ -180,17 +192,23 @@ class ShmClient : public comm::ITcpClient
         {
             // 本端 Close()：立即退出，不再等待
             if (closed_.load(std::memory_order_acquire))
+            {
                 return -1;
+            }
 
             // 先试读：数据可能已在环中（基线须在读之前取，供 PrepareWait 复查）
             const uint64_t seen = channel_.WritePos();
             uint32_t n          = channel_.TryRead(buf, static_cast<uint32_t>(bsize));
             if (n > 0)
+            {
                 return static_cast<int>(n);
+            }
 
             int wr = WaitForReadable(dl, seen);
             if (wr < 0)
+            {
                 return wr;  // -1 本端关闭/错误；-2 超时
+            }
             if (wr == 0)
             {
                 // 对端关闭：最后再读一次环中残留数据
@@ -219,29 +237,41 @@ class ShmClient : public comm::ITcpClient
     int PeekMessage(const void** seg1, uint32_t* seg1_len, const void** seg2, uint32_t* seg2_len, int timeout_ms = -1)
     {
         if (!seg1 || !seg1_len || !seg2 || !seg2_len)
+        {
             return -1;
+        }
         if (!Connected())
+        {
             return -1;
+        }
 
         timespec deadline{};
         timespec* dl = InitDeadline(timeout_ms, &deadline);
         for (;;)
         {
             if (closed_.load(std::memory_order_acquire))
+            {
                 return -1;
+            }
 
             const uint64_t seen = channel_.WritePos();
             if (channel_.Peek(seg1, seg1_len, seg2, seg2_len) == 0)
+            {
                 return static_cast<int>(*seg1_len + *seg2_len);
+            }
 
             int wr = WaitForReadable(dl, seen);
             if (wr < 0)
+            {
                 return wr;
+            }
             if (wr == 0)
             {
                 // 对端关闭：返回环中残留数据（若有）
                 if (channel_.Peek(seg1, seg1_len, seg2, seg2_len) == 0)
+                {
                     return static_cast<int>(*seg1_len + *seg2_len);
+                }
                 return 0;
             }
         }
@@ -270,7 +300,9 @@ class ShmClient : public comm::ITcpClient
     static timespec* InitDeadline(int timeout_ms, timespec* out) noexcept
     {
         if (timeout_ms < 0)
+        {
             return nullptr;
+        }
         ::clock_gettime(CLOCK_MONOTONIC, out);
         out->tv_sec += timeout_ms / 1000;
         out->tv_nsec += (timeout_ms % 1000) * 1000000L;
@@ -294,26 +326,36 @@ class ShmClient : public comm::ITcpClient
             ::clock_gettime(CLOCK_MONOTONIC, &now);
             int64_t ms = (deadline->tv_sec - now.tv_sec) * 1000 + (deadline->tv_nsec - now.tv_nsec) / 1000000;
             if (ms <= 0)
+            {
                 return -2;
+            }
             wait_ms = static_cast<int>(ms);
         }
 
         // 声明即将睡眠：写方此后才会写 eventfd；复查发现新数据则直接重试读取
         if (!channel_.PrepareWait(seen))
+        {
             return 1;
+        }
 
         pollfd pfds[2] = {{channel_.NotifyReadFd(), POLLIN, 0}, {socket_fd_.Get(), POLLIN, 0}};
         int pr         = ::poll(pfds, 2, wait_ms);
         if (pr < 0)
+        {
             return (errno == EINTR) ? 1 : -1;
+        }
         if (pr == 0)
+        {
             return -2;
+        }
 
         // socket 可读 = 对端关闭或本端 Close() 的 shutdown 唤醒
         if (pfds[1].revents & (POLLHUP | POLLERR | POLLIN))
         {
             if (closed_.load(std::memory_order_acquire))
+            {
                 return -1;
+            }
             char b{};
             if (::read(socket_fd_.Get(), &b, 1) <= 0)
             {
@@ -322,7 +364,9 @@ class ShmClient : public comm::ITcpClient
             }
         }
         if (pfds[0].revents & POLLIN)
+        {
             DefaultRingChannel::DrainNotify(pfds[0].fd);
+        }
         return 1;
     }
 

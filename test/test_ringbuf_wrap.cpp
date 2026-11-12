@@ -32,45 +32,47 @@ namespace {
 
 // 使用小容量环以低成本覆盖各种回绕位置
 constexpr std::size_t kSmallCap = 4096;
-using SmallRing = shm::RingBuf<kSmallCap>;
+using SmallRing                 = shm::RingBuf<kSmallCap>;
 
 /// 分配并初始化一块 shm
-void *AllocShm()
+void* AllocShm()
 {
-    void *shm = std::aligned_alloc(64, SmallRing::shm_size);
-    if (!shm) { std::fprintf(stderr, "FAIL: aligned_alloc\n"); std::abort(); }
+    void* shm = std::aligned_alloc(64, SmallRing::shm_size);
+    if (!shm)
+    {
+        std::fprintf(stderr, "FAIL: aligned_alloc\n");
+        std::abort();
+    }
     SmallRing::Init(shm);
     return shm;
 }
 
 /// 构造可预测内容的缓冲区：buf[i] = (seed + i) & 0xFF
-void FillPattern(char *buf, uint32_t len, uint8_t seed)
+void FillPattern(char* buf, uint32_t len, uint8_t seed)
 {
     for (uint32_t i = 0; i < len; ++i)
+    {
         buf[i] = static_cast<char>((seed + i) & 0xFF);
+    }
 }
 
 /// 校验缓冲区内容
-void VerifyPattern(const char *buf, uint32_t len, uint8_t seed,
-                   const char *ctx)
+void VerifyPattern(const char* buf, uint32_t len, uint8_t seed, const char* ctx)
 {
     for (uint32_t i = 0; i < len; ++i)
     {
         uint8_t expected = (seed + i) & 0xFF;
         if (static_cast<uint8_t>(buf[i]) != expected)
         {
-            std::fprintf(stderr,
-                         "FAIL [%s]: byte[%u] = 0x%02X, expected 0x%02X\n",
-                         ctx, i,
-                         static_cast<unsigned>(static_cast<uint8_t>(buf[i])),
-                         static_cast<unsigned>(expected));
+            std::fprintf(stderr, "FAIL [%s]: byte[%u] = 0x%02X, expected 0x%02X\n", ctx, i,
+                         static_cast<unsigned>(static_cast<uint8_t>(buf[i])), static_cast<unsigned>(expected));
             std::abort();
         }
     }
 }
 
 /// 推进 ring 到指定物理偏移（写入 advance 字节再读走）
-void AdvanceRing(void *shm, uint32_t advance)
+void AdvanceRing(void* shm, uint32_t advance)
 {
     // 分多次写入/读出，每次不超过 max_write_size
     char tmp[512];
@@ -104,16 +106,17 @@ void TestWriteReadExactWrap()
     std::printf("--- Test 1: TryWrite + ReadExact wrap ---\n");
 
     // 遍历关键 tail 值：帧会在环尾剩余 tail 字节时开始写入
-    constexpr uint32_t msg_len = 200;
-    std::vector<uint32_t> tail_values = {1, 2, 3, 4, 7, 8, 15, 16, 50,
-                                          msg_len / 2, msg_len - 1,
-                                          msg_len, msg_len + 1};
+    constexpr uint32_t msg_len        = 200;
+    std::vector<uint32_t> tail_values = {1, 2, 3, 4, 7, 8, 15, 16, 50, msg_len / 2, msg_len - 1, msg_len, msg_len + 1};
 
     for (uint32_t tail : tail_values)
     {
-        if (tail >= kSmallCap) continue;
+        if (tail >= kSmallCap)
+        {
+            continue;
+        }
 
-        void *shm = AllocShm();
+        void* shm = AllocShm();
 
         // 推进到 phys = kSmallCap - tail
         uint32_t advance = kSmallCap - tail;
@@ -159,7 +162,7 @@ void TestWriteTryReadPartialWrap()
     // tail=50: 前50字节在尾部, 后250字节在头部
     constexpr uint32_t tail = 50;
 
-    void *shm = AllocShm();
+    void* shm = AllocShm();
     AdvanceRing(shm, kSmallCap - tail);
 
     char wbuf[msg_len];
@@ -193,8 +196,7 @@ void TestWriteTryReadPartialWrap()
     got = SmallRing::TryRead(shm, rbuf + total_read, msg_len);
     if (got != msg_len - total_read)
     {
-        std::fprintf(stderr, "FAIL: TryRead(rest) got %u, expected %u\n",
-                     got, msg_len - total_read);
+        std::fprintf(stderr, "FAIL: TryRead(rest) got %u, expected %u\n", got, msg_len - total_read);
         std::abort();
     }
     total_read += got;
@@ -218,7 +220,7 @@ void TestPeekCommitReadWrap()
     // tail=30: 数据跨环尾，seg1=30 字节，seg2=226 字节
     constexpr uint32_t tail = 30;
 
-    void *shm = AllocShm();
+    void* shm = AllocShm();
     AdvanceRing(shm, kSmallCap - tail);
 
     char wbuf[msg_len];
@@ -245,8 +247,7 @@ void TestPeekCommitReadWrap()
     }
     if (seg2_len != msg_len - tail)
     {
-        std::fprintf(stderr, "FAIL: seg2_len=%u, expected %u\n",
-                     seg2_len, msg_len - tail);
+        std::fprintf(stderr, "FAIL: seg2_len=%u, expected %u\n", seg2_len, msg_len - tail);
         std::abort();
     }
 
@@ -280,7 +281,7 @@ void TestPeekNoWrap()
 
     constexpr uint32_t msg_len = 100;
 
-    void *shm = AllocShm();
+    void* shm = AllocShm();
     // phys=0, tail=4096, msg_len=100 无回绕
 
     char wbuf[msg_len];
@@ -297,8 +298,7 @@ void TestPeekNoWrap()
         std::abort();
     }
 
-    VerifyPattern(static_cast<const char *>(seg1), seg1_len, 0x11,
-                  "Peek no-wrap");
+    VerifyPattern(static_cast<const char*>(seg1), seg1_len, 0x11, "Peek no-wrap");
 
     SmallRing::CommitRead(shm, msg_len);
     std::free(shm);
@@ -320,7 +320,7 @@ void TestBatchWriterWrap()
     // 第 3 条: phys 4066, 60 字节, tail=30 → 回绕！前30在尾，后30在头
     constexpr uint32_t advance = kSmallCap - 150;
 
-    void *shm = AllocShm();
+    void* shm = AllocShm();
     AdvanceRing(shm, advance);
 
     {
@@ -376,7 +376,7 @@ void TestMultiFrameWrap()
     constexpr uint32_t frame_len = 200;
     constexpr int total_frames   = 100;
 
-    void *shm = AllocShm();
+    void* shm = AllocShm();
 
     for (int i = 0; i < total_frames; ++i)
     {
@@ -416,9 +416,9 @@ void TestMultiFrameBatchWrap()
 
     constexpr uint32_t frame_len = 150;
     constexpr int batch_count    = 10;
-    constexpr int iterations     = 8; // 10*150*8 = 12000 >> 4096, 多次回绕
+    constexpr int iterations     = 8;  // 10*150*8 = 12000 >> 4096, 多次回绕
 
-    void *shm = AllocShm();
+    void* shm = AllocShm();
 
     for (int iter = 0; iter < iterations; ++iter)
     {
@@ -432,12 +432,11 @@ void TestMultiFrameBatchWrap()
                 FillPattern(wbuf, frame_len, seed);
                 if (batch.TryWrite(wbuf, frame_len) != 0)
                 {
-                    std::fprintf(stderr,
-                                 "FAIL: BatchWriter iter=%d i=%d\n", iter, i);
+                    std::fprintf(stderr, "FAIL: BatchWriter iter=%d i=%d\n", iter, i);
                     std::abort();
                 }
             }
-        } // 析构触发 Flush
+        }  // 析构触发 Flush
 
         // 批量读 batch_count 帧
         for (int i = 0; i < batch_count; ++i)
@@ -445,8 +444,7 @@ void TestMultiFrameBatchWrap()
             char rbuf[frame_len];
             if (SmallRing::ReadExact(shm, rbuf, frame_len) != 0)
             {
-                std::fprintf(stderr,
-                             "FAIL: ReadExact iter=%d i=%d\n", iter, i);
+                std::fprintf(stderr, "FAIL: ReadExact iter=%d i=%d\n", iter, i);
                 std::abort();
             }
             uint8_t seed = static_cast<uint8_t>(iter * batch_count + i);
@@ -470,12 +468,12 @@ void TestExhaustiveTailOffsets()
     std::printf("--- Test 8: Exhaustive tail offsets ---\n");
 
     constexpr uint32_t msg_len = 64;
-    int tested = 0;
+    int tested                 = 0;
 
     // 遍历 tail = 1 .. msg_len+1（涵盖 msg_len < tail 不回绕 和 msg_len > tail 回绕）
     for (uint32_t tail = 1; tail <= msg_len + 1 && tail < kSmallCap; ++tail)
     {
-        void *shm = AllocShm();
+        void* shm = AllocShm();
         AdvanceRing(shm, kSmallCap - tail);
 
         char wbuf[msg_len];
@@ -514,18 +512,18 @@ void TestCodecWrap()
 {
     std::printf("--- Test 9: Codec Encode/Decode through ring wrap ---\n");
 
-    constexpr uint32_t frame_size =
-        shm::kMsgHeaderSize + shm::kTagSize + sizeof(Heartbeat);
+    constexpr uint32_t frame_size = shm::kMsgHeaderSize + shm::kTagSize + sizeof(Heartbeat);
 
     // 遍历多种 tail
-    std::vector<uint32_t> tails = {1, 2, 4, 7, 8, frame_size / 2,
-                                    frame_size - 1, frame_size,
-                                    frame_size + 1};
+    std::vector<uint32_t> tails = {1, 2, 4, 7, 8, frame_size / 2, frame_size - 1, frame_size, frame_size + 1};
     for (uint32_t tail : tails)
     {
-        if (tail >= kSmallCap) continue;
+        if (tail >= kSmallCap)
+        {
+            continue;
+        }
 
-        void *shm = AllocShm();
+        void* shm = AllocShm();
         AdvanceRing(shm, kSmallCap - tail);
 
         // Encode
@@ -559,8 +557,8 @@ void TestCodecWrap()
 
         // Decode
         Heartbeat out{};
-        uint32_t seq_out = 0;
-        const void *dec_payload = nullptr;
+        uint32_t seq_out         = 0;
+        const void* dec_payload  = nullptr;
         uint32_t dec_payload_len = 0;
         if (!shm::Decode(dec, frame_size, &dec_payload, &dec_payload_len, &seq_out))
         {
@@ -568,21 +566,19 @@ void TestCodecWrap()
             std::abort();
         }
         // payload = [tag u32][Heartbeat bytes], 跳过 tag
-        const void *pod_data = static_cast<const char *>(dec_payload) + shm::kTagSize;
-        uint32_t pod_len = dec_payload_len - shm::kTagSize;
+        const void* pod_data = static_cast<const char*>(dec_payload) + shm::kTagSize;
+        uint32_t pod_len     = dec_payload_len - shm::kTagSize;
         if (!shm::PodCodec<Heartbeat>::DecodeFrom(pod_data, pod_len, &out))
         {
             std::fprintf(stderr, "FAIL: Decode tail=%u\n", tail);
             std::abort();
         }
-        if (out.client_id != 42 || out.seq != static_cast<int32_t>(tail) ||
-            out.timestamp != 9999 || seq_out != seq_in)
+        if (out.client_id != 42 || out.seq != static_cast<int32_t>(tail) || out.timestamp != 9999 || seq_out != seq_in)
         {
             std::fprintf(stderr,
                          "FAIL: field mismatch tail=%u "
                          "(client_id=%d seq=%d ts=%ld msg_seq=%u)\n",
-                         tail, out.client_id, out.seq,
-                         static_cast<long>(out.timestamp), seq_out);
+                         tail, out.client_id, out.seq, static_cast<long>(out.timestamp), seq_out);
             std::abort();
         }
 
@@ -607,14 +603,17 @@ void TestLargeMessageWrap()
     // tail=100: 绝大部分数据在环头部
     std::vector<uint32_t> tails = {1, 16, 100, msg_len / 2, msg_len - 1, msg_len};
 
-    auto *wbuf = new char[msg_len];
-    auto *rbuf = new char[msg_len];
+    auto* wbuf = new char[msg_len];
+    auto* rbuf = new char[msg_len];
 
     for (uint32_t tail : tails)
     {
-        if (tail >= kSmallCap) continue;
+        if (tail >= kSmallCap)
+        {
+            continue;
+        }
 
-        void *shm = AllocShm();
+        void* shm = AllocShm();
         AdvanceRing(shm, kSmallCap - tail);
 
         FillPattern(wbuf, msg_len, static_cast<uint8_t>(tail));
@@ -642,8 +641,7 @@ void TestLargeMessageWrap()
     delete[] wbuf;
     delete[] rbuf;
     ++g_pass_count;
-    std::printf("  PASS: %d tail offsets with msg_len=%u\n",
-                static_cast<int>(tails.size()), msg_len);
+    std::printf("  PASS: %d tail offsets with msg_len=%u\n", static_cast<int>(tails.size()), msg_len);
 }
 
 // =========================================================================
@@ -654,7 +652,7 @@ void TestWriteRejectCases()
 {
     std::printf("--- Test 11: TryWrite reject cases ---\n");
 
-    void *shm = AllocShm();
+    void* shm = AllocShm();
 
     // len=0 应该被拒绝
     if (SmallRing::TryWrite(shm, "x", 0) != -1)
@@ -664,7 +662,7 @@ void TestWriteRejectCases()
     }
 
     // len > max_write_size 应该被拒绝
-    auto *big = new char[SmallRing::max_write_size + 1];
+    auto* big = new char[SmallRing::max_write_size + 1];
     if (SmallRing::TryWrite(shm, big, SmallRing::max_write_size + 1) != -1)
     {
         std::fprintf(stderr, "FAIL: oversized not rejected\n");
@@ -706,7 +704,7 @@ void TestReadExactNoConsume()
 {
     std::printf("--- Test 12: ReadExact partial-available no consume ---\n");
 
-    void *shm = AllocShm();
+    void* shm = AllocShm();
 
     // 写 50 字节
     char wbuf[50];
@@ -750,7 +748,7 @@ void TestFreeSpaceAvailable()
 {
     std::printf("--- Test 13: FreeSpace + Available consistency ---\n");
 
-    void *shm = AllocShm();
+    void* shm = AllocShm();
 
     if (SmallRing::Available(shm) != 0 || SmallRing::FreeSpace(shm) != kSmallCap)
     {
@@ -760,16 +758,14 @@ void TestFreeSpaceAvailable()
 
     char buf[100];
     SmallRing::TryWrite(shm, buf, 100);
-    if (SmallRing::Available(shm) != 100 ||
-        SmallRing::FreeSpace(shm) != kSmallCap - 100)
+    if (SmallRing::Available(shm) != 100 || SmallRing::FreeSpace(shm) != kSmallCap - 100)
     {
         std::fprintf(stderr, "FAIL: after write 100\n");
         std::abort();
     }
 
     SmallRing::ReadExact(shm, buf, 60);
-    if (SmallRing::Available(shm) != 40 ||
-        SmallRing::FreeSpace(shm) != kSmallCap - 40)
+    if (SmallRing::Available(shm) != 40 || SmallRing::FreeSpace(shm) != kSmallCap - 40)
     {
         std::fprintf(stderr, "FAIL: after read 60\n");
         std::abort();
@@ -791,8 +787,7 @@ void TestFreeSpaceAvailable()
 
 int main()
 {
-    std::printf("=== RingBuf wrap-around test suite (Capacity=%zu) ===\n\n",
-                kSmallCap);
+    std::printf("=== RingBuf wrap-around test suite (Capacity=%zu) ===\n\n", kSmallCap);
 
     TestWriteReadExactWrap();
     TestWriteTryReadPartialWrap();

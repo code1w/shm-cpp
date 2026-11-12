@@ -86,9 +86,13 @@ class ShmConnection : public comm::ITcpConnection,
     bool SendCmd(const std::any& pkg) override
     {
         if (state_ != comm::TcpConnStates::established && state_ != comm::TcpConnStates::verifing)
+        {
             return false;
+        }
         if (!codec_)
+        {
             return false;
+        }
 
         try
         {
@@ -104,7 +108,9 @@ class ShmConnection : public comm::ITcpConnection,
                 {
                     char* dst = batch.Reserve(static_cast<uint32_t>(need));
                     if (!dst)
+                    {
                         return false;  // 环空间不足（与 WriteRaw 预检一致）
+                    }
 
                     size_t out = 0;
                     int32_t len =
@@ -119,7 +125,9 @@ class ShmConnection : public comm::ITcpConnection,
                     // 预留不足/长度不符：回滚后走原有 encode_buf_ 路径
                     batch.Cancel();
                     if (len == comm::kCodecSkipPackage)
+                    {
                         return true;
+                    }
                     if (len == comm::kCodecDisconnect)
                     {
                         Close();
@@ -134,7 +142,9 @@ class ShmConnection : public comm::ITcpConnection,
                 int32_t len =
                     codec_->Encode(pkg, reinterpret_cast<comm::byte*>(encode_buf_.data()), encode_buf_.size(), &out);
                 if (len == comm::kCodecSkipPackage)
+                {
                     return true;  // 丢包（同框架）
+                }
                 if (len == comm::kCodecDisconnect)
                 {
                     Close();
@@ -145,7 +155,9 @@ class ShmConnection : public comm::ITcpConnection,
                     // out 为所需大小：为 0（内部错误）或不超过现有缓冲仍要求
                     // 扩容（codec 违约）时放弃，避免无限重试
                     if (out == 0 || out <= encode_buf_.size() || !GrowEncodeBuffer(out))
+                    {
                         return false;
+                    }
                     continue;
                 }
                 return WriteRaw(encode_buf_.data(), static_cast<uint32_t>(len));
@@ -186,7 +198,9 @@ class ShmConnection : public comm::ITcpConnection,
         ucred cred{};
         socklen_t len = sizeof(cred);
         if (::getsockopt(socket_fd_.Get(), SOL_SOCKET, SO_PEERCRED, &cred, &len) == 0)
+        {
             return "pid:" + std::to_string(cred.pid);
+        }
         return {};
     }
 
@@ -207,7 +221,9 @@ class ShmConnection : public comm::ITcpConnection,
     void StartVerifyTimer(int64_t expired_ms, int64_t interval_ms, comm::TimeAction action) override
     {
         if (verify_timer_)
+        {
             return;
+        }
         (void)interval_ms;  // 一次性定时器，不支持重复触发
 
         int tfd      = 0;
@@ -219,9 +235,13 @@ class ShmConnection : public comm::ITcpConnection,
             },
             &tfd);
         if (ec == ErrorCode::kOk)
+        {
             verify_timer_ = tfd;
+        }
         else
+        {
             Close();  // 无法挂载超时定时器：fail-closed（避免验证永不超时）
+        }
     }
 
     /**
@@ -236,7 +256,9 @@ class ShmConnection : public comm::ITcpConnection,
     {
         max_buffer_size_ = max;
         if (encode_buf_.size() < size)
+        {
             encode_buf_.resize(size);
+        }
     }
 
     comm::codec::CodecPtr GetCodec() override { return codec_; }
@@ -286,7 +308,9 @@ class ShmConnection : public comm::ITcpConnection,
             state_ = comm::TcpConnStates::established;
         }
         if (connectioncb_)
+        {
             connectioncb_(shared_from_this());
+        }
     }
 
     /**
@@ -295,7 +319,9 @@ class ShmConnection : public comm::ITcpConnection,
     void OnMessage(const std::any& pkg)
     {
         if (messagecb_ && (state_ == comm::TcpConnStates::established || state_ == comm::TcpConnStates::verifing))
+        {
             messagecb_(shared_from_this(), pkg);
+        }
     }
 
     /**
@@ -305,9 +331,13 @@ class ShmConnection : public comm::ITcpConnection,
     {
         RemoveVerifyTimer();
         if (succ)
+        {
             state_ = comm::TcpConnStates::established;
+        }
         else
+        {
             Close();
+        }
     }
 
     /**
@@ -319,12 +349,18 @@ class ShmConnection : public comm::ITcpConnection,
         {
             state_ = comm::TcpConnStates::closeed;
             if (closecb_)
+            {
                 closecb_(shared_from_this());
+            }
         }
         if (context_.has_value())
+        {
             context_.reset();
+        }
         if (rpc_context_.has_value())
+        {
             rpc_context_.reset();
+        }
         RemoveVerifyTimer();
     }
 
@@ -348,13 +384,19 @@ class ShmConnection : public comm::ITcpConnection,
             const uint64_t seen = channel_.WritePos();
             const int n         = DrainRingOnce();
             if (n < 0)
+            {
                 return -1;
+            }
             total += n;
             // 消息回调内关闭了连接：由 owner 收尾，无需再武装等待
             if (state_ == comm::TcpConnStates::closeing || state_ == comm::TcpConnStates::closeed)
+            {
                 break;
+            }
             if (channel_.PrepareWait(seen))
+            {
                 break;
+            }
         }
         return total;
     }
@@ -364,7 +406,9 @@ class ShmConnection : public comm::ITcpConnection,
     int DrainRingOnce()
     {
         if (!codec_)
+        {
             return -1;
+        }
         int count = 0;
         // 跨消息复用同一个 std::any：同类型消息解码时原地覆盖，避免
         // 每条消息重新分配（大对象收益明显）。回调只在本次调用期间有效。
@@ -376,7 +420,9 @@ class ShmConnection : public comm::ITcpConnection,
             const void* seg2  = nullptr;
             uint32_t seg1_len = 0, seg2_len = 0;
             if (channel_.Peek(&seg1, &seg1_len, &seg2, &seg2_len) != 0)
+            {
                 break;  // 环空
+            }
 
             const comm::byte* buf = static_cast<const comm::byte*>(seg1);
             uint32_t buflen       = seg1_len;
@@ -392,17 +438,27 @@ class ShmConnection : public comm::ITcpConnection,
                 size_t need = 0;
                 int32_t rc  = codec_->Decode(static_cast<const comm::byte*>(seg1), seg1_len, pkg, &need);
                 if (rc == comm::kCodecDisconnect)
+                {
                     return -1;
+                }
                 if (rc > 0)
+                {
                     want = static_cast<uint32_t>(rc);  // 首帧完全在 seg1
+                }
                 else if (rc == comm::kCodecSkipPackage && need > 0 && need <= seg1_len)
+                {
                     want = static_cast<uint32_t>(need);  // 心跳消费长度
+                }
                 else if (rc == comm::kCodecNeedMoreBuffer && need > seg1_len && need <= total)
+                {
                     want = static_cast<uint32_t>(need);  // 首帧跨尾，按需复制
+                }
                 // 其他情况（codec 未报告 need 等）退化为 total
 
                 if (want > total)
+                {
                     want = total;
+                }
 
                 // 拷贝 want 字节；若 codec 需要更多（例如 seg1 连 tag 都不完整），
                 // 按它报告的 need 再增长，最多 3 次，避免死循环
@@ -411,7 +467,9 @@ class ShmConnection : public comm::ITcpConnection,
                     try
                     {
                         if (staging_.size() < want)
+                        {
                             staging_.resize(want);
+                        }
                     }
                     catch (const std::bad_alloc&)
                     {
@@ -422,7 +480,9 @@ class ShmConnection : public comm::ITcpConnection,
                     const uint32_t first = (seg1_len < want) ? seg1_len : want;
                     std::memcpy(staging_.data(), seg1, first);
                     if (want > first)
+                    {
                         std::memcpy(staging_.data() + first, seg2, want - first);
+                    }
 
                     size_t more = 0;
                     int32_t probe2 =
@@ -449,55 +509,77 @@ class ShmConnection : public comm::ITcpConnection,
                 if (len == comm::kCodecDisconnect)
                 {
                     if (off)
+                    {
                         channel_.CommitRead(off);
+                    }
                     return -1;
                 }
                 if (len == comm::kCodecNeedMoreBuffer)
+                {
                     break;  // 数据不完整，等待对端续写
+                }
                 if (len == comm::kCodecSkipPackage)
                 {
                     // 解码方向的 -2：心跳包，out 为消费字节数
                     if (out == 0 || out > buflen - off)
                     {
                         if (off)
+                        {
                             channel_.CommitRead(off);
+                        }
                         return -1;  // 防御：非法消耗长度
                     }
                     off += static_cast<uint32_t>(out);
                     if (keepalive_)
+                    {
                         SendKeepaliveResponse();
+                    }
                     if (off == buflen)
+                    {
                         break;
+                    }
                     continue;
                 }
                 if (len < 0)
                 {
                     if (off)
+                    {
                         channel_.CommitRead(off);
+                    }
                     return -1;  // 未知负值同样视为协议错误
                 }
                 // len > 0：成功解码一包
                 if (static_cast<uint32_t>(len) > buflen - off)
                 {
                     if (off)
+                    {
                         channel_.CommitRead(off);
+                    }
                     return -1;  // 防御：codec 消耗长度越界
                 }
                 off += static_cast<uint32_t>(len);
                 OnMessage(pkg);
                 ++count;
                 if (off == buflen)
+                {
                     break;
+                }
             }
 
             if (off > 0)
+            {
                 channel_.CommitRead(off);
+            }
 
             if (off == 0)
+            {
                 break;  // 没有进展：等待更多数据/通知
+            }
 
             if (partial_view || off < buflen)
+            {
                 continue;  // 还有数据（或未完整帧）跨尾，重新 Peek
+            }
             // off == buflen 且整段已消费：继续 Peek 下一批
         }
         return count;
@@ -510,9 +592,13 @@ class ShmConnection : public comm::ITcpConnection,
     bool GrowEncodeBuffer(size_t need)
     {
         if (need > max_buffer_size_)
+        {
             return false;
+        }
         if (need > encode_buf_.size())
+        {
             encode_buf_.resize(need);
+        }
         return true;
     }
 
@@ -520,9 +606,13 @@ class ShmConnection : public comm::ITcpConnection,
     bool WriteRaw(const void* data, uint32_t len)
     {
         if (len == 0)
+        {
             return true;
+        }
         if (channel_.WritableBytes() < len)
+        {
             return false;  // 环满（对端消费过慢），整体失败不半截写入
+        }
 
         auto* p       = static_cast<const char*>(data);
         uint32_t left = len;
@@ -531,7 +621,9 @@ class ShmConnection : public comm::ITcpConnection,
             // 单次 TryWrite 上限为 max_write_size（Capacity/2）
             uint32_t chunk = std::min(left, static_cast<uint32_t>(DefaultRingChannel::max_write_size));
             if (channel_.TryWrite(p, chunk) != 0)
+            {
                 return false;  // 理论不可达（已预检空间）
+            }
             p += chunk;
             left -= chunk;
         }
@@ -543,7 +635,9 @@ class ShmConnection : public comm::ITcpConnection,
     void SendKeepaliveResponse()
     {
         if (!codec_)
+        {
             return;
+        }
         try
         {
             for (;;)
@@ -557,12 +651,16 @@ class ShmConnection : public comm::ITcpConnection,
                     return;
                 }
                 if (len != comm::kCodecNeedMoreBuffer)
+                {
                     return;  // -1/-2：无法生成响应，放弃
+                }
                 // 缓冲不足：扩容后重试。所需大小为 0（内部错误）或不超过现有
                 // 缓冲仍要求扩容（codec 违约）时放弃——绝不能把 encode_buf_ 中
                 // 上一条消息的残留字节当作响应发给对端
                 if (size == 0 || size <= encode_buf_.size() || !GrowEncodeBuffer(size))
+                {
                     return;
+                }
             }
         }
         catch (const std::bad_alloc&)

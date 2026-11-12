@@ -121,17 +121,25 @@ class Adapter : public Codec
     int32_t SendKeepAlive(byte* buf, size_t buflen, size_t* size) override
     {
         if constexpr (HasSendKeepAlive<T>::value)
+        {
             return inner_->SendKeepAlive(buf, buflen, size);
+        }
         else
+        {
             return 0;
+        }
     }
 
     bool ParseKeepAlive(const byte* buf, size_t buflen, size_t* size) override
     {
         if constexpr (HasParseKeepAlive<T>::value)
+        {
             return inner_->ParseKeepAlive(buf, buflen, size);
+        }
         else
+        {
             return false;
+        }
     }
 
     /// @brief 访问被包装的原始 codec

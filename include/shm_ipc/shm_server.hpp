@@ -131,7 +131,9 @@ class ShmServer : public comm::ITcpServer
     void Stop() override
     {
         if (!started_)
+        {
             return;
+        }
         started_ = false;
 
         // 1) 通知握手线程退出，并 shutdown 未完成握手的 socket
@@ -140,14 +142,22 @@ class ShmServer : public comm::ITcpServer
             std::lock_guard<std::mutex> lk(hs_mtx_);
             hs_stopping_ = true;
             for (auto& fd : hs_pending_)
+            {
                 if (fd.Get() >= 0)
+                {
                     ::shutdown(fd.Get(), SHUT_RDWR);
+                }
+            }
             if (hs_current_.Get() >= 0)
+            {
                 ::shutdown(hs_current_.Get(), SHUT_RDWR);
+            }
         }
         hs_cv_.notify_all();
         if (hs_thread_.joinable())
+        {
             hs_thread_.join();
+        }
 
         // 2) 注销监听与握手完成通知 fd
         if (listen_fd_)
@@ -156,7 +166,9 @@ class ShmServer : public comm::ITcpServer
             listen_fd_.Reset();
         }
         if (hs_wake_fd_)
+        {
             loop_->RemoveFd(hs_wake_fd_.Get());
+        }
         // hs_wake_fd_ 不在此关闭：握手线程已 join，留待成员析构，
         // 避免关闭后 fd 号被复用导致握手线程误写
 
@@ -172,9 +184,13 @@ class ShmServer : public comm::ITcpServer
         std::vector<ShmConnPtr> conns;
         conns.reserve(conns_.size());
         for (auto& [id, conn] : conns_)
+        {
             conns.push_back(conn);
+        }
         for (auto& conn : conns)
+        {
             RemoveConn(conn);
+        }
         UnlinkUnixSocket(UriToPath(uri_));
     }
 
@@ -195,7 +211,9 @@ class ShmServer : public comm::ITcpServer
     {
         auto conn = FindConn(conn_id);
         if (!conn)
+        {
             return false;
+        }
         return conn->SendCmd(pkg);
     }
 
@@ -205,7 +223,9 @@ class ShmServer : public comm::ITcpServer
     void Broadcast(const std::any& pkg)
     {
         for (auto& [id, conn] : conns_)
+        {
             conn->SendCmd(pkg);
+        }
     }
 
     /** @brief 主动关闭指定连接（立即移除并触发 close 回调） */
@@ -245,11 +265,15 @@ class ShmServer : public comm::ITcpServer
         // hs_thread_ move 赋值（std::terminate），且 hs_wake_fd_ 赋值会
         // 关闭旧 eventfd（旧线程仍在使用）
         if (started_)
+        {
             return true;
+        }
 
         ErrorCode ec = ListenUnixSocket(UriToPath(uri_), &listen_fd_, 16, &last_sys_errno_);
         if (ec != ErrorCode::kOk)
+        {
             return FailStart(ec);
+        }
 
         {
             // 支持 Stop 后再次 Start：复位握手线程状态
@@ -295,7 +319,9 @@ class ShmServer : public comm::ITcpServer
         }
 
         if (successcb_)
+        {
             successcb_();
+        }
         return true;
     }
 
@@ -333,7 +359,9 @@ class ShmServer : public comm::ITcpServer
 
         UniqueFd cfd{::accept(lfd, nullptr, nullptr)};
         if (!cfd)
+        {
             return;
+        }
 
         {
             std::lock_guard<std::mutex> lk(hs_mtx_);
@@ -351,7 +379,9 @@ class ShmServer : public comm::ITcpServer
                 std::unique_lock<std::mutex> lk(hs_mtx_);
                 hs_cv_.wait(lk, [this] { return hs_stopping_ || !hs_pending_.empty(); });
                 if (hs_pending_.empty())
+                {
                     return;  // stopping 且无待握手连接
+                }
                 hs_current_ = std::move(hs_pending_.front());
                 hs_pending_.pop_front();
             }
@@ -404,7 +434,9 @@ class ShmServer : public comm::ITcpServer
             HandshakeDone done = std::move(ready.front());
             ready.pop_front();
             if (!started_)
+            {
                 break;  // 回调内已调用 Stop()：剩余连接静默丢弃
+            }
             FinishAccept(std::move(done.sockfd), std::move(done.channel));
         }
     }
@@ -413,11 +445,15 @@ class ShmServer : public comm::ITcpServer
     void FinishAccept(UniqueFd cfd, DefaultRingChannel channel)
     {
         if (static_cast<int>(conns_.size()) >= max_clients_)
+        {
             return;  // 握手期间已达上限：静默丢弃（RAII 关闭）
+        }
 
         auto codec = codec_factory_ ? codec_factory_() : nullptr;
         if (!codec)
+        {
             return;  // codec 工厂返回空（同框架：拒绝该连接）
+        }
 
         try
         {
@@ -456,11 +492,15 @@ class ShmServer : public comm::ITcpServer
         // 持有本地拷贝：消息回调内可能调用 Close()/CloseConn() 移除连接
         auto conn = FindConn(conn_id);
         if (!conn)
+        {
             return;
+        }
         int n = conn->DrainRing();
         // 协议错误，或消息回调内调用了 Close()（closeing），收尾移除
         if (n < 0 || conn->State() == comm::TcpConnStates::closeing)
+        {
             RemoveConn(conn);
+        }
     }
 
     /// @brief socket 回调：断连检测（socket 在握手后不再承载数据）
@@ -468,7 +508,9 @@ class ShmServer : public comm::ITcpServer
     {
         auto conn = FindConn(conn_id);
         if (!conn)
+        {
             return;
+        }
         if (revents & (POLLHUP | POLLERR | POLLIN))
         {
             char buf{};

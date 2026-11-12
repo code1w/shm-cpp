@@ -72,7 +72,9 @@ class SimplePodCodec : public comm::codec::Codec
             [](const std::any& pkg, void* out) -> bool {
                 const T* p = std::any_cast<T>(&pkg);
                 if (!p)
+                {
                     return false;
+                }
                 std::memcpy(out, p, sizeof(T));
                 return true;
             },
@@ -98,7 +100,9 @@ class SimplePodCodec : public comm::codec::Codec
     {
         const RegistryEntry* e = FindByType(pkg.type());
         if (!e)
+        {
             return comm::kCodecDisconnect;  // 未注册类型（同框架 bad_any_cast 语义）
+        }
 
         const uint32_t need = kTagSize + e->size;
         if (buflen < need)
@@ -109,7 +113,9 @@ class SimplePodCodec : public comm::codec::Codec
 
         std::memcpy(buf, &e->tag, kTagSize);
         if (!e->encode(pkg, buf + kTagSize))
+        {
             return comm::kCodecDisconnect;  // any 内容类型不符
+        }
         return static_cast<int32_t>(need);
     }
 
@@ -122,20 +128,26 @@ class SimplePodCodec : public comm::codec::Codec
         if (buflen < kTagSize)
         {
             if (size)
+            {
                 *size = kTagSize;  // 告诉上层至少还需要 tag
+            }
             return comm::kCodecNeedMoreBuffer;
         }
         uint32_t tag = 0;
         std::memcpy(&tag, buf, kTagSize);
         const RegistryEntry* e = FindByTag(tag);
         if (!e)
+        {
             return comm::kCodecDisconnect;  // 未知 tag：协议错误（同框架：-1）
+        }
 
         const uint32_t need = kTagSize + e->size;
         if (buflen < need)
         {
             if (size)
+            {
                 *size = need;  // 当前帧完整长度，供 DrainRing 精确线性化
+            }
             return comm::kCodecNeedMoreBuffer;
         }
 
@@ -151,7 +163,9 @@ class SimplePodCodec : public comm::codec::Codec
     {
         const RegistryEntry* e = FindByType(pkg.type());
         if (!e)
+        {
             return -1;
+        }
         return static_cast<int32_t>(kTagSize + e->size);
     }
 
@@ -183,16 +197,24 @@ class SimplePodCodec : public comm::codec::Codec
     {
         const std::type_index key(type);
         for (const auto& e : Registry())
+        {
             if (e.type == key)
+            {
                 return &e;
+            }
+        }
         return nullptr;
     }
 
     static const RegistryEntry* FindByTag(uint32_t tag) noexcept
     {
         for (const auto& e : Registry())
+        {
             if (e.tag == tag)
+            {
                 return &e;
+            }
+        }
         return nullptr;
     }
 };

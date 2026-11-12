@@ -32,8 +32,7 @@ Ch CreateChannelOrAbort(int fd, shm::ChannelRole role)
     shm::ErrorCode ec = Ch::CreateRingChannel(fd, role, &ch);
     if (ec != shm::ErrorCode::kOk)
     {
-        std::fprintf(stderr, "FAIL: CreateRingChannel: %s\n",
-                     shm::ErrorCodeName(ec));
+        std::fprintf(stderr, "FAIL: CreateRingChannel: %s\n", shm::ErrorCodeName(ec));
         std::abort();
     }
     return ch;
@@ -54,14 +53,13 @@ void TestEncodeDecodeBuffer()
     assert(frame_size > 0);
 
     // 解码帧头
-    const char *type_name = nullptr;
+    const char* type_name  = nullptr;
     uint32_t type_name_len = 0;
-    const void *payload = nullptr;
-    uint32_t payload_len = 0;
-    uint32_t seq = 0;
-    bool ok = shm::ProtoCodec<shm_ipc::HeartbeatProto>::DecodeHeader(buf, frame_size,
-                                     &type_name, &type_name_len,
-                                     &payload, &payload_len, &seq);
+    const void* payload    = nullptr;
+    uint32_t payload_len   = 0;
+    uint32_t seq           = 0;
+    bool ok = shm::ProtoCodec<shm_ipc::HeartbeatProto>::DecodeHeader(buf, frame_size, &type_name, &type_name_len,
+                                                                     &payload, &payload_len, &seq);
     assert(ok);
     assert(seq == 7);
 
@@ -97,20 +95,18 @@ void TestProtoCodecInterface()
     assert(frame_size > 0);
 
     // Decode
-    const void *payload = nullptr;
+    const void* payload  = nullptr;
     uint32_t payload_len = 0;
-    uint32_t seq = 0;
-    bool ok = codec.Decode(buf, frame_size, &payload, &payload_len, &seq);
+    uint32_t seq         = 0;
+    bool ok              = codec.Decode(buf, frame_size, &payload, &payload_len, &seq);
     assert(ok);
     assert(seq == 3);
 
     // DecodePayload（跳过 type_name 前缀）
-    const void *data = nullptr;
+    const void* data  = nullptr;
     uint32_t data_len = 0;
-    ok = codec.DecodePayload(
-        static_cast<const char *>(static_cast<const void *>(buf)) + shm::kMsgHeaderSize,
-        frame_size - shm::kMsgHeaderSize,
-        &data, &data_len);
+    ok = codec.DecodePayload(static_cast<const char*>(static_cast<const void*>(buf)) + shm::kMsgHeaderSize,
+                             frame_size - shm::kMsgHeaderSize, &data, &data_len);
     assert(ok);
 
     shm_ipc::HeartbeatProto out;
@@ -177,20 +173,22 @@ void TestSendRecvViaRing()
     shm::FrameReader<> reader;
 
     // 读第一条消息
-    const void *payload = nullptr;
+    const void* payload  = nullptr;
     uint32_t payload_len = 0;
     while (reader.TryRecv(ch, &payload, &payload_len) != 0)
+    {
         ;
+    }
 
     // payload 是 [type_name_len][type_name][pb_data]
     assert(payload_len >= shm::kTypeNameLenSize);
     uint16_t name_len = 0;
     std::memcpy(&name_len, payload, sizeof(name_len));
-    std::string type_name(static_cast<const char *>(payload) + shm::kTypeNameLenSize, name_len);
+    std::string type_name(static_cast<const char*>(payload) + shm::kTypeNameLenSize, name_len);
     assert(type_name == "shm_ipc.HeartbeatProto");
 
-    const void *pb_start = static_cast<const char *>(payload) + shm::kTypeNameLenSize + name_len;
-    uint32_t pb_size = payload_len - shm::kTypeNameLenSize - name_len;
+    const void* pb_start = static_cast<const char*>(payload) + shm::kTypeNameLenSize + name_len;
+    uint32_t pb_size     = payload_len - shm::kTypeNameLenSize - name_len;
 
     shm_ipc::HeartbeatProto hb_out;
     bool ok = hb_out.ParseFromArray(pb_start, static_cast<int>(pb_size));
@@ -201,13 +199,15 @@ void TestSendRecvViaRing()
 
     // 读第二条消息
     while (reader.TryRecv(ch, &payload, &payload_len) != 0)
+    {
         ;
+    }
     std::memcpy(&name_len, payload, sizeof(name_len));
-    type_name.assign(static_cast<const char *>(payload) + shm::kTypeNameLenSize, name_len);
+    type_name.assign(static_cast<const char*>(payload) + shm::kTypeNameLenSize, name_len);
     assert(type_name == "shm_ipc.ClientMsgProto");
 
-    pb_start = static_cast<const char *>(payload) + shm::kTypeNameLenSize + name_len;
-    pb_size = payload_len - shm::kTypeNameLenSize - name_len;
+    pb_start = static_cast<const char*>(payload) + shm::kTypeNameLenSize + name_len;
+    pb_size  = payload_len - shm::kTypeNameLenSize - name_len;
 
     shm_ipc::ClientMsgProto cm_out;
     ok = cm_out.ParseFromArray(pb_start, static_cast<int>(pb_size));
@@ -242,22 +242,21 @@ void TestTypeNameMismatch()
     cm.set_payload("hello");
 
     char buf[1024]{};
-    uint32_t frame_size =
-        shm::ProtoCodec<shm_ipc::ClientMsgProto>::EncodeTo(cm, buf, sizeof(buf), 5);
+    uint32_t frame_size = shm::ProtoCodec<shm_ipc::ClientMsgProto>::EncodeTo(cm, buf, sizeof(buf), 5);
     assert(frame_size > 0);
 
     // 用错误的 codec（HeartbeatProto）解码：type_name 不匹配，必须拒绝
     shm::ProtoCodec<shm_ipc::HeartbeatProto> wrong_codec;
-    const void *payload = nullptr;
+    const void* payload  = nullptr;
     uint32_t payload_len = 0;
-    bool ok = wrong_codec.Decode(buf, frame_size, &payload, &payload_len, nullptr);
+    bool ok              = wrong_codec.Decode(buf, frame_size, &payload, &payload_len, nullptr);
     assert(!ok);
 
-    const void *raw_payload = buf + shm::kMsgHeaderSize;
-    uint32_t raw_len = frame_size - shm::kMsgHeaderSize;
-    const void *data = nullptr;
-    uint32_t data_len = 0;
-    ok = wrong_codec.DecodePayload(raw_payload, raw_len, &data, &data_len);
+    const void* raw_payload = buf + shm::kMsgHeaderSize;
+    uint32_t raw_len        = frame_size - shm::kMsgHeaderSize;
+    const void* data        = nullptr;
+    uint32_t data_len       = 0;
+    ok                      = wrong_codec.DecodePayload(raw_payload, raw_len, &data, &data_len);
     assert(!ok);
 
     // 正确的 codec：必须通过
