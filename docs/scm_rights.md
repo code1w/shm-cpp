@@ -90,11 +90,11 @@ Client 创建 eventfd，通过 `SCM_RIGHTS` 发给 Server。之后双方各持�
 
 ## 总结
 
-| 概念 | 本质 |
-|------|------|
-| fd 编号 | 进程私有的索引号，跨进程无意义 |
-| `struct file` | 内核对象，fd 编号只是指向它的指针 |
-| `fork` 共享 | 子进程继承 fd 表 → 自动指向相同内核对象 |
-| `SCM_RIGHTS` 共享 | 内核把发送方 fd 背后的 `struct file *` 安装到接收方 fd 表 |
-| `SendFd` 做的事 | 请求内核执行上述 `SCM_RIGHTS` 操作 |
-| eventfd 能跨进程 | 不是 eventfd 特殊，是任何 fd（eventfd / memfd / socket / pipe）都能通过 `SCM_RIGHTS` 共享 |
+| 概念                | 本质                                                                                        |
+| ------------------- | ------------------------------------------------------------------------------------------- |
+| fd 编号             | 进程私有的索引号，跨进程无意义                                                              |
+| `struct file`     | 内核对象，fd 编号只是指向它的指针                                                           |
+| `fork` 共享       | 子进程继承 fd 表 → 自动指向相同内核对象                                                    |
+| `SCM_RIGHTS` 共享 | 内核把发送方 fd 背后的 `struct file *` 安装到接收方 fd 表                                 |
+| `SendFd` 做的事   | 请求内核执行上述 `SCM_RIGHTS` 操作                                                        |
+| eventfd 能跨进程    | 不是 eventfd 特殊，是任何 fd（eventfd / memfd / socket / pipe）都能通过 `SCM_RIGHTS` 共享 |
