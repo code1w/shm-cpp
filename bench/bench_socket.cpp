@@ -104,7 +104,7 @@ void RunServer(int fd)
 
     for (auto& tc : kTests)
     {
-        int total = kWarmup + tc.rounds;
+        const int total = kWarmup + tc.rounds;
         for (int i = 0; i < total; ++i)
         {
             ReadAll(fd, buf.get(), tc.msg_size);
@@ -138,19 +138,19 @@ void RunClient(int fd)
         }
 
         // 正式测试
-        uint64_t t0 = NowNs();
+        const uint64_t t0 = NowNs();
         for (int i = 0; i < tc.rounds; ++i)
         {
             WriteAll(fd, send_buf.get(), tc.msg_size);
             ReadAll(fd, recv_buf.get(), tc.msg_size);
         }
-        uint64_t elapsed_ns = NowNs() - t0;
+        const uint64_t elapsed_ns = NowNs() - t0;
 
-        double total_us   = static_cast<double>(elapsed_ns) / 1000.0;
-        double avg_rtt_ns = static_cast<double>(elapsed_ns) / tc.rounds;
+        const double total_us   = static_cast<double>(elapsed_ns) / 1000.0;
+        const double avg_rtt_ns = static_cast<double>(elapsed_ns) / tc.rounds;
         // 每轮传输 msg_size * 2（发送 + 回声）
-        double throughput = static_cast<double>(tc.msg_size) * 2.0 * tc.rounds /
-                            (static_cast<double>(elapsed_ns) / 1e9) / (1024.0 * 1024.0);
+        const double throughput = static_cast<double>(tc.msg_size) * 2.0 * tc.rounds /
+                                  (static_cast<double>(elapsed_ns) / 1e9) / (1024.0 * 1024.0);
 
         std::printf("%10zu %10d %12.0f %14.0f %16.2f\n", tc.msg_size, tc.rounds, total_us, avg_rtt_ns, throughput);
     }
@@ -176,7 +176,7 @@ int main()
     ::setsockopt(sv[1], SOL_SOCKET, SO_SNDBUF, &buf_size, sizeof(buf_size));
     ::setsockopt(sv[1], SOL_SOCKET, SO_RCVBUF, &buf_size, sizeof(buf_size));
 
-    pid_t pid = ::fork();
+    const pid_t pid = ::fork();
     if (pid < 0)
     {
         std::perror("fork");

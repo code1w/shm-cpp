@@ -130,7 +130,7 @@ class ChannelBatchWriter
      */
     int Flush()
     {
-        int n = batch_.Flush();
+        const int n = batch_.Flush();
         if (n > 0 && channel_)
         {
             channel_->NotifyPeer();
@@ -139,10 +139,18 @@ class ChannelBatchWriter
     }
 
     /** @brief 自上次 Flush 以来已成功 TryWrite 的次数 */
-    int Count() const noexcept { return batch_.Count(); }
+    [[nodiscard]]
+    int Count() const noexcept
+    {
+        return batch_.Count();
+    }
 
     /** @brief 自上次 Flush 以来已写入但尚未发布的字节数 */
-    uint64_t PendingBytes() const noexcept { return batch_.PendingBytes(); }
+    [[nodiscard]]
+    uint64_t PendingBytes() const noexcept
+    {
+        return batch_.PendingBytes();
+    }
 
     /** @brief 丢弃自上次 Flush 以来的所有未发布写入（析构时不再发布） */
     void Cancel() noexcept { batch_.Cancel(); }
@@ -151,7 +159,11 @@ class ChannelBatchWriter
     void RewindTo(uint64_t pending, int count) noexcept { batch_.RewindTo(pending, count); }
 
     /** @brief 当前可写入的剩余字节数 */
-    uint64_t FreeBytes() const noexcept { return batch_.FreeBytes(); }
+    [[nodiscard]]
+    uint64_t FreeBytes() const noexcept
+    {
+        return batch_.FreeBytes();
+    }
 
     /** @brief 预留连续写入区域，不跨环尾时返回直写指针 */
     char* Reserve(uint32_t len) { return batch_.Reserve(len); }
@@ -219,7 +231,7 @@ class RingChannel
         }
 
         RingChannel ch;
-        detail::HandshakeGuard guard{socket_fd};  // 握手超时，返回时恢复
+        const detail::HandshakeGuard guard{socket_fd};  // 握手超时，返回时恢复
 
         ErrorCode ec = ErrorCode::kOk;
         if (role == ChannelRole::kClient)
@@ -352,9 +364,9 @@ class RingChannel
             {
                 return -1;
             }
-            int rc    = Ring::PeekContig(read_region_.Get(), seg1, seg1_len);
-            *seg2     = nullptr;
-            *seg2_len = 0;
+            const int rc = Ring::PeekContig(read_region_.Get(), seg1, seg1_len);
+            *seg2        = nullptr;
+            *seg2_len    = 0;
             return rc;
         }
         return Ring::Peek(read_region_.Get(), seg1, seg1_len, seg2, seg2_len);
@@ -398,10 +410,18 @@ class RingChannel
     // ---- 状态查询 ----
 
     /** @brief 返回读环中可读字节数（通道未初始化时为 0） */
-    uint64_t Readable() const { return read_region_ ? Ring::Available(read_region_.Get()) : 0; }
+    [[nodiscard]]
+    uint64_t Readable() const
+    {
+        return read_region_ ? Ring::Available(read_region_.Get()) : 0;
+    }
 
     /** @brief 返回写环中剩余可写字节数（通道未初始化时为 0） */
-    uint64_t WritableBytes() const { return write_region_ ? Ring::FreeSpace(write_region_.Get()) : 0; }
+    [[nodiscard]]
+    uint64_t WritableBytes() const
+    {
+        return write_region_ ? Ring::FreeSpace(write_region_.Get()) : 0;
+    }
 
     // ---- 通知 ----
 
@@ -461,10 +481,18 @@ class RingChannel
     }
 
     /** @brief 读环当前 write_pos（通道未初始化时为 0） */
-    uint64_t WritePos() const { return read_region_ ? Ring::WritePos(read_region_.Get()) : 0; }
+    [[nodiscard]]
+    uint64_t WritePos() const
+    {
+        return read_region_ ? Ring::WritePos(read_region_.Get()) : 0;
+    }
 
     /** @brief 读环当前 read_pos（通道未初始化时为 0） */
-    uint64_t ReadPos() const { return read_region_ ? Ring::ReadPos(read_region_.Get()) : 0; }
+    [[nodiscard]]
+    uint64_t ReadPos() const
+    {
+        return read_region_ ? Ring::ReadPos(read_region_.Get()) : 0;
+    }
 
     /**
      * @brief 排空 eventfd（在通知回调中调用）
@@ -528,7 +556,7 @@ class RingChannel
     /// @brief 发送本端 fd：写环 memfd + "唤醒自身"的 eventfd
     ErrorCode SendLocalFds(int socket_fd, int* sys_errno = nullptr) const noexcept
     {
-        ErrorCode ec = SendFd(socket_fd, write_memfd_.Get(), FdTag::kMemfd, sys_errno);
+        const ErrorCode ec = SendFd(socket_fd, write_memfd_.Get(), FdTag::kMemfd, sys_errno);
         if (ec != ErrorCode::kOk)
         {
             return ec;

@@ -139,12 +139,12 @@ int SendFrame(RingChannel<Cap>& ch, uint32_t payload_len, uint32_t seq, WriteFn&
 {
     // 64 位计算避免 kMsgHeaderSize + payload_len 在 uint32 溢出
     // （溢出后 frame_size 变成小数，会绕过空间检查）
-    uint64_t frame_size64 = static_cast<uint64_t>(kMsgHeaderSize) + payload_len;
+    const uint64_t frame_size64 = static_cast<uint64_t>(kMsgHeaderSize) + payload_len;
     if (ch.WritableBytes() < frame_size64)
     {
         return -1;
     }
-    uint32_t frame_size = static_cast<uint32_t>(frame_size64);  // 已 <= Capacity
+    const uint32_t frame_size = static_cast<uint32_t>(frame_size64);  // 已 <= Capacity
 
     typename RingChannel<Cap>::ChannelBatchWriter batch;
     if (ch.StartBatch(&batch) != ErrorCode::kOk)
@@ -201,15 +201,15 @@ int SendFrameBatch(typename RingChannel<Cap>::ChannelBatchWriter& batch, uint32_
                    WriteFn&& write_payload)
 {
     // 同 SendFrame：64 位计算避免帧长在 uint32 溢出
-    uint64_t frame_size64 = static_cast<uint64_t>(kMsgHeaderSize) + payload_len;
+    const uint64_t frame_size64 = static_cast<uint64_t>(kMsgHeaderSize) + payload_len;
     if (batch.FreeBytes() < frame_size64)
     {
         return -1;
     }
-    uint32_t frame_size = static_cast<uint32_t>(frame_size64);  // 已 <= Capacity
+    const uint32_t frame_size = static_cast<uint32_t>(frame_size64);  // 已 <= Capacity
 
-    uint64_t before  = batch.PendingBytes();
-    int before_count = batch.Count();
+    const uint64_t before  = batch.PendingBytes();
+    const int before_count = batch.Count();
 
     MsgHeader hdr{};
     hdr.len = payload_len;

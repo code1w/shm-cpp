@@ -59,6 +59,7 @@ class ProtoCodec : public ICodec
         return TypeNameMatches(type_name, type_name_len);
     }
 
+    [[nodiscard]]
     std::string TypeName() const override
     {
         T default_instance{};
@@ -79,7 +80,7 @@ class ProtoCodec : public ICodec
         auto* p           = static_cast<const char*>(payload);
         uint16_t name_len = 0;
         std::memcpy(&name_len, p, kTypeNameLenSize);
-        uint32_t prefix_len = kTypeNameLenSize + name_len;
+        const uint32_t prefix_len = kTypeNameLenSize + name_len;
         if (payload_len < prefix_len)
         {
             return false;
@@ -120,8 +121,8 @@ class ProtoCodec : public ICodec
         auto name_len    = static_cast<uint16_t>(name.size());
         auto pb_len      = static_cast<uint32_t>(msg.ByteSizeLong());
 
-        uint32_t payload_len = kTypeNameLenSize + name_len + pb_len;
-        char* p              = EncodeFrame(buf, buf_size, payload_len, seq);
+        const uint32_t payload_len = kTypeNameLenSize + name_len + pb_len;
+        char* p                    = EncodeFrame(buf, buf_size, payload_len, seq);
         if (!p)
         {
             return 0;
@@ -210,7 +211,7 @@ class ProtoCodec : public ICodec
         {
             return -1;
         }
-        uint32_t payload_len = kTypeNameLenSize + name_len + pb_len;
+        const uint32_t payload_len = kTypeNameLenSize + name_len + pb_len;
 
         return SendFrame(ch, payload_len, seq, [&](auto& batch) {
             batch.TryWrite(&name_len, kTypeNameLenSize);
@@ -267,7 +268,7 @@ class ProtoCodec : public ICodec
         {
             const void* payload  = nullptr;
             uint32_t payload_len = 0;
-            int rc               = reader_.TryRecv(ch, &payload, &payload_len);
+            const int rc         = reader_.TryRecv(ch, &payload, &payload_len);
             if (rc == -1 || rc == -2 || rc == -3)
             {
                 return rc;

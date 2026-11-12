@@ -116,7 +116,7 @@ class ShmConnection : public comm::ITcpConnection,
                     }
 
                     size_t out = 0;
-                    int32_t len =
+                    const int32_t len =
                         codec_->Encode(pkg, reinterpret_cast<comm::byte*>(dst), static_cast<size_t>(need), &out);
                     if (len == need)
                     {
@@ -142,7 +142,7 @@ class ShmConnection : public comm::ITcpConnection,
             for (;;)
             {
                 size_t out = 0;
-                int32_t len =
+                const int32_t len =
                     codec_->Encode(pkg, reinterpret_cast<comm::byte*>(encode_buf_.data()), encode_buf_.size(), &out);
                 if (len == comm::kCodecSkipPackage)
                 {
@@ -229,8 +229,8 @@ class ShmConnection : public comm::ITcpConnection,
         }
         (void)interval_ms;  // 一次性定时器，不支持重复触发
 
-        int tfd      = 0;
-        ErrorCode ec = loop_->AddOneShotTimer(
+        int tfd            = 0;
+        const ErrorCode ec = loop_->AddOneShotTimer(
             static_cast<int>(expired_ms),
             [this, action = std::move(action)](int, short) mutable {
                 verify_timer_ = 0;  // 定时器已自行移除
@@ -439,8 +439,8 @@ class ShmConnection : public comm::ITcpConnection,
                 const uint32_t total = seg1_len + seg2_len;
                 uint32_t want        = total;
 
-                size_t need = 0;
-                int32_t rc  = codec_->Decode(static_cast<const comm::byte*>(seg1), seg1_len, pkg, &need);
+                size_t need      = 0;
+                const int32_t rc = codec_->Decode(static_cast<const comm::byte*>(seg1), seg1_len, pkg, &need);
                 if (rc == comm::kCodecDisconnect)
                 {
                     return -1;
@@ -489,7 +489,7 @@ class ShmConnection : public comm::ITcpConnection,
                     }
 
                     size_t more = 0;
-                    int32_t probe2 =
+                    const int32_t probe2 =
                         codec_->Decode(reinterpret_cast<const comm::byte*>(staging_.data()), want, pkg, &more);
                     if (probe2 == comm::kCodecNeedMoreBuffer && more > want && more <= total)
                     {
@@ -508,8 +508,8 @@ class ShmConnection : public comm::ITcpConnection,
             uint32_t off = 0;
             for (;;)
             {
-                size_t out  = 0;
-                int32_t len = codec_->Decode(buf + off, buflen - off, pkg, &out);
+                size_t out        = 0;
+                const int32_t len = codec_->Decode(buf + off, buflen - off, pkg, &out);
                 if (len == comm::kCodecDisconnect)
                 {
                     if (off)
@@ -623,7 +623,7 @@ class ShmConnection : public comm::ITcpConnection,
         while (left > 0)
         {
             // 单次 TryWrite 上限为 kMaxWriteSize（Capacity/2）
-            uint32_t chunk = std::min(left, static_cast<uint32_t>(DefaultRingChannel::kMaxWriteSize));
+            const uint32_t chunk = std::min(left, static_cast<uint32_t>(DefaultRingChannel::kMaxWriteSize));
             if (channel_.TryWrite(p, chunk) != 0)
             {
                 return false;  // 理论不可达（已预检空间）
@@ -647,7 +647,7 @@ class ShmConnection : public comm::ITcpConnection,
             for (;;)
             {
                 size_t size = 0;
-                int32_t len =
+                const int32_t len =
                     codec_->SendKeepAlive(reinterpret_cast<comm::byte*>(encode_buf_.data()), encode_buf_.size(), &size);
                 if (len > 0)
                 {

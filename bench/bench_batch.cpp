@@ -38,7 +38,7 @@ using Channel = shm::DefaultRingChannel;
 Channel CreateChannelOrExit(int fd, shm::ChannelRole role)
 {
     Channel ch;
-    shm::ErrorCode ec = Channel::CreateRingChannel(fd, role, &ch);
+    const shm::ErrorCode ec = Channel::CreateRingChannel(fd, role, &ch);
     if (ec != shm::ErrorCode::kOk)
     {
         std::fprintf(stderr, "CreateRingChannel failed: %s\n", shm::ErrorCodeName(ec));
@@ -219,9 +219,9 @@ void WaitReadDone(int ctrl_fd)
  */
 std::pair<double, double> BenchOne(Channel& ch, int ctrl_fd, const TestParam& p, const char* buf)
 {
-    auto msg_len = static_cast<uint32_t>(p.msg_size);
-    int warmup   = kWarmup;
-    int total    = p.total_msgs;
+    auto msg_len     = static_cast<uint32_t>(p.msg_size);
+    const int warmup = kWarmup;
+    const int total  = p.total_msgs;
 
     // --- 逐条基线 ---
     double best_single = 1e18;
@@ -234,13 +234,13 @@ std::pair<double, double> BenchOne(Channel& ch, int ctrl_fd, const TestParam& p,
 
         // 正式
         RequestRead(ctrl_fd, total, msg_len);
-        uint64_t t0 = NowNs();
+        const uint64_t t0 = NowNs();
         WriteSingle(ch, buf, msg_len, total);
-        uint64_t elapsed = NowNs() - t0;
+        const uint64_t elapsed = NowNs() - t0;
         WaitReadDone(ctrl_fd);
 
-        double avg  = static_cast<double>(elapsed) / total;
-        best_single = std::min(best_single, avg);
+        const double avg = static_cast<double>(elapsed) / total;
+        best_single      = std::min(best_single, avg);
     }
 
     // --- 批量写入 ---
@@ -254,13 +254,13 @@ std::pair<double, double> BenchOne(Channel& ch, int ctrl_fd, const TestParam& p,
 
         // 正式
         RequestRead(ctrl_fd, total, msg_len);
-        uint64_t t0 = NowNs();
+        const uint64_t t0 = NowNs();
         WriteBatch(ch, buf, msg_len, total, p.batch_size);
-        uint64_t elapsed = NowNs() - t0;
+        const uint64_t elapsed = NowNs() - t0;
         WaitReadDone(ctrl_fd);
 
-        double avg = static_cast<double>(elapsed) / total;
-        best_batch = std::min(best_batch, avg);
+        const double avg = static_cast<double>(elapsed) / total;
+        best_batch       = std::min(best_batch, avg);
     }
 
     return {best_single, best_batch};
@@ -319,9 +319,9 @@ void RunWriter(int socket_fd, int ctrl_fd)
             std::printf("|-----------|---------------|---------------|-------------|-------------|-------|\n");
         }
 
-        double s_mbs   = static_cast<double>(r.msg_size) / r.single_ns * 1e9 / (1024.0 * 1024.0);
-        double b_mbs   = static_cast<double>(r.msg_size) / r.batch_ns * 1e9 / (1024.0 * 1024.0);
-        double speedup = r.single_ns / r.batch_ns;
+        const double s_mbs   = static_cast<double>(r.msg_size) / r.single_ns * 1e9 / (1024.0 * 1024.0);
+        const double b_mbs   = static_cast<double>(r.msg_size) / r.batch_ns * 1e9 / (1024.0 * 1024.0);
+        const double speedup = r.single_ns / r.batch_ns;
 
         std::printf("| %d | %.0f | %.0f | %.0f | %.0f | **%.2fx** |\n", r.batch_size, r.single_ns, r.batch_ns, s_mbs,
                     b_mbs, speedup);
@@ -372,7 +372,7 @@ void RunWriter(int socket_fd, int ctrl_fd)
                 best_batch    = r2.batch_size;
             }
         }
-        double speedup = baseline_ns / best_batch_ns;
+        const double speedup = baseline_ns / best_batch_ns;
         std::printf("| %zuB | %.0f | %d | %.0f | **%.2fx** |\n", r.msg_size, baseline_ns, best_batch, best_batch_ns,
                     speedup);
     }
@@ -407,7 +407,7 @@ void RunWriter(int socket_fd, int ctrl_fd)
                 best_batch    = r2.batch_size;
             }
         }
-        double speedup = baseline_ns / best_batch_ns;
+        const double speedup = baseline_ns / best_batch_ns;
 
         std::printf("**%zuB 消息**：逐条 %.0f ns → batch=%d 时 %.0f ns（**%.2fx**）。", r.msg_size, baseline_ns,
                     best_batch, best_batch_ns, speedup);
@@ -458,7 +458,7 @@ int main()
         return 1;
     }
 
-    pid_t pid = ::fork();
+    const pid_t pid = ::fork();
     if (pid < 0)
     {
         std::perror("fork");

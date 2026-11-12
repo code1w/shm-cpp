@@ -102,7 +102,7 @@ void AdvanceRing(void* shm, uint32_t advance)
     uint32_t remaining = advance;
     while (remaining > 0)
     {
-        uint32_t chunk = (remaining > 512) ? 512 : remaining;
+        const uint32_t chunk = (remaining > 512) ? 512 : remaining;
         CHECK(SmallRing::TryWrite(shm, tmp, chunk) == 0, "AdvanceRing write");
         CHECK(SmallRing::ReadExact(shm, tmp, chunk) == 0, "AdvanceRing read");
         remaining -= chunk;
@@ -414,7 +414,7 @@ void TestCommitReadOverrunAssert()
 {
     std::printf("--- Test 7: CommitRead overrun assert (death test) ---\n");
 
-    pid_t pid = ::fork();
+    const pid_t pid = ::fork();
     if (pid < 0)
     {
         std::perror("fork");
@@ -446,7 +446,7 @@ void TestRewindOverrunAssert()
 {
     std::printf("--- Test 8: RewindTo overrun assert (death test) ---\n");
 
-    pid_t pid = ::fork();
+    const pid_t pid = ::fork();
     if (pid < 0)
     {
         std::perror("fork");
@@ -696,7 +696,7 @@ void AdvanceMirrored(void* shm, uint32_t advance)
     uint32_t remaining = advance;
     while (remaining > 0)
     {
-        uint32_t chunk = (remaining > sizeof(tmp)) ? static_cast<uint32_t>(sizeof(tmp)) : remaining;
+        const uint32_t chunk = (remaining > sizeof(tmp)) ? static_cast<uint32_t>(sizeof(tmp)) : remaining;
         CHECK(SmallRing::TryWriteContig(shm, tmp, chunk) == 0, "AdvanceMirrored write");
         CHECK(SmallRing::ReadExactContig(shm, tmp, chunk) == 0, "AdvanceMirrored read");
         remaining -= chunk;
@@ -712,7 +712,7 @@ void TestContigWrap()
     std::printf("--- Test 13: mirrored contig wrap ---\n");
 
     const uint32_t tails[] = {1, 2, 3, 7, 8, 15, 16, 100, 1024, 2047, 2048};
-    for (uint32_t tail : tails)
+    for (const uint32_t tail : tails)
     {
         MirroredRing ring;
         CHECK(ring.Init(), "mirror map");
@@ -872,8 +872,8 @@ void TestReaderWaitStateMachine()
     CHECK(!SmallRing::ShouldNotify(shm), "awake reader not notified");
 
     // 武装时基线已过期（write_pos 已推进）：拒绝睡眠且撤销标志
-    uint64_t stale = SmallRing::WritePos(shm);
-    char b[8]      = {};
+    const uint64_t stale = SmallRing::WritePos(shm);
+    char b[8]            = {};
     CHECK(SmallRing::TryWrite(shm, b, sizeof(b)) == 0, "write");
     CHECK(!SmallRing::ArmReaderWait(shm, stale), "stale baseline -> no sleep");
     CHECK(!SmallRing::ShouldNotify(shm), "disarmed after failed arm");
@@ -953,7 +953,7 @@ void TestReaderWaitNoLostWakeup()
         }
 
         pollfd pfd{efd.Get(), POLLIN, 0};
-        int pr = ::poll(&pfd, 1, 3000);
+        const int pr = ::poll(&pfd, 1, 3000);
         ++polls;
         if (pr == 0)
         {

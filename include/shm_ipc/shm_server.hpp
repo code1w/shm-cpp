@@ -143,7 +143,7 @@ class ShmServer : public comm::ITcpServer
         // 1) 通知握手线程退出，并 shutdown 未完成握手的 socket
         //    （打断其阻塞中的 recvmsg，使其立即失败返回）
         {
-            std::lock_guard<std::mutex> lk(hs_mtx_);
+            const std::lock_guard<std::mutex> lk(hs_mtx_);
             hs_stopping_ = true;
             for (auto& fd : hs_pending_)
             {
@@ -178,7 +178,7 @@ class ShmServer : public comm::ITcpServer
 
         // 3) 丢弃握手完成但未及收编的连接（未触发过 OnConnection，静默销毁）
         {
-            std::lock_guard<std::mutex> lk(hs_mtx_);
+            const std::lock_guard<std::mutex> lk(hs_mtx_);
             hs_pending_.clear();
             hs_done_.clear();
             hs_current_.Reset();
@@ -281,7 +281,7 @@ class ShmServer : public comm::ITcpServer
 
         {
             // 支持 Stop 后再次 Start：复位握手线程状态
-            std::lock_guard<std::mutex> lk(hs_mtx_);
+            const std::lock_guard<std::mutex> lk(hs_mtx_);
             hs_stopping_ = false;
         }
 
@@ -352,11 +352,11 @@ class ShmServer : public comm::ITcpServer
     {
         {
             // 上限计数含握手中的连接，防止握手期间超额
-            std::lock_guard<std::mutex> lk(hs_mtx_);
-            std::size_t inflight = hs_pending_.size() + hs_done_.size() + (hs_current_.Get() >= 0 ? 1 : 0);
+            const std::lock_guard<std::mutex> lk(hs_mtx_);
+            const std::size_t inflight = hs_pending_.size() + hs_done_.size() + (hs_current_.Get() >= 0 ? 1 : 0);
             if (max_clients_ <= 0 || conns_.size() + inflight >= static_cast<std::size_t>(max_clients_))
             {
-                UniqueFd rejected{::accept(lfd, nullptr, nullptr)};
+                const UniqueFd rejected{::accept(lfd, nullptr, nullptr)};
                 return;  // accept 后立即关闭，对端握手时收到 EOF
             }
         }
@@ -368,7 +368,7 @@ class ShmServer : public comm::ITcpServer
         }
 
         {
-            std::lock_guard<std::mutex> lk(hs_mtx_);
+            const std::lock_guard<std::mutex> lk(hs_mtx_);
             hs_pending_.push_back(std::move(cfd));
         }
         hs_cv_.notify_one();
@@ -393,12 +393,12 @@ class ShmServer : public comm::ITcpServer
             DefaultRingChannel channel;
             // 握手失败（对端超时、乱发数据、尺寸不符或 Stop 的 shutdown
             // 打断）：fd 与半成品通道由 RAII 释放
-            bool ok = DefaultRingChannel::CreateRingChannel(hs_current_.Get(), ChannelRole::kServer, &channel) ==
-                      ErrorCode::kOk;
+            const bool ok = DefaultRingChannel::CreateRingChannel(hs_current_.Get(), ChannelRole::kServer, &channel) ==
+                            ErrorCode::kOk;
 
             bool notify = false;
             {
-                std::lock_guard<std::mutex> lk(hs_mtx_);
+                const std::lock_guard<std::mutex> lk(hs_mtx_);
                 if (ok && !hs_stopping_)
                 {
                     try
@@ -430,7 +430,7 @@ class ShmServer : public comm::ITcpServer
 
         std::deque<HandshakeDone> ready;
         {
-            std::lock_guard<std::mutex> lk(hs_mtx_);
+            const std::lock_guard<std::mutex> lk(hs_mtx_);
             ready.swap(hs_done_);
         }
         while (!ready.empty())
@@ -461,10 +461,10 @@ class ShmServer : public comm::ITcpServer
 
         try
         {
-            uint64_t id      = next_id_++;
-            auto conn        = std::make_shared<ShmConnection>(loop_, id, std::move(cfd), std::move(channel));
-            codec->keepalive = keepalive_;
-            codec->conn_id   = id;
+            const uint64_t id = next_id_++;
+            auto conn         = std::make_shared<ShmConnection>(loop_, id, std::move(cfd), std::move(channel));
+            codec->keepalive  = keepalive_;
+            codec->conn_id    = id;
             conn->SetMessageCallback(messagecb_);
             conn->SetCloseCallback(closecb_);
             conn->SetConnectionCallback(connectioncb_);
@@ -499,7 +499,7 @@ class ShmServer : public comm::ITcpServer
         {
             return;
         }
-        int n = conn->DrainRing();
+        const int n = conn->DrainRing();
         // 协议错误，或消息回调内调用了 Close()（closeing），收尾移除
         if (n < 0 || conn->State() == comm::TcpConnStates::closeing)
         {
@@ -518,7 +518,7 @@ class ShmServer : public comm::ITcpServer
         if (revents & (POLLHUP | POLLERR | POLLIN))
         {
             char buf{};
-            ssize_t n = ::read(fd, &buf, 1);
+            const ssize_t n = ::read(fd, &buf, 1);
             if (n <= 0)
             {
                 // 对端关闭：先读掉环中可能残留的最后数据，再移除

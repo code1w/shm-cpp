@@ -75,7 +75,7 @@ class FrameReader
             return -1;
         }
 
-        uint32_t total_avail = seg1_len + seg2_len;
+        const uint32_t total_avail = seg1_len + seg2_len;
 
         // 至少需要 MsgHeader
         if (total_avail < kMsgHeaderSize)
@@ -116,11 +116,11 @@ class FrameReader
             return -1;
         }
 
-        uint32_t frame_size = kMsgHeaderSize + hdr.len;
+        const uint32_t frame_size = kMsgHeaderSize + hdr.len;
 
         // payload 起始位置在帧头之后
-        uint32_t body_offset = kMsgHeaderSize;
-        uint32_t body_len    = hdr.len;
+        const uint32_t body_offset = kMsgHeaderSize;
+        const uint32_t body_len    = hdr.len;
 
         if (body_len == 0)
         {
@@ -177,7 +177,11 @@ class FrameReader
     }
 
     /** @brief 最近成功读取的消息序列号 */
-    uint32_t LastSeq() const { return hdr_.seq; }
+    [[nodiscard]]
+    uint32_t LastSeq() const
+    {
+        return hdr_.seq;
+    }
 
  protected:
     MsgHeader hdr_{};
@@ -195,15 +199,15 @@ class FrameReader
         // seg1 中可用的部分
         if (offset < s1_len)
         {
-            uint32_t avail = s1_len - offset;
-            uint32_t n     = (avail < len) ? avail : len;
+            const uint32_t avail = s1_len - offset;
+            const uint32_t n     = (avail < len) ? avail : len;
             std::memcpy(dst, s1 + offset, n);
             copied += n;
         }
         // 剩余从 seg2 拷贝
         if (copied < len)
         {
-            uint32_t s2_offset = (offset > s1_len) ? (offset - s1_len) : 0;
+            const uint32_t s2_offset = (offset > s1_len) ? (offset - s1_len) : 0;
             std::memcpy(dst + copied, s2 + s2_offset, len - copied);
         }
     }

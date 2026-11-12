@@ -82,6 +82,7 @@ class PodCodec : public ICodec
     /**
      * @brief 返回 type_tag 的十六进制字符串
      */
+    [[nodiscard]]
     std::string TypeName() const override
     {
         char buf[16];
@@ -129,9 +130,9 @@ class PodCodec : public ICodec
      */
     static uint32_t EncodeTo(const T& obj, void* buf, uint32_t buf_size, uint32_t seq)
     {
-        uint32_t tag         = TypeTag<T>::value;
-        uint32_t payload_len = kTagSize + sizeof(T);
-        char* p              = EncodeFrame(buf, buf_size, payload_len, seq);
+        uint32_t tag               = TypeTag<T>::value;
+        const uint32_t payload_len = kTagSize + sizeof(T);
+        char* p                    = EncodeFrame(buf, buf_size, payload_len, seq);
         if (!p)
         {
             return 0;
@@ -207,7 +208,7 @@ class PodCodec : public ICodec
         {
             const void* payload  = nullptr;
             uint32_t payload_len = 0;
-            int rc               = reader_.TryRecv(ch, &payload, &payload_len);
+            const int rc         = reader_.TryRecv(ch, &payload, &payload_len);
             if (rc == -1 || rc == -2 || rc == -3)
             {
                 return rc;

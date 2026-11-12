@@ -80,7 +80,7 @@ static void TestFdReuseOrdering()
         loop.Stop();
     });
 
-    int efd1 = ::eventfd(0, EFD_NONBLOCK);
+    const int efd1 = ::eventfd(0, EFD_NONBLOCK);
     CHECK(efd1 >= 0, "eventfd");
 
     loop.AddFd(efd1, [&](int fd, short) {
@@ -92,7 +92,7 @@ static void TestFdReuseOrdering()
         ::close(fd);
 
         // 模拟 accept：新 fd 应立即复用刚关闭的 fd 号（内核取最小可用值）
-        int efd2 = ::eventfd(0, EFD_NONBLOCK);
+        const int efd2 = ::eventfd(0, EFD_NONBLOCK);
         CHECK(efd2 == fd, "fd number not reused");
 
         loop.AddFd(efd2, [&](int fd2, short) {

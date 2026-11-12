@@ -61,7 +61,7 @@ void VerifyPattern(const char* buf, uint32_t len, uint8_t seed, const char* ctx)
 {
     for (uint32_t i = 0; i < len; ++i)
     {
-        uint8_t expected = (seed + i) & 0xFF;
+        const uint8_t expected = (seed + i) & 0xFF;
         if (static_cast<uint8_t>(buf[i]) != expected)
         {
             std::fprintf(stderr, "FAIL [%s]: byte[%u] = 0x%02X, expected 0x%02X\n", ctx, i,
@@ -80,7 +80,7 @@ void AdvanceRing(void* shm, uint32_t advance)
     uint32_t remaining = advance;
     while (remaining > 0)
     {
-        uint32_t chunk = (remaining > 512) ? 512 : remaining;
+        const uint32_t chunk = (remaining > 512) ? 512 : remaining;
         if (SmallRing::TryWrite(shm, tmp, chunk) != 0)
         {
             std::fprintf(stderr, "FAIL: AdvanceRing TryWrite\n");
@@ -106,10 +106,11 @@ void TestWriteReadExactWrap()
     std::printf("--- Test 1: TryWrite + ReadExact wrap ---\n");
 
     // 遍历关键 tail 值：帧会在环尾剩余 tail 字节时开始写入
-    constexpr uint32_t msg_len        = 200;
-    std::vector<uint32_t> tail_values = {1, 2, 3, 4, 7, 8, 15, 16, 50, msg_len / 2, msg_len - 1, msg_len, msg_len + 1};
+    constexpr uint32_t msg_len              = 200;
+    const std::vector<uint32_t> tail_values = {1,  2,  3,           4,           7,       8,          15,
+                                               16, 50, msg_len / 2, msg_len - 1, msg_len, msg_len + 1};
 
-    for (uint32_t tail : tail_values)
+    for (const uint32_t tail : tail_values)
     {
         if (tail >= kSmallCap)
         {
@@ -119,7 +120,7 @@ void TestWriteReadExactWrap()
         void* shm = AllocShm();
 
         // 推进到 phys = kSmallCap - tail
-        uint32_t advance = kSmallCap - tail;
+        const uint32_t advance = kSmallCap - tail;
         AdvanceRing(shm, advance);
 
         // 写入 msg_len 字节（若 msg_len > tail 则跨环尾）
@@ -335,7 +336,7 @@ void TestBatchWriterWrap()
                 std::abort();
             }
         }
-        int flushed = batch.Flush();
+        const int flushed = batch.Flush();
         if (flushed != 3)
         {
             std::fprintf(stderr, "FAIL: Flush returned %d, expected 3\n", flushed);
@@ -428,7 +429,7 @@ void TestMultiFrameBatchWrap()
             for (int i = 0; i < batch_count; ++i)
             {
                 char wbuf[frame_len];
-                uint8_t seed = static_cast<uint8_t>(iter * batch_count + i);
+                const uint8_t seed = static_cast<uint8_t>(iter * batch_count + i);
                 FillPattern(wbuf, frame_len, seed);
                 if (batch.TryWrite(wbuf, frame_len) != 0)
                 {
@@ -447,7 +448,7 @@ void TestMultiFrameBatchWrap()
                 std::fprintf(stderr, "FAIL: ReadExact iter=%d i=%d\n", iter, i);
                 std::abort();
             }
-            uint8_t seed = static_cast<uint8_t>(iter * batch_count + i);
+            const uint8_t seed = static_cast<uint8_t>(iter * batch_count + i);
             char ctx[64];
             std::snprintf(ctx, sizeof(ctx), "batch iter=%d i=%d", iter, i);
             VerifyPattern(rbuf, frame_len, seed, ctx);
@@ -515,8 +516,8 @@ void TestCodecWrap()
     constexpr uint32_t frame_size = shm::kMsgHeaderSize + shm::kTagSize + sizeof(Heartbeat);
 
     // 遍历多种 tail
-    std::vector<uint32_t> tails = {1, 2, 4, 7, 8, frame_size / 2, frame_size - 1, frame_size, frame_size + 1};
-    for (uint32_t tail : tails)
+    const std::vector<uint32_t> tails = {1, 2, 4, 7, 8, frame_size / 2, frame_size - 1, frame_size, frame_size + 1};
+    for (const uint32_t tail : tails)
     {
         if (tail >= kSmallCap)
         {
@@ -533,7 +534,7 @@ void TestCodecWrap()
         hb.timestamp = 9999;
 
         char enc[frame_size];
-        uint32_t seq_in = tail * 100;
+        const uint32_t seq_in = tail * 100;
         if (shm::PodCodec<Heartbeat>::EncodeTo(hb, enc, frame_size, seq_in) != frame_size)
         {
             std::fprintf(stderr, "FAIL: Encode tail=%u\n", tail);
@@ -566,8 +567,8 @@ void TestCodecWrap()
             std::abort();
         }
         // payload = [tag u32][Heartbeat bytes], 跳过 tag
-        const void* pod_data = static_cast<const char*>(dec_payload) + shm::kTagSize;
-        uint32_t pod_len     = dec_payload_len - shm::kTagSize;
+        const void* pod_data   = static_cast<const char*>(dec_payload) + shm::kTagSize;
+        const uint32_t pod_len = dec_payload_len - shm::kTagSize;
         if (!shm::PodCodec<Heartbeat>::DecodeFrom(pod_data, pod_len, &out))
         {
             std::fprintf(stderr, "FAIL: Decode tail=%u\n", tail);
@@ -601,12 +602,12 @@ void TestLargeMessageWrap()
     constexpr uint32_t msg_len = SmallRing::kMaxWriteSize;
 
     // tail=100: 绝大部分数据在环头部
-    std::vector<uint32_t> tails = {1, 16, 100, msg_len / 2, msg_len - 1, msg_len};
+    const std::vector<uint32_t> tails = {1, 16, 100, msg_len / 2, msg_len - 1, msg_len};
 
     auto* wbuf = new char[msg_len];
     auto* rbuf = new char[msg_len];
 
-    for (uint32_t tail : tails)
+    for (const uint32_t tail : tails)
     {
         if (tail >= kSmallCap)
         {

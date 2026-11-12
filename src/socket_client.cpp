@@ -42,8 +42,8 @@ void WriteAll(int fd, const void* buf, std::size_t len)
 
 bool ConnectToServer(const char* path, shm::UniqueFd* out)
 {
-    int sys_errno     = 0;
-    shm::ErrorCode ec = shm::ConnectUnixSocket(path, out, &sys_errno);
+    int sys_errno           = 0;
+    const shm::ErrorCode ec = shm::ConnectUnixSocket(path, out, &sys_errno);
     if (ec != shm::ErrorCode::kOk)
     {
         std::fprintf(stderr, "socket_client: connect failed: %s\n", shm::ErrorCodeMessage(ec, sys_errno).c_str());
@@ -74,22 +74,24 @@ bool RunBench()
         WriteAll(sfd.Get(), &cmd, sizeof(cmd));
 
         // 构造 payload = [tag u32] + BenchPayloadHeader + 填充字节
-        uint32_t body_len = shm::kTagSize + static_cast<uint32_t>(sizeof(shm::BenchPayloadHeader)) + tc.payload_size;
+        const uint32_t body_len =
+            shm::kTagSize + static_cast<uint32_t>(sizeof(shm::BenchPayloadHeader)) + tc.payload_size;
         std::vector<char> body(body_len);
         uint32_t bench_tag = shm::kBenchTag;
         std::memcpy(body.data(), &bench_tag, shm::kTagSize);
         std::memset(body.data() + shm::kTagSize + sizeof(shm::BenchPayloadHeader), 'B', tc.payload_size);
 
         // 编码缓冲区
-        uint32_t frame_size = shm::BenchFrameSize(tc.payload_size);
+        const uint32_t frame_size = shm::BenchFrameSize(tc.payload_size);
         std::vector<char> frame_buf(frame_size);
 
-        uint64_t t0 = shm::NowNs();
+        const uint64_t t0 = shm::NowNs();
         for (int32_t i = 0; i < tc.rounds; ++i)
         {
             shm::BenchPayloadHeader hdr{i};
             std::memcpy(body.data() + shm::kTagSize, &hdr, sizeof(hdr));
-            uint32_t n = shm::Encode(body.data(), body_len, frame_buf.data(), frame_size, static_cast<uint32_t>(i));
+            const uint32_t n =
+                shm::Encode(body.data(), body_len, frame_buf.data(), frame_size, static_cast<uint32_t>(i));
             WriteAll(sfd.Get(), frame_buf.data(), n);
         }
 
@@ -99,13 +101,13 @@ bool RunBench()
         shm::BenchPayloadHeader end_hdr{-1};
         std::memcpy(end_body + shm::kTagSize, &end_hdr, sizeof(end_hdr));
         char end_frame[64];
-        uint32_t n = shm::Encode(end_body, sizeof(end_body), end_frame, sizeof(end_frame), 0);
+        const uint32_t n = shm::Encode(end_body, sizeof(end_body), end_frame, sizeof(end_frame), 0);
         WriteAll(sfd.Get(), end_frame, n);
 
         // 等 server ack
         char ack = 0;
         (void)::read(sfd.Get(), &ack, 1);
-        uint64_t elapsed = shm::NowNs() - t0;
+        const uint64_t elapsed = shm::NowNs() - t0;
 
         shm::PrintBenchRow(tc.payload_size, tc.rounds, elapsed);
     }

@@ -42,8 +42,8 @@ void ReadAll(int fd, void* buf, std::size_t len)
 
 bool CreateListenSocket(const char* path, shm::UniqueFd* out)
 {
-    int sys_errno     = 0;
-    shm::ErrorCode ec = shm::ListenUnixSocket(path, out, 1, &sys_errno);
+    int sys_errno           = 0;
+    const shm::ErrorCode ec = shm::ListenUnixSocket(path, out, 1, &sys_errno);
     if (ec != shm::ErrorCode::kOk)
     {
         std::fprintf(stderr, "socket_server: listen failed: %s\n", shm::ErrorCodeMessage(ec, sys_errno).c_str());
@@ -61,7 +61,7 @@ bool RunBench()
     }
     std::printf("socket_server(bench): waiting for client on %s ...\n", kSocketPath);
 
-    shm::UniqueFd cfd{::accept(listen_fd.Get(), nullptr, nullptr)};
+    const shm::UniqueFd cfd{::accept(listen_fd.Get(), nullptr, nullptr)};
     if (!cfd)
     {
         std::perror("accept");
@@ -97,11 +97,12 @@ bool RunBench()
         }
 
         // 接收缓冲区（MsgHeader 之后的 body 部分）
-        uint32_t max_body = shm::kTagSize + static_cast<uint32_t>(sizeof(shm::BenchPayloadHeader)) + cmd.payload_size;
+        const uint32_t max_body =
+            shm::kTagSize + static_cast<uint32_t>(sizeof(shm::BenchPayloadHeader)) + cmd.payload_size;
         std::vector<char> body_buf(max_body);
 
-        int32_t received = 0;
-        uint64_t t0      = shm::NowNs();
+        int32_t received  = 0;
+        const uint64_t t0 = shm::NowNs();
 
         bool got_end = false;
         while (!got_end)
@@ -140,7 +141,7 @@ bool RunBench()
             }
             ++received;
         }
-        uint64_t elapsed = shm::NowNs() - t0;
+        const uint64_t elapsed = shm::NowNs() - t0;
 
         // 发 ack
         char ack = 1;

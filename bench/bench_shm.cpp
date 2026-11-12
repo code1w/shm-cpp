@@ -28,7 +28,7 @@ using Channel = shm::DefaultRingChannel;
 Channel CreateChannelOrExit(int fd, shm::ChannelRole role)
 {
     Channel ch;
-    shm::ErrorCode ec = Channel::CreateRingChannel(fd, role, &ch);
+    const shm::ErrorCode ec = Channel::CreateRingChannel(fd, role, &ch);
     if (ec != shm::ErrorCode::kOk)
     {
         std::fprintf(stderr, "CreateRingChannel failed: %s\n", shm::ErrorCodeName(ec));
@@ -79,8 +79,8 @@ void RunServer(int socket_fd)
 
     for (auto& tc : kTests)
     {
-        auto msg_len = static_cast<uint32_t>(tc.msg_size);
-        int total    = kWarmup + tc.rounds;
+        auto msg_len    = static_cast<uint32_t>(tc.msg_size);
+        const int total = kWarmup + tc.rounds;
         for (int i = 0; i < total; ++i)
         {
             // 等待完整消息到达
@@ -132,7 +132,7 @@ void RunClient(int socket_fd)
         }
 
         // 正式测试
-        uint64_t t0 = NowNs();
+        const uint64_t t0 = NowNs();
         for (int i = 0; i < tc.rounds; ++i)
         {
             channel.TryWrite(send_buf.get(), msg_len);
@@ -141,12 +141,12 @@ void RunClient(int socket_fd)
                 ;
             }
         }
-        uint64_t elapsed_ns = NowNs() - t0;
+        const uint64_t elapsed_ns = NowNs() - t0;
 
-        double total_us   = static_cast<double>(elapsed_ns) / 1000.0;
-        double avg_rtt_ns = static_cast<double>(elapsed_ns) / tc.rounds;
-        double throughput = static_cast<double>(tc.msg_size) * 2.0 * tc.rounds /
-                            (static_cast<double>(elapsed_ns) / 1e9) / (1024.0 * 1024.0);
+        const double total_us   = static_cast<double>(elapsed_ns) / 1000.0;
+        const double avg_rtt_ns = static_cast<double>(elapsed_ns) / tc.rounds;
+        const double throughput = static_cast<double>(tc.msg_size) * 2.0 * tc.rounds /
+                                  (static_cast<double>(elapsed_ns) / 1e9) / (1024.0 * 1024.0);
 
         std::printf("%10zu %10d %12.0f %14.0f %16.2f\n", tc.msg_size, tc.rounds, total_us, avg_rtt_ns, throughput);
     }
@@ -168,7 +168,7 @@ int main()
         return 1;
     }
 
-    pid_t pid = ::fork();
+    const pid_t pid = ::fork();
     if (pid < 0)
     {
         std::perror("fork");

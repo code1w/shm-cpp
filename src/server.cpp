@@ -111,7 +111,7 @@ int DrainClientRing(ClientState* csp)
         shm_ipc::ClientMsgProto msg{};
         for (;;)
         {
-            int rc = csp->codec->Recv(csp->channel, &msg);
+            const int rc = csp->codec->Recv(csp->channel, &msg);
             if (rc == -3)
             {
                 return -1;  // 协议错误：非法帧头，连接不可恢复
@@ -131,7 +131,7 @@ int DrainClientRing(ClientState* csp)
     ClientMsg msg{};
     for (;;)
     {
-        int rc = csp->codec->Recv(csp->channel, &msg);
+        const int rc = csp->codec->Recv(csp->channel, &msg);
         if (rc == -3)
         {
             return -1;  // 协议错误：非法帧头，连接不可恢复
@@ -211,7 +211,7 @@ void OnClientNotify(int efd, shm::EventLoop& loop, Clients& clients, int client_
         return;
     }
     ClientState* csp = it->second.get();
-    int count        = DrainClientRing(csp);
+    const int count  = DrainClientRing(csp);
     if (count < 0)
     {
         std::fprintf(stderr, "server: client #%d protocol error, disconnecting\n", csp->id);
@@ -248,7 +248,7 @@ void OnClientSocket(int fd, short revents, shm::EventLoop& loop, Clients& client
         auto n = ::read(fd, &buf, 1);
         if (n <= 0 || buf == 0)
         {
-            int remaining = DrainClientRing(csp);
+            const int remaining = DrainClientRing(csp);
             if (remaining < 0)
             {
                 std::fprintf(stderr,
@@ -276,7 +276,7 @@ void OnAccept(int lfd, shm::EventLoop& loop, Clients& clients, int& next_client_
     if (static_cast<int>(clients.size()) >= kMaxClients)
     {
         std::fprintf(stderr, "server: max clients reached, rejecting\n");
-        shm::UniqueFd rejected{::accept(lfd, nullptr, nullptr)};
+        const shm::UniqueFd rejected{::accept(lfd, nullptr, nullptr)};
         return;
     }
 
@@ -286,7 +286,7 @@ void OnAccept(int lfd, shm::EventLoop& loop, Clients& clients, int& next_client_
         return;
     }
 
-    int cid = next_client_id++;
+    const int cid = next_client_id++;
     std::printf("server: client #%d connected (fd=%d)\n", cid, cfd.Get());
 
     auto cs = std::make_unique<ClientState>();
@@ -315,9 +315,9 @@ void OnAccept(int lfd, shm::EventLoop& loop, Clients& clients, int& next_client_
         cs->codec = std::make_unique<shm::PodCodec<ClientMsg>>();
     }
 
-    int client_fd  = cfd.Get();
-    cs->socket_fd  = std::move(cfd);
-    cs->notify_efd = cs->channel.NotifyReadFd();
+    const int client_fd = cfd.Get();
+    cs->socket_fd       = std::move(cfd);
+    cs->notify_efd      = cs->channel.NotifyReadFd();
 
     // 注册失败（如 fd 耗尽导致 timerfd_create 失败）只关闭该连接，
     // 不能让错误影响整个 server 进程
@@ -371,7 +371,7 @@ void RunBench()
     }
     std::printf("server(bench): waiting for client on %s ...\n", shm::kDefaultSocketPath);
 
-    shm::UniqueFd cfd{::accept(listen_fd.Get(), nullptr, nullptr)};
+    const shm::UniqueFd cfd{::accept(listen_fd.Get(), nullptr, nullptr)};
     if (!cfd)
     {
         std::perror("accept");
@@ -403,8 +403,8 @@ void RunBench()
         const void* payload  = nullptr;
         uint32_t payload_len = 0;
 
-        uint64_t t0  = shm::NowNs();
-        bool got_end = false;
+        const uint64_t t0 = shm::NowNs();
+        bool got_end      = false;
         while (!got_end)
         {
             if (reader.TryRecv(ch, &payload, &payload_len) == 0)
@@ -425,7 +425,7 @@ void RunBench()
             }
         }
         reader.Commit(ch);
-        uint64_t elapsed = shm::NowNs() - t0;
+        const uint64_t elapsed = shm::NowNs() - t0;
 
         // 发 ack
         char ack = 1;

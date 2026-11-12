@@ -49,7 +49,7 @@ template <typename Ch>
 Ch CreateChannelOrAbort(int fd, shm::ChannelRole role)
 {
     Ch ch;
-    shm::ErrorCode ec = Ch::CreateRingChannel(fd, role, &ch);
+    const shm::ErrorCode ec = Ch::CreateRingChannel(fd, role, &ch);
     if (ec != shm::ErrorCode::kOk)
     {
         std::fprintf(stderr, "FAIL: CreateRingChannel: %s\n", shm::ErrorCodeName(ec));
@@ -119,12 +119,12 @@ void TestEncodeDecode()
 {
     std::printf("--- Test 1: Encode/Decode round-trip ---\n");
 
-    const char data[]      = "hello codec";
-    uint32_t data_len      = static_cast<uint32_t>(std::strlen(data));
-    constexpr uint32_t seq = 777;
+    const char data[]       = "hello codec";
+    const uint32_t data_len = static_cast<uint32_t>(std::strlen(data));
+    constexpr uint32_t seq  = 777;
 
     char buf[256];
-    uint32_t frame_size = shm::Encode(data, data_len, buf, sizeof(buf), seq);
+    const uint32_t frame_size = shm::Encode(data, data_len, buf, sizeof(buf), seq);
     if (frame_size == 0 || frame_size != shm::kMsgHeaderSize + data_len)
     {
         std::fprintf(stderr, "FAIL: Encode\n");
@@ -181,7 +181,7 @@ void TestEncodePodDecodePod()
     constexpr uint32_t frame_size = shm::kMsgHeaderSize + shm::kTagSize + sizeof(Heartbeat);
     char buf[frame_size];
 
-    uint32_t send_seq = 12345;
+    const uint32_t send_seq = 12345;
     if (shm::PodCodec<Heartbeat>::EncodeTo(hb, buf, frame_size, send_seq) != frame_size)
     {
         std::fprintf(stderr, "FAIL: EncodePod\n");
@@ -204,8 +204,8 @@ void TestEncodePodDecodePod()
         std::fprintf(stderr, "FAIL: payload too small\n");
         std::abort();
     }
-    const void* pod_data = static_cast<const char*>(payload) + shm::kTagSize;
-    uint32_t pod_len     = payload_len - shm::kTagSize;
+    const void* pod_data   = static_cast<const char*>(payload) + shm::kTagSize;
+    const uint32_t pod_len = payload_len - shm::kTagSize;
 
     // DecodePod
     Heartbeat out{};
@@ -232,7 +232,7 @@ void RunSenderBasic(int socket_fd)
 {
     auto ch = CreateChannelOrAbort<Channel>(socket_fd, shm::ChannelRole::kServer);
 
-    ClientMsg msg = MakeTestMsg();
+    const ClientMsg msg = MakeTestMsg();
     if (shm::PodCodec<ClientMsg>::Send(ch, msg, kMsgSeq) != 0)
     {
         std::fprintf(stderr, "FAIL: Send\n");
@@ -249,8 +249,8 @@ void RunSenderBasic(int socket_fd)
 
 void RunReceiverBasic(int socket_fd)
 {
-    auto ch = CreateChannelOrAbort<Channel>(socket_fd, shm::ChannelRole::kClient);
-    int efd = ch.NotifyReadFd();
+    auto ch       = CreateChannelOrAbort<Channel>(socket_fd, shm::ChannelRole::kClient);
+    const int efd = ch.NotifyReadFd();
 
     shm::FrameReader<> reader;
 
@@ -277,8 +277,8 @@ void RunReceiverBasic(int socket_fd)
 
     // payload = [tag u32][ClientMsg bytes]
     std::memcpy(&tag, payload, shm::kTagSize);
-    const void* pod_data = static_cast<const char*>(payload) + shm::kTagSize;
-    uint32_t pod_len     = payload_len - shm::kTagSize;
+    const void* pod_data   = static_cast<const char*>(payload) + shm::kTagSize;
+    const uint32_t pod_len = payload_len - shm::kTagSize;
 
     ClientMsg out{};
     if (!shm::PodCodec<ClientMsg>::DecodeFrom(pod_data, pod_len, &out))
@@ -303,7 +303,7 @@ void RunSenderByteByByte(int socket_fd)
 {
     auto ch = CreateChannelOrAbort<Channel>(socket_fd, shm::ChannelRole::kServer);
 
-    ClientMsg msg = MakeTestMsg();
+    const ClientMsg msg = MakeTestMsg();
 
     constexpr uint32_t frame_size = shm::kMsgHeaderSize + shm::kTagSize + sizeof(ClientMsg);
     char frame[frame_size];
@@ -335,8 +335,8 @@ void RunSenderByteByByte(int socket_fd)
 
 void RunReceiverByteByByte(int socket_fd)
 {
-    auto ch = CreateChannelOrAbort<Channel>(socket_fd, shm::ChannelRole::kClient);
-    int efd = ch.NotifyReadFd();
+    auto ch       = CreateChannelOrAbort<Channel>(socket_fd, shm::ChannelRole::kClient);
+    const int efd = ch.NotifyReadFd();
 
     shm::FrameReader<> reader;
 
@@ -370,8 +370,8 @@ void RunReceiverByteByByte(int socket_fd)
     }
 
     // payload = [tag u32][ClientMsg bytes]
-    const void* pod_data = static_cast<const char*>(payload) + shm::kTagSize;
-    uint32_t pod_len     = payload_len - shm::kTagSize;
+    const void* pod_data   = static_cast<const char*>(payload) + shm::kTagSize;
+    const uint32_t pod_len = payload_len - shm::kTagSize;
 
     ClientMsg out{};
     if (!shm::PodCodec<ClientMsg>::DecodeFrom(pod_data, pod_len, &out))
@@ -402,7 +402,7 @@ void RunSenderVar(int socket_fd)
                           "a]longer]payload]with]various]characters]0123456789"};
     for (int i = 0; i < 3; ++i)
     {
-        uint32_t len = static_cast<uint32_t>(std::strlen(msgs[i]));
+        const uint32_t len = static_cast<uint32_t>(std::strlen(msgs[i]));
         if (shm::Send(ch, msgs[i], len, kVarSeq + i) != 0)
         {
             std::fprintf(stderr, "FAIL: Send[%d]\n", i);
@@ -420,8 +420,8 @@ void RunSenderVar(int socket_fd)
 
 void RunReceiverVar(int socket_fd)
 {
-    auto ch = CreateChannelOrAbort<Channel>(socket_fd, shm::ChannelRole::kClient);
-    int efd = ch.NotifyReadFd();
+    auto ch       = CreateChannelOrAbort<Channel>(socket_fd, shm::ChannelRole::kClient);
+    const int efd = ch.NotifyReadFd();
 
     shm::FrameReader<> reader;
 
@@ -448,7 +448,7 @@ void RunReceiverVar(int socket_fd)
             rc = reader.TryRecv(ch, &payload, &payload_len);
         }
 
-        uint32_t expected_len = static_cast<uint32_t>(std::strlen(expected[i]));
+        const uint32_t expected_len = static_cast<uint32_t>(std::strlen(expected[i]));
         if (payload_len != expected_len || std::memcmp(payload, expected[i], expected_len) != 0)
         {
             std::fprintf(stderr, "FAIL: msg[%d] content mismatch (len=%u)\n", i, payload_len);
@@ -478,7 +478,7 @@ void TestTagValidation()
     std::printf("--- Test 6: type tag validation + Decode overflow guard ---\n");
 
     // 编码一条 ClientMsg 帧
-    ClientMsg msg             = MakeTestMsg();
+    const ClientMsg msg       = MakeTestMsg();
     constexpr uint32_t kFrame = shm::kMsgHeaderSize + shm::kTagSize + sizeof(ClientMsg);
     char buf[kFrame];
     if (shm::PodCodec<ClientMsg>::EncodeTo(msg, buf, kFrame, kMsgSeq) != kFrame)
@@ -557,7 +557,7 @@ void RunSenderOversized(int socket_fd)
     }
 
     // 紧接着发送一条合法消息，检验字节流未被破坏
-    ClientMsg msg = MakeTestMsg();
+    const ClientMsg msg = MakeTestMsg();
     if (shm::PodCodec<ClientMsg>::Send(ch, msg, kMsgSeq) != 0)
     {
         std::fprintf(stderr, "FAIL: Send after oversized rejection\n");
@@ -574,8 +574,8 @@ void RunSenderOversized(int socket_fd)
 
 void RunReceiverOversized(int socket_fd)
 {
-    auto ch = CreateChannelOrAbort<Channel>(socket_fd, shm::ChannelRole::kClient);
-    int efd = ch.NotifyReadFd();
+    auto ch       = CreateChannelOrAbort<Channel>(socket_fd, shm::ChannelRole::kClient);
+    const int efd = ch.NotifyReadFd();
 
     pollfd pfd{};
     pfd.fd     = efd;
@@ -635,8 +635,8 @@ void RunSenderLargeFrame(int socket_fd)
 
 void RunReceiverLargeFrame(int socket_fd)
 {
-    auto ch = CreateChannelOrAbort<Channel>(socket_fd, shm::ChannelRole::kClient);
-    int efd = ch.NotifyReadFd();
+    auto ch       = CreateChannelOrAbort<Channel>(socket_fd, shm::ChannelRole::kClient);
+    const int efd = ch.NotifyReadFd();
 
     pollfd pfd{};
     pfd.fd     = efd;
@@ -745,7 +745,7 @@ void RunReceiverPoison(int socket_fd)
     auto recv_wait = [&](const char* what) -> int {
         for (;;)
         {
-            int rc = reader.TryRecv(ch, &payload, &payload_len);
+            const int rc = reader.TryRecv(ch, &payload, &payload_len);
             if (rc != -1)
             {
                 return rc;
@@ -779,7 +779,7 @@ void RunReceiverPoison(int socket_fd)
         std::fprintf(stderr, "FAIL: ring is not mirrored\n");
         std::abort();
     }
-    int rc = recv_wait("wrapped large");
+    const int rc = recv_wait("wrapped large");
     if (rc != 0)
     {
         std::fprintf(stderr, "FAIL: mirrored wrapped frame should be zero-copy, got %d\n", rc);
@@ -830,7 +830,7 @@ void RunReceiverWrappedLarge(int socket_fd)
     auto recv_wait = [&](const char* what) -> int {
         for (;;)
         {
-            int rc = reader.TryRecv(ch, &payload, &payload_len);
+            const int rc = reader.TryRecv(ch, &payload, &payload_len);
             if (rc != -1)
             {
                 return rc;
@@ -921,7 +921,7 @@ void TestBatchRewindCount()
         std::fprintf(stderr, "FAIL: frame1 SendFrameBatch\n");
         std::abort();
     }
-    int count_after_frame1 = batch.Count();
+    const int count_after_frame1 = batch.Count();
     if (count_after_frame1 != 2)  // header + payload
     {
         std::fprintf(stderr, "FAIL: count after frame1 = %d\n", count_after_frame1);
@@ -929,7 +929,7 @@ void TestBatchRewindCount()
     }
 
     // 第 2 帧：callback 第一次写成功、第二次写超长失败 → 触发回滚
-    int rc = shm::SendFrameBatch<4096>(batch, 4 + 2100, 2, [&](auto& b) {
+    const int rc = shm::SendFrameBatch<4096>(batch, 4 + 2100, 2, [&](auto& b) {
         b.TryWrite(data, 4);     // 成功
         b.TryWrite(data, 2100);  // 失败：> kMaxWriteSize(2048)
     });
@@ -987,8 +987,8 @@ void RunSenderBadLen(int socket_fd)
 
 void RunReceiverBadLen(int socket_fd)
 {
-    auto ch = CreateChannelOrAbort<SmallChannel>(socket_fd, shm::ChannelRole::kClient);
-    int efd = ch.NotifyReadFd();
+    auto ch       = CreateChannelOrAbort<SmallChannel>(socket_fd, shm::ChannelRole::kClient);
+    const int efd = ch.NotifyReadFd();
 
     pollfd pfd{};
     pfd.fd     = efd;
@@ -1003,7 +1003,7 @@ void RunReceiverBadLen(int socket_fd)
     shm::FrameReader<> reader;
     const void* payload  = nullptr;
     uint32_t payload_len = 0;
-    int rc               = reader.TryRecv(ch, &payload, &payload_len);
+    const int rc         = reader.TryRecv(ch, &payload, &payload_len);
     if (rc != -3)
     {
         std::fprintf(stderr, "FAIL: expected -3 for impossible frame len, got %d\n", rc);
@@ -1036,7 +1036,7 @@ void RunSenderMixedTypes(int socket_fd)
         std::fprintf(stderr, "FAIL: Send Heartbeat\n");
         std::abort();
     }
-    ClientMsg msg = MakeTestMsg();
+    const ClientMsg msg = MakeTestMsg();
     if (shm::PodCodec<ClientMsg>::Send(ch, msg, kMsgSeq) != 0)
     {
         std::fprintf(stderr, "FAIL: Send ClientMsg\n");
@@ -1051,8 +1051,8 @@ void RunSenderMixedTypes(int socket_fd)
 
 void RunReceiverMixedTypes(int socket_fd)
 {
-    auto ch = CreateChannelOrAbort<Channel>(socket_fd, shm::ChannelRole::kClient);
-    int efd = ch.NotifyReadFd();
+    auto ch       = CreateChannelOrAbort<Channel>(socket_fd, shm::ChannelRole::kClient);
+    const int efd = ch.NotifyReadFd();
 
     pollfd pfd{};
     pfd.fd     = efd;
@@ -1256,7 +1256,7 @@ void RunSenderStream(int socket_fd)
     std::vector<char> stream;
     for (int k = 0; k < kStreamMsgCount; ++k)
     {
-        uint32_t len = StreamMsgLen(k);
+        const uint32_t len = StreamMsgLen(k);
         std::vector<char> payload(len);
         for (uint32_t i = 0; i < len; ++i)
         {
@@ -1274,8 +1274,8 @@ void RunSenderStream(int socket_fd)
     int chunks      = 0;
     while (offset < stream.size())
     {
-        uint32_t remain = static_cast<uint32_t>(stream.size()) - offset;
-        uint32_t n      = chunk_dist(rng);
+        const uint32_t remain = static_cast<uint32_t>(stream.size()) - offset;
+        uint32_t n            = chunk_dist(rng);
         if (n > remain)
         {
             n = remain;
@@ -1299,8 +1299,8 @@ void RunSenderStream(int socket_fd)
 
 void RunReceiverStream(int socket_fd)
 {
-    auto ch = CreateChannelOrAbort<Channel>(socket_fd, shm::ChannelRole::kClient);
-    int efd = ch.NotifyReadFd();
+    auto ch       = CreateChannelOrAbort<Channel>(socket_fd, shm::ChannelRole::kClient);
+    const int efd = ch.NotifyReadFd();
     shm::FrameReader<> reader;
 
     int received = 0;
@@ -1308,7 +1308,7 @@ void RunReceiverStream(int socket_fd)
     {
         const void* payload  = nullptr;
         uint32_t payload_len = 0;
-        int rc               = reader.TryRecv(ch, &payload, &payload_len);
+        const int rc         = reader.TryRecv(ch, &payload, &payload_len);
         if (rc != 0)
         {
             if (rc != -1)
@@ -1327,7 +1327,7 @@ void RunReceiverStream(int socket_fd)
             Channel::DrainNotify(efd);
             continue;
         }
-        uint32_t expect_len = StreamMsgLen(received);
+        const uint32_t expect_len = StreamMsgLen(received);
         if (payload_len != expect_len)
         {
             std::fprintf(stderr, "FAIL: msg %d len=%u expect=%u\n", received, payload_len, expect_len);
@@ -1408,8 +1408,8 @@ void RunSenderThrow(int socket_fd)
 
 void RunReceiverThrow(int socket_fd)
 {
-    auto ch = CreateChannelOrAbort<SmallChannel>(socket_fd, shm::ChannelRole::kClient);
-    int efd = ch.NotifyReadFd();
+    auto ch       = CreateChannelOrAbort<SmallChannel>(socket_fd, shm::ChannelRole::kClient);
+    const int efd = ch.NotifyReadFd();
 
     pollfd pfd{};
     pfd.fd     = efd;
@@ -1423,7 +1423,7 @@ void RunReceiverThrow(int socket_fd)
     uint32_t got = 0;
     while (got < kExpectTotal)
     {
-        uint32_t n = ch.TryRead(buf + got, sizeof(buf) - got);
+        const uint32_t n = ch.TryRead(buf + got, sizeof(buf) - got);
         if (n > 0)
         {
             got += n;
@@ -1477,7 +1477,7 @@ void RunReceiverThrow(int socket_fd)
 void RunSenderCapMismatch(int socket_fd)
 {
     shm::RingChannel<4096> ch;
-    shm::ErrorCode ec = shm::RingChannel<4096>::CreateRingChannel(socket_fd, shm::ChannelRole::kServer, &ch);
+    const shm::ErrorCode ec = shm::RingChannel<4096>::CreateRingChannel(socket_fd, shm::ChannelRole::kServer, &ch);
     if (ec == shm::ErrorCode::kOk)
     {
         std::fprintf(stderr, "FAIL: 4096 side accepted 8192 peer ring\n");
@@ -1491,7 +1491,7 @@ void RunSenderCapMismatch(int socket_fd)
 void RunReceiverCapMismatch(int socket_fd)
 {
     shm::RingChannel<8192> ch;
-    shm::ErrorCode ec = shm::RingChannel<8192>::CreateRingChannel(socket_fd, shm::ChannelRole::kClient, &ch);
+    const shm::ErrorCode ec = shm::RingChannel<8192>::CreateRingChannel(socket_fd, shm::ChannelRole::kClient, &ch);
     if (ec == shm::ErrorCode::kOk)
     {
         std::fprintf(stderr, "FAIL: 8192 side accepted 4096 peer ring\n");
@@ -1517,7 +1517,7 @@ void RunForkTest(const char* name, void (*sender_fn)(int), void (*receiver_fn)(i
         std::_Exit(1);
     }
 
-    pid_t pid = ::fork();
+    const pid_t pid = ::fork();
     if (pid < 0)
     {
         std::perror("fork");

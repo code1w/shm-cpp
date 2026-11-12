@@ -107,6 +107,7 @@ class ShmClient : public comm::ITcpClient
      */
     bool Connect(const std::string_view& /*ip*/, uint16_t /*port*/) override { return false; }
 
+    [[nodiscard]]
     bool Connected() const noexcept override
     {
         return socket_fd_.Get() >= 0 && !closed_.load(std::memory_order_acquire);
@@ -204,7 +205,7 @@ class ShmClient : public comm::ITcpClient
                 return static_cast<int>(n);
             }
 
-            int wr = WaitForReadable(dl, seen);
+            const int wr = WaitForReadable(dl, seen);
             if (wr < 0)
             {
                 return wr;  // -1 本端关闭/错误；-2 超时
@@ -260,7 +261,7 @@ class ShmClient : public comm::ITcpClient
                 return static_cast<int>(*seg1_len + *seg2_len);
             }
 
-            int wr = WaitForReadable(dl, seen);
+            const int wr = WaitForReadable(dl, seen);
             if (wr < 0)
             {
                 return wr;
@@ -284,13 +285,25 @@ class ShmClient : public comm::ITcpClient
     void CommitMessage(uint32_t len) { channel_.CommitRead(len); }
 
     /// @brief 最近一次 Connect 的错误码（扩展接口）
-    ErrorCode LastError() const noexcept { return last_error_; }
+    [[nodiscard]]
+    ErrorCode LastError() const noexcept
+    {
+        return last_error_;
+    }
 
     /// @brief 最近一次 Connect 失败时的 errno（扩展接口）
-    int LastSysErrno() const noexcept { return last_sys_errno_; }
+    [[nodiscard]]
+    int LastSysErrno() const noexcept
+    {
+        return last_sys_errno_;
+    }
 
     /// @brief 底层 socket fd（扩展接口，调试/集成用）
-    int GetSockFd() const { return socket_fd_.Get(); }
+    [[nodiscard]]
+    int GetSockFd() const
+    {
+        return socket_fd_.Get();
+    }
 
     /// @brief 访问底层通道（批量写入等高级用法）
     DefaultRingChannel& Channel() noexcept { return channel_; }
@@ -324,7 +337,7 @@ class ShmClient : public comm::ITcpClient
         {
             timespec now{};
             ::clock_gettime(CLOCK_MONOTONIC, &now);
-            int64_t ms = (deadline->tv_sec - now.tv_sec) * 1000 + (deadline->tv_nsec - now.tv_nsec) / 1000000;
+            const int64_t ms = (deadline->tv_sec - now.tv_sec) * 1000 + (deadline->tv_nsec - now.tv_nsec) / 1000000;
             if (ms <= 0)
             {
                 return -2;
@@ -339,7 +352,7 @@ class ShmClient : public comm::ITcpClient
         }
 
         pollfd pfds[2] = {{channel_.NotifyReadFd(), POLLIN, 0}, {socket_fd_.Get(), POLLIN, 0}};
-        int pr         = ::poll(pfds, 2, wait_ms);
+        const int pr   = ::poll(pfds, 2, wait_ms);
         if (pr < 0)
         {
             return (errno == EINTR) ? 1 : -1;

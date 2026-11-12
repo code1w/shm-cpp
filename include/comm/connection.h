@@ -39,20 +39,26 @@ class ITcpConnection
     // ---- 状态 ----
 
     /// @brief 连接状态（取值见 comm::TcpConnStates）
+    [[nodiscard]]
     virtual int32_t State() const = 0;
     /// @brief 连接 ID
+    [[nodiscard]]
     virtual uint64_t Id() const = 0;
     /// @brief 对端地址描述（tcp 为 "ip:port"，shm 为 "pid:<n>"）
+    [[nodiscard]]
     virtual std::string RemoteAddr() const = 0;
     /// @brief 关闭类型
+    [[nodiscard]]
     virtual CloseType GetCloseType() const = 0;
 
     // ---- 上下文 ----
 
-    virtual void SetContext(std::any context)    = 0;
+    virtual void SetContext(std::any context) = 0;
+    [[nodiscard]]
     virtual const std::any& Context() const      = 0;
     virtual void SetRpcContext(std::any context) = 0;
-    virtual const std::any& RpcContext() const   = 0;
+    [[nodiscard]]
+    virtual const std::any& RpcContext() const = 0;
 
     // ---- 验证 / 心跳 / 缓冲 ----
 

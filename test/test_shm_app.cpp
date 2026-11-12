@@ -66,10 +66,10 @@ int main()
     // Part 0: 大对象 decode 复用 same any（不重新分配）
     {
         shm::codec::SimplePodCodec codec;
-        std::any src = TestBigPod{42, {}};
+        const std::any src = TestBigPod{42, {}};
         std::vector<comm::byte> buf(8192);
-        size_t sz = 0;
-        int32_t n = codec.Encode(src, buf.data(), buf.size(), &sz);
+        size_t sz       = 0;
+        const int32_t n = codec.Encode(src, buf.data(), buf.size(), &sz);
         assert(n > 0);
 
         std::any out;
@@ -120,19 +120,19 @@ int main()
 
         for (int i = 1; i <= 5; ++i)
         {
-            Heartbeat hb{0, i, 1000 + i};
+            const Heartbeat hb{0, i, 1000 + i};
 
-            size_t size = 0;
-            int32_t len = codec.Encode(hb, reinterpret_cast<comm::byte*>(buf), sizeof(buf), &size);
+            size_t size       = 0;
+            const int32_t len = codec.Encode(hb, reinterpret_cast<comm::byte*>(buf), sizeof(buf), &size);
             assert(len > 0);
             assert(client.SendMessage(buf, len) == len);
 
-            int n = client.ReadMessage(buf, sizeof(buf), 3000);
+            const int n = client.ReadMessage(buf, sizeof(buf), 3000);
             assert(n > 0);
 
             std::any pkg;
             size_t consumed = 0;
-            int32_t dlen =
+            const int32_t dlen =
                 codec.Decode(reinterpret_cast<const comm::byte*>(buf), static_cast<size_t>(n), pkg, &consumed);
             assert(dlen == n);
             const auto& out = std::any_cast<const Heartbeat&>(pkg);
@@ -143,16 +143,16 @@ int main()
 
         // Part 1b: 零拷贝 Peek/Commit 路径
         {
-            Heartbeat hb{0, 6, 1006};
-            size_t size = 0;
-            int32_t len = codec.Encode(hb, reinterpret_cast<comm::byte*>(buf), sizeof(buf), &size);
+            const Heartbeat hb{0, 6, 1006};
+            size_t size       = 0;
+            const int32_t len = codec.Encode(hb, reinterpret_cast<comm::byte*>(buf), sizeof(buf), &size);
             assert(len > 0);
             assert(client.SendMessage(buf, len) == len);
 
             const void* s1 = nullptr;
             const void* s2 = nullptr;
             uint32_t l1 = 0, l2 = 0;
-            int total = client.PeekMessage(&s1, &l1, &s2, &l2, 3000);
+            const int total = client.PeekMessage(&s1, &l1, &s2, &l2, 3000);
             assert(total > 0 && static_cast<size_t>(total) <= sizeof(buf));
 
             std::memcpy(buf, s1, l1);
@@ -163,7 +163,7 @@ int main()
 
             std::any pkg;
             size_t consumed = 0;
-            int32_t dlen =
+            const int32_t dlen =
                 codec.Decode(reinterpret_cast<const comm::byte*>(buf), static_cast<size_t>(total), pkg, &consumed);
             assert(dlen == total);
             const auto& out = std::any_cast<const Heartbeat&>(pkg);
@@ -191,7 +191,7 @@ int main()
         async_client.SetCodecFactory([] { return std::make_shared<shm::codec::SimplePodCodec>(); });
         async_client.SetConnectionCallback([&](const comm::TcpConnPtr& conn) {
             conn_ok = true;
-            Heartbeat hb{0, 99, 7777};
+            const Heartbeat hb{0, 99, 7777};
             assert(conn->SendCmd(hb));
         });
         async_client.SetMessageCallback([&](const comm::TcpConnPtr&, const std::any& pkg) {

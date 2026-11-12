@@ -59,6 +59,7 @@ class ICodec
      *
      * POD 返回 tag 的十六进制字符串表示，Protobuf 返回 Message::GetTypeName()。
      */
+    [[nodiscard]]
     virtual std::string TypeName() const = 0;
 
     /**

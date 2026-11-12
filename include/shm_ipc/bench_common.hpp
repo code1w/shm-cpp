@@ -67,7 +67,7 @@ inline bool ReadFull(int fd, void* buf, std::size_t len)
     std::size_t got = 0;
     while (got < len)
     {
-        ssize_t n = ::read(fd, p + got, len - got);
+        const ssize_t n = ::read(fd, p + got, len - got);
         if (n < 0)
         {
             if (errno == EINTR)
@@ -93,7 +93,7 @@ inline bool WriteFull(int fd, const void* buf, std::size_t len)
     std::size_t sent = 0;
     while (sent < len)
     {
-        ssize_t n = ::write(fd, p + sent, len - sent);
+        const ssize_t n = ::write(fd, p + sent, len - sent);
         if (n < 0)
         {
             if (errno == EINTR)
@@ -125,10 +125,10 @@ inline void PrintBenchHeader()
 /// 计算并打印单行 bench 结果
 inline void PrintBenchRow(uint32_t payload_size, int32_t received, uint64_t elapsed_ns)
 {
-    double ms    = static_cast<double>(elapsed_ns) / 1e6;
-    double msg_s = static_cast<double>(received) / (static_cast<double>(elapsed_ns) / 1e9);
-    double mb_s  = msg_s * payload_size / (1024.0 * 1024.0);
-    double lat   = static_cast<double>(elapsed_ns) / received;
+    const double ms    = static_cast<double>(elapsed_ns) / 1e6;
+    const double msg_s = static_cast<double>(received) / (static_cast<double>(elapsed_ns) / 1e9);
+    const double mb_s  = msg_s * payload_size / (1024.0 * 1024.0);
+    const double lat   = static_cast<double>(elapsed_ns) / received;
 
     std::printf("%12u %10d %10.1f %12.0f %12.1f %10.0f\n", payload_size, received, ms, msg_s, mb_s, lat);
 }

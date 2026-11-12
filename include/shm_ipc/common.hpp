@@ -498,7 +498,7 @@ inline ErrorCode RecvFd(int socket, TaggedFd* out, int* sys_errno = nullptr) noe
             // 属协议违规：关闭全部并报错
             if (cmsg->cmsg_len > CMSG_LEN(sizeof(int)))
             {
-                int nfds = static_cast<int>((cmsg->cmsg_len - CMSG_LEN(0)) / sizeof(int));
+                const int nfds = static_cast<int>((cmsg->cmsg_len - CMSG_LEN(0)) / sizeof(int));
                 for (int i = 0; i < nfds; ++i)
                 {
                     int extra = -1;
@@ -541,7 +541,7 @@ inline ErrorCode RecvFdExpect(int socket, FdTag expected, UniqueFd* out, int* sy
     }
 
     TaggedFd tagged{};
-    ErrorCode ec = RecvFd(socket, &tagged, sys_errno);
+    const ErrorCode ec = RecvFd(socket, &tagged, sys_errno);
     if (ec != ErrorCode::kOk)
     {
         return ec;
@@ -568,7 +568,7 @@ inline ErrorCode CreateEventfd(UniqueFd* out, int* sys_errno = nullptr) noexcept
         return ErrorCode::kInvalidArgument;
     }
 
-    int fd = ::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+    const int fd = ::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
     if (fd < 0)
     {
         if (sys_errno)

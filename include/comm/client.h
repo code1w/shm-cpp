@@ -48,7 +48,8 @@ class ITcpAsyncClient
 
     // ---- 参数 ----
 
-    virtual void SetContext(std::any context)          = 0;
+    virtual void SetContext(std::any context) = 0;
+    [[nodiscard]]
     virtual const std::any& Context() const            = 0;
     virtual void SetAutoReconnect(bool autoreconn)     = 0;
     virtual void ResizeBuffer(size_t size, size_t max) = 0;
@@ -56,8 +57,10 @@ class ITcpAsyncClient
     // ---- 状态 ----
 
     /// @brief 客户端状态（取值见 comm::TcpClientStates）
+    [[nodiscard]]
     virtual int32_t State() const = 0;
     /// @brief 连接 ID，未连接返回 0
+    [[nodiscard]]
     virtual uint64_t Id() const = 0;
 
     // ---- 数据面 ----
@@ -105,6 +108,7 @@ class ITcpClient
     virtual void Close() = 0;
 
     /// @brief 是否已连接
+    [[nodiscard]]
     virtual bool Connected() const = 0;
 };
 

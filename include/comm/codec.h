@@ -54,7 +54,11 @@ class Codec
      * 返回 -1 表示未知（默认），传输层走原有缓冲路径。
      * 返回值必须与实际 Encode() 成功时的返回值一致。
      */
-    virtual int32_t EncodedSize(const std::any& /*pkg*/) const { return -1; }
+    [[nodiscard]]
+    virtual int32_t EncodedSize(const std::any& /*pkg*/) const
+    {
+        return -1;
+    }
 
     /// @brief 生成心跳响应包写入 buf，返回写入字节数
     virtual int32_t SendKeepAlive(byte* /*buf*/, size_t /*buflen*/, size_t* /*size*/) { return 0; }

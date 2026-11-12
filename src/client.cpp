@@ -159,7 +159,7 @@ void OnServerNotify(int efd, shm::ClientState& cs, shm::EventLoop& loop)
         shm_ipc::HeartbeatProto hb{};
         for (;;)
         {
-            int rc = cs.codec->Recv(cs.channel, &hb);
+            const int rc = cs.codec->Recv(cs.channel, &hb);
             if (rc == -3)
             {
                 std::fprintf(stderr, "client: protocol error from server, stopping\n");
@@ -180,7 +180,7 @@ void OnServerNotify(int efd, shm::ClientState& cs, shm::EventLoop& loop)
     Heartbeat hb{};
     for (;;)
     {
-        int rc = cs.codec->Recv(cs.channel, &hb);
+        const int rc = cs.codec->Recv(cs.channel, &hb);
         if (rc == -3)
         {
             std::fprintf(stderr, "client: protocol error from server, stopping\n");
@@ -258,14 +258,15 @@ void RunBench()
         }
 
         // 构造 payload = [tag u32] + BenchPayloadHeader + 填充字节
-        uint32_t body_len = shm::kTagSize + static_cast<uint32_t>(sizeof(shm::BenchPayloadHeader)) + tc.payload_size;
+        const uint32_t body_len =
+            shm::kTagSize + static_cast<uint32_t>(sizeof(shm::BenchPayloadHeader)) + tc.payload_size;
         std::vector<char> body(body_len);
         uint32_t bench_tag = shm::kBenchTag;
         std::memcpy(body.data(), &bench_tag, shm::kTagSize);
         std::memset(body.data() + shm::kTagSize + sizeof(shm::BenchPayloadHeader), 'B', tc.payload_size);
 
         // 忙循环批量发送
-        uint64_t t0 = shm::NowNs();
+        const uint64_t t0 = shm::NowNs();
         for (int32_t i = 0; i < tc.rounds;)
         {
             Channel::ChannelBatchWriter batch;
@@ -306,7 +307,7 @@ void RunBench()
             std::fprintf(stderr, "client(bench): server closed, aborting\n");
             return;
         }
-        uint64_t elapsed = shm::NowNs() - t0;
+        const uint64_t elapsed = shm::NowNs() - t0;
 
         shm::PrintBenchRow(tc.payload_size, tc.rounds, elapsed);
     }

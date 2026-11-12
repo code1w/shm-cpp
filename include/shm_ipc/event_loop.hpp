@@ -81,7 +81,7 @@ class EventLoop
         {
             return ErrorCode::kInvalidArgument;
         }
-        HookId id = next_hook_id_++;
+        const HookId id = next_hook_id_++;
         try
         {
             post_hooks_.push_back({id, std::move(hook)});
@@ -146,8 +146,8 @@ class EventLoop
             return ErrorCode::kInvalidArgument;
         }
 
-        int tfd      = -1;
-        ErrorCode ec = CreateTimerfd(interval_ms, interval_ms, &tfd, sys_errno);
+        int tfd            = -1;
+        const ErrorCode ec = CreateTimerfd(interval_ms, interval_ms, &tfd, sys_errno);
         if (ec != ErrorCode::kOk)
         {
             return ec;
@@ -193,8 +193,8 @@ class EventLoop
             return ErrorCode::kInvalidArgument;
         }
 
-        int tfd      = -1;
-        ErrorCode ec = CreateTimerfd(delay_ms, 0, &tfd, sys_errno);
+        int tfd            = -1;
+        const ErrorCode ec = CreateTimerfd(delay_ms, 0, &tfd, sys_errno);
         if (ec != ErrorCode::kOk)
         {
             return ec;
@@ -290,7 +290,7 @@ class EventLoop
                 return ErrorCode::kNoMemory;
             }
 
-            int ret = ::poll(pfds.data(), static_cast<nfds_t>(pfds.size()), poll_timeout_ms);
+            const int ret = ::poll(pfds.data(), static_cast<nfds_t>(pfds.size()), poll_timeout_ms);
             if (ret < 0)
             {
                 if (errno == EINTR)
@@ -375,7 +375,7 @@ class EventLoop
             return ErrorCode::kInvalidArgument;
         }
 
-        int tfd = ::timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC);
+        const int tfd = ::timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC);
         if (tfd < 0)
         {
             if (sys_errno)

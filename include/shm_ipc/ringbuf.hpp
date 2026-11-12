@@ -95,8 +95,8 @@ constexpr std::size_t RingPhys(uint64_t pos)
 template <std::size_t Capacity>
 void RingCopyOut(const char* base, std::size_t phys_r, void* dst, uint32_t len)
 {
-    std::size_t contig = Capacity - phys_r;
-    auto* d            = static_cast<char*>(dst);
+    const std::size_t contig = Capacity - phys_r;
+    auto* d                  = static_cast<char*>(dst);
     if (len <= contig)
     {
         std::memcpy(d, base + phys_r, len);
@@ -245,8 +245,8 @@ class BatchWriter
             return -1;
         }
 
-        std::size_t phys_w = RingPhys<Capacity>(w_);
-        std::size_t tail   = Capacity - phys_w;
+        const std::size_t phys_w = RingPhys<Capacity>(w_);
+        const std::size_t tail   = Capacity - phys_w;
 
         auto* src = static_cast<const char*>(data);
         if (mirrored_ || len <= tail)
@@ -278,7 +278,7 @@ class BatchWriter
         {
             return 0;
         }
-        int n = count_;
+        const int n = count_;
         if (w_ != w_start_)
         {
             hdr_->write_pos.store(w_, std::memory_order_release);
@@ -292,10 +292,18 @@ class BatchWriter
     }
 
     /** @brief 自上次 Flush 以来已成功 TryWrite 的次数 */
-    int Count() const noexcept { return count_; }
+    [[nodiscard]]
+    int Count() const noexcept
+    {
+        return count_;
+    }
 
     /** @brief 自上次 Flush 以来已写入但尚未发布的字节数 */
-    uint64_t PendingBytes() const noexcept { return w_ - w_start_; }
+    [[nodiscard]]
+    uint64_t PendingBytes() const noexcept
+    {
+        return w_ - w_start_;
+    }
 
     /**
      * @brief 丢弃自上次 Flush 以来的所有未发布写入
@@ -340,7 +348,11 @@ class BatchWriter
     }
 
     /** @brief 当前可写入的剩余字节数 */
-    uint64_t FreeBytes() const noexcept { return Capacity - (w_ - r_); }
+    [[nodiscard]]
+    uint64_t FreeBytes() const noexcept
+    {
+        return Capacity - (w_ - r_);
+    }
 
     /**
      * @brief 预留 len 字节连续写入区域，返回直写指针
@@ -366,8 +378,8 @@ class BatchWriter
         {
             return nullptr;
         }
-        std::size_t phys_w = RingPhys<Capacity>(w_);
-        std::size_t tail   = Capacity - phys_w;
+        const std::size_t phys_w = RingPhys<Capacity>(w_);
+        const std::size_t tail   = Capacity - phys_w;
         if (!mirrored_ && len > tail)
         {
             return nullptr;  // 非镜像映射跨环尾，调用者应回退
@@ -504,16 +516,16 @@ class RingBuf
         auto* hdr  = detail::RingHdr(shm);
         char* base = detail::RingData(shm);
 
-        uint64_t w = hdr->write_pos.load(std::memory_order_relaxed);
-        uint64_t r = hdr->read_pos.load(std::memory_order_acquire);
+        const uint64_t w = hdr->write_pos.load(std::memory_order_relaxed);
+        const uint64_t r = hdr->read_pos.load(std::memory_order_acquire);
 
         if ((w + len) - r > Capacity)
         {
             return -1;
         }
 
-        std::size_t phys_w = detail::RingPhys<Capacity>(w);
-        std::size_t tail   = Capacity - phys_w;
+        const std::size_t phys_w = detail::RingPhys<Capacity>(w);
+        const std::size_t tail   = Capacity - phys_w;
 
         auto* src = static_cast<const char*>(data);
         if (len <= tail)
@@ -553,16 +565,16 @@ class RingBuf
         auto* hdr        = detail::RingHdr(shm);
         const char* base = detail::RingData(shm);
 
-        uint64_t r     = hdr->read_pos.load(std::memory_order_relaxed);
-        uint64_t w     = hdr->write_pos.load(std::memory_order_acquire);
-        uint64_t avail = w - r;
+        const uint64_t r     = hdr->read_pos.load(std::memory_order_relaxed);
+        const uint64_t w     = hdr->write_pos.load(std::memory_order_acquire);
+        const uint64_t avail = w - r;
 
         if (avail == 0)
         {
             return 0;
         }
 
-        uint32_t to_read = (avail < max_len) ? static_cast<uint32_t>(avail) : max_len;
+        const uint32_t to_read = (avail < max_len) ? static_cast<uint32_t>(avail) : max_len;
         // max_len == 0：不拷贝不推进
         if (to_read == 0)
         {
@@ -596,9 +608,9 @@ class RingBuf
         auto* hdr        = detail::RingHdr(shm);
         const char* base = detail::RingData(shm);
 
-        uint64_t r     = hdr->read_pos.load(std::memory_order_relaxed);
-        uint64_t w     = hdr->write_pos.load(std::memory_order_acquire);
-        uint64_t avail = w - r;
+        const uint64_t r     = hdr->read_pos.load(std::memory_order_relaxed);
+        const uint64_t w     = hdr->write_pos.load(std::memory_order_acquire);
+        const uint64_t avail = w - r;
 
         if (avail < len)
         {
@@ -623,10 +635,10 @@ class RingBuf
             return -1;
         }
 
-        auto* hdr  = detail::RingHdr(shm);
-        char* base = detail::RingData(shm);
-        uint64_t w = hdr->write_pos.load(std::memory_order_relaxed);
-        uint64_t r = hdr->read_pos.load(std::memory_order_acquire);
+        auto* hdr        = detail::RingHdr(shm);
+        char* base       = detail::RingData(shm);
+        const uint64_t w = hdr->write_pos.load(std::memory_order_relaxed);
+        const uint64_t r = hdr->read_pos.load(std::memory_order_acquire);
         if ((w + len) - r > Capacity)
         {
             return -1;
@@ -645,17 +657,17 @@ class RingBuf
             return 0;
         }
 
-        auto* hdr        = detail::RingHdr(shm);
-        const char* base = detail::RingData(shm);
-        uint64_t r       = hdr->read_pos.load(std::memory_order_relaxed);
-        uint64_t w       = hdr->write_pos.load(std::memory_order_acquire);
-        uint64_t avail   = w - r;
+        auto* hdr            = detail::RingHdr(shm);
+        const char* base     = detail::RingData(shm);
+        const uint64_t r     = hdr->read_pos.load(std::memory_order_relaxed);
+        const uint64_t w     = hdr->write_pos.load(std::memory_order_acquire);
+        const uint64_t avail = w - r;
         if (avail == 0)
         {
             return 0;
         }
 
-        uint32_t to_read = (avail < max_len) ? static_cast<uint32_t>(avail) : max_len;
+        const uint32_t to_read = (avail < max_len) ? static_cast<uint32_t>(avail) : max_len;
         if (to_read == 0)
         {
             return 0;
@@ -680,8 +692,8 @@ class RingBuf
 
         auto* hdr        = detail::RingHdr(shm);
         const char* base = detail::RingData(shm);
-        uint64_t r       = hdr->read_pos.load(std::memory_order_relaxed);
-        uint64_t w       = hdr->write_pos.load(std::memory_order_acquire);
+        const uint64_t r = hdr->read_pos.load(std::memory_order_relaxed);
+        const uint64_t w = hdr->write_pos.load(std::memory_order_acquire);
         if (w - r < len)
         {
             return -1;
@@ -700,11 +712,11 @@ class RingBuf
             return -1;
         }
 
-        auto* hdr        = detail::RingHdr(shm);
-        const char* base = detail::RingData(shm);
-        uint64_t r       = hdr->read_pos.load(std::memory_order_relaxed);
-        uint64_t w       = hdr->write_pos.load(std::memory_order_acquire);
-        uint64_t avail   = w - r;
+        auto* hdr            = detail::RingHdr(shm);
+        const char* base     = detail::RingData(shm);
+        const uint64_t r     = hdr->read_pos.load(std::memory_order_relaxed);
+        const uint64_t w     = hdr->write_pos.load(std::memory_order_acquire);
+        const uint64_t avail = w - r;
         if (avail == 0)
         {
             return -1;
@@ -739,17 +751,17 @@ class RingBuf
         auto* hdr        = detail::RingHdr(shm);
         const char* base = detail::RingData(shm);
 
-        uint64_t r     = hdr->read_pos.load(std::memory_order_relaxed);
-        uint64_t w     = hdr->write_pos.load(std::memory_order_acquire);
-        uint64_t avail = w - r;
+        const uint64_t r     = hdr->read_pos.load(std::memory_order_relaxed);
+        const uint64_t w     = hdr->write_pos.load(std::memory_order_acquire);
+        const uint64_t avail = w - r;
 
         if (avail == 0)
         {
             return -1;
         }
 
-        std::size_t phys_r = detail::RingPhys<Capacity>(r);
-        std::size_t contig = Capacity - phys_r;
+        const std::size_t phys_r = detail::RingPhys<Capacity>(r);
+        const std::size_t contig = Capacity - phys_r;
 
         if (avail <= contig)
         {
@@ -778,9 +790,9 @@ class RingBuf
      */
     static void CommitRead(void* shm, uint32_t len)
     {
-        auto* hdr      = detail::RingHdr(shm);
-        uint64_t r     = hdr->read_pos.load(std::memory_order_relaxed);
-        uint64_t avail = hdr->write_pos.load(std::memory_order_acquire) - r;
+        auto* hdr            = detail::RingHdr(shm);
+        const uint64_t r     = hdr->read_pos.load(std::memory_order_relaxed);
+        const uint64_t avail = hdr->write_pos.load(std::memory_order_acquire) - r;
         assert(static_cast<uint64_t>(len) <= avail);
         if (static_cast<uint64_t>(len) > avail)
         {
@@ -796,9 +808,9 @@ class RingBuf
      */
     static uint64_t Available(const void* shm)
     {
-        auto* hdr  = detail::RingHdr(shm);
-        uint64_t w = hdr->write_pos.load(std::memory_order_acquire);
-        uint64_t r = hdr->read_pos.load(std::memory_order_acquire);
+        auto* hdr        = detail::RingHdr(shm);
+        const uint64_t w = hdr->write_pos.load(std::memory_order_acquire);
+        const uint64_t r = hdr->read_pos.load(std::memory_order_acquire);
         return w - r;
     }
 
@@ -854,7 +866,7 @@ class RingBuf
     {
         auto* hdr = detail::RingHdr(shm);
         std::atomic_thread_fence(std::memory_order_seq_cst);
-        uint32_t v = hdr->reader_wait.load(std::memory_order_relaxed);
+        const uint32_t v = hdr->reader_wait.load(std::memory_order_relaxed);
         if (v == kReaderAwake)
         {
             return false;

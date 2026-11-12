@@ -90,7 +90,11 @@ class ShmAsyncClient : public comm::ITcpAsyncClient
     void SetCodecFactory(comm::codec::CodecFactoryCallback cb) override { codec_factory_ = std::move(cb); }
 
     void SetContext(std::any context) override { context_ = std::move(context); }
-    const std::any& Context() const override { return context_; }
+    [[nodiscard]]
+    const std::any& Context() const override
+    {
+        return context_;
+    }
     void SetAutoReconnect(bool autoreconn) override { autoreconnect_ = autoreconn; }
 
     void ResizeBuffer(size_t size, size_t max) override
@@ -100,10 +104,18 @@ class ShmAsyncClient : public comm::ITcpAsyncClient
     }
 
     /// @brief 客户端状态（取值见 comm::TcpClientStates）
-    int32_t State() const override { return state_; }
+    [[nodiscard]]
+    int32_t State() const override
+    {
+        return state_;
+    }
 
     /// @brief 连接 ID（client 端固定为 1），未连接返回 0
-    uint64_t Id() const override { return conn_ ? conn_->Id() : 0; }
+    [[nodiscard]]
+    uint64_t Id() const override
+    {
+        return conn_ ? conn_->Id() : 0;
+    }
 
     /**
      * @brief 连接服务端（同步 connect + 握手）
@@ -153,9 +165,9 @@ class ShmAsyncClient : public comm::ITcpAsyncClient
 
         try
         {
-            uint64_t id    = 1;
-            auto conn      = std::make_shared<ShmConnection>(loop_, id, std::move(sock), std::move(channel));
-            codec->conn_id = id;
+            const uint64_t id = 1;
+            auto conn         = std::make_shared<ShmConnection>(loop_, id, std::move(sock), std::move(channel));
+            codec->conn_id    = id;
             conn->SetMessageCallback(messagecb_);
             conn->SetCloseCallback(closecb_);
             conn->SetConnectionCallback(connectioncb_);
@@ -227,13 +239,25 @@ class ShmAsyncClient : public comm::ITcpAsyncClient
     // ------------------------------------------------------------------
 
     /// @brief 当前连接对象（未连接返回 nullptr）
-    ShmConnPtr Conn() const { return conn_; }
+    [[nodiscard]]
+    ShmConnPtr Conn() const
+    {
+        return conn_;
+    }
 
     /// @brief 最近一次 Connect 的错误码（扩展接口）
-    ErrorCode LastError() const noexcept { return last_error_; }
+    [[nodiscard]]
+    ErrorCode LastError() const noexcept
+    {
+        return last_error_;
+    }
 
     /// @brief 最近一次 Connect 失败时的 errno（扩展接口）
-    int LastSysErrno() const noexcept { return last_sys_errno_; }
+    [[nodiscard]]
+    int LastSysErrno() const noexcept
+    {
+        return last_sys_errno_;
+    }
 
  private:
     /// @brief 连接失败收尾：记录错误码并触发 error 回调
@@ -266,7 +290,7 @@ class ShmAsyncClient : public comm::ITcpAsyncClient
         {
             return;
         }
-        int n = conn->DrainRing();
+        const int n = conn->DrainRing();
         // 协议错误，或消息回调内调用了 Close()（连接进入 closeing）
         if (n < 0 || conn->State() == comm::TcpConnStates::closeing)
         {
@@ -285,7 +309,7 @@ class ShmAsyncClient : public comm::ITcpAsyncClient
         if (revents & (POLLHUP | POLLERR | POLLIN))
         {
             char buf{};
-            ssize_t n = ::read(fd, &buf, 1);
+            const ssize_t n = ::read(fd, &buf, 1);
             if (n <= 0)
             {
                 // 对端关闭：先读掉环中可能残留的最后数据，再收尾

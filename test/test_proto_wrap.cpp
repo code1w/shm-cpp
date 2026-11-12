@@ -45,7 +45,7 @@ using SmallChannel              = shm::RingChannel<kSmallCap>;
 SmallChannel CreateSmallChannelOrAbort(int fd, shm::ChannelRole role)
 {
     SmallChannel ch;
-    shm::ErrorCode ec = SmallChannel::CreateRingChannel(fd, role, &ch);
+    const shm::ErrorCode ec = SmallChannel::CreateRingChannel(fd, role, &ch);
     if (ec != shm::ErrorCode::kOk)
     {
         std::fprintf(stderr, "FAIL: CreateRingChannel: %s\n", shm::ErrorCodeName(ec));
@@ -97,11 +97,11 @@ void TestSingleFrameWrap()
 
     auto hb = MakeHeartbeat(42, 100, 1234567890);
 
-    std::string type_name = hb.GetTypeName();
-    auto pb_size          = static_cast<uint32_t>(hb.ByteSizeLong());
-    auto name_len         = static_cast<uint16_t>(type_name.size());
-    uint32_t payload_len  = shm::kTypeNameLenSize + name_len + pb_size;
-    uint32_t frame_size   = shm::kMsgHeaderSize + payload_len;
+    std::string type_name      = hb.GetTypeName();
+    auto pb_size               = static_cast<uint32_t>(hb.ByteSizeLong());
+    auto name_len              = static_cast<uint16_t>(type_name.size());
+    const uint32_t payload_len = shm::kTypeNameLenSize + name_len + pb_size;
+    const uint32_t frame_size  = shm::kMsgHeaderSize + payload_len;
 
     std::printf("  frame_size=%u (hdr=%u, name_prefix=%u, name=%u, pb=%u)\n", frame_size, shm::kMsgHeaderSize,
                 shm::kTypeNameLenSize, static_cast<uint32_t>(name_len), pb_size);
@@ -109,7 +109,7 @@ void TestSingleFrameWrap()
     std::vector<uint8_t> pb_buf(pb_size);
     hb.SerializeToArray(pb_buf.data(), static_cast<int>(pb_size));
 
-    uint32_t offsets[] = {
+    const uint32_t offsets[] = {
         1,
         4,
         shm::kMsgHeaderSize - 1,
@@ -123,7 +123,7 @@ void TestSingleFrameWrap()
     };
 
     int pass_count = 0;
-    for (uint32_t tail : offsets)
+    for (const uint32_t tail : offsets)
     {
         if (tail == 0 || tail >= frame_size)
         {
@@ -199,7 +199,7 @@ void TestSendRecvWrap()
         std::abort();
     }
 
-    pid_t pid = ::fork();
+    const pid_t pid = ::fork();
     if (pid < 0)
     {
         std::perror("fork");
@@ -346,7 +346,7 @@ void TestMultiFrameContinuousWrap()
 
     constexpr int kCount = 30;
 
-    pid_t pid = ::fork();
+    const pid_t pid = ::fork();
     if (pid < 0)
     {
         std::perror("fork");

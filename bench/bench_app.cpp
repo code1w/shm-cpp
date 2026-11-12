@@ -198,8 +198,8 @@ int main(int argc, char* argv[])
     client.SetCodecFactory([] { return std::make_shared<shm::codec::SimplePodCodec>(); });
 
     client.SetConnectionCallback([&](const comm::TcpConnPtr& conn) {
-        g_t0      = NowNs();
-        int count = std::min(g_batch, g_total);
+        g_t0            = NowNs();
+        const int count = std::min(g_batch, g_total);
         for (int i = 0; i < count; ++i)
         {
             SendRequest(conn, i);
@@ -208,12 +208,12 @@ int main(int argc, char* argv[])
     });
 
     client.SetMessageCallback([&](const comm::TcpConnPtr& conn, const std::any&) {
-        int n = g_replies.fetch_add(1, std::memory_order_relaxed) + 1;
+        const int n = g_replies.fetch_add(1, std::memory_order_relaxed) + 1;
         if (n >= g_total)
         {
-            uint64_t elapsed = NowNs() - g_t0;
-            double secs      = static_cast<double>(elapsed) / 1e9;
-            double mbps      = static_cast<double>(g_total) * KindPayloadSize() / secs / (1024.0 * 1024.0);
+            const uint64_t elapsed = NowNs() - g_t0;
+            const double secs      = static_cast<double>(elapsed) / 1e9;
+            const double mbps      = static_cast<double>(g_total) * KindPayloadSize() / secs / (1024.0 * 1024.0);
             std::printf("type=%-6s batch=%4d total=%d time=%7.3fs "
                         "rate=%9.0f msg/s  %8.1f MB/s\n",
                         KindName(), g_batch, g_total, secs, g_total / secs, mbps);
@@ -224,8 +224,8 @@ int main(int argc, char* argv[])
         }
         if (n % g_batch == 0)
         {
-            int base  = g_sent.load();
-            int count = std::min(g_batch, g_total - base);
+            const int base  = g_sent.load();
+            const int count = std::min(g_batch, g_total - base);
             for (int i = 0; i < count; ++i)
             {
                 SendRequest(conn, base + i);

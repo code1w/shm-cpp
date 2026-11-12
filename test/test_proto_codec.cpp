@@ -29,7 +29,7 @@ template <typename Ch>
 Ch CreateChannelOrAbort(int fd, shm::ChannelRole role)
 {
     Ch ch;
-    shm::ErrorCode ec = Ch::CreateRingChannel(fd, role, &ch);
+    const shm::ErrorCode ec = Ch::CreateRingChannel(fd, role, &ch);
     if (ec != shm::ErrorCode::kOk)
     {
         std::fprintf(stderr, "FAIL: CreateRingChannel: %s\n", shm::ErrorCodeName(ec));
@@ -49,7 +49,7 @@ void TestEncodeDecodeBuffer()
     hb.set_timestamp(1234567890);
 
     char buf[1024]{};
-    uint32_t frame_size = shm::ProtoCodec<shm_ipc::HeartbeatProto>::EncodeTo(hb, buf, sizeof(buf), 7);
+    const uint32_t frame_size = shm::ProtoCodec<shm_ipc::HeartbeatProto>::EncodeTo(hb, buf, sizeof(buf), 7);
     assert(frame_size > 0);
 
     // 解码帧头
@@ -63,7 +63,7 @@ void TestEncodeDecodeBuffer()
     assert(ok);
     assert(seq == 7);
 
-    std::string tn(type_name, type_name_len);
+    const std::string tn(type_name, type_name_len);
     assert(tn == "shm_ipc.HeartbeatProto");
 
     // 反序列化
@@ -91,7 +91,7 @@ void TestProtoCodecInterface()
 
     // Encode
     char buf[1024]{};
-    uint32_t frame_size = codec.Encode(&hb, buf, sizeof(buf), 3);
+    const uint32_t frame_size = codec.Encode(&hb, buf, sizeof(buf), 3);
     assert(frame_size > 0);
 
     // Decode
@@ -135,7 +135,7 @@ void TestSendRecvViaRing()
     // 这里用更底层的方式：直接创建 memfd + ring
     // 但 RingChannel::CreateRingChannel 需要 fd 交换，所以用 fork
 
-    pid_t pid = ::fork();
+    const pid_t pid = ::fork();
     assert(pid >= 0);
 
     if (pid == 0)
@@ -242,7 +242,7 @@ void TestTypeNameMismatch()
     cm.set_payload("hello");
 
     char buf[1024]{};
-    uint32_t frame_size = shm::ProtoCodec<shm_ipc::ClientMsgProto>::EncodeTo(cm, buf, sizeof(buf), 5);
+    const uint32_t frame_size = shm::ProtoCodec<shm_ipc::ClientMsgProto>::EncodeTo(cm, buf, sizeof(buf), 5);
     assert(frame_size > 0);
 
     // 用错误的 codec（HeartbeatProto）解码：type_name 不匹配，必须拒绝
@@ -253,7 +253,7 @@ void TestTypeNameMismatch()
     assert(!ok);
 
     const void* raw_payload = buf + shm::kMsgHeaderSize;
-    uint32_t raw_len        = frame_size - shm::kMsgHeaderSize;
+    const uint32_t raw_len  = frame_size - shm::kMsgHeaderSize;
     const void* data        = nullptr;
     uint32_t data_len       = 0;
     ok                      = wrong_codec.DecodePayload(raw_payload, raw_len, &data, &data_len);

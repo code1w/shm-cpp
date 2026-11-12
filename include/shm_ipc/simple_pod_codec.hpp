@@ -159,6 +159,7 @@ class SimplePodCodec : public comm::codec::Codec
      * @brief 编码后精确长度（供传输层直接写 ring，消除双拷贝）
      * @return kTagSize + sizeof(T)；类型未注册返回 -1
      */
+    [[nodiscard]]
     int32_t EncodedSize(const std::any& pkg) const override
     {
         const RegistryEntry* e = FindByType(pkg.type());
