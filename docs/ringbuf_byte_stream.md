@@ -1,23 +1,26 @@
 # RingBuf 字节流环形缓冲区实现详解
 
-本文档面向初次接触本项目的开发者，详细讲解 `RingBuf` 纯字节流 SPSC 环形缓冲区的实现原理，涵盖共享内存布局、位置管理、写入与读取流程、回绕（wrap-around）机制、内存序语义以及批量写入优化。
+本文档面向初次接触本项目的开发者，详细讲解 `RingBuf` 纯字节流 SPSC 环形缓冲区的实现原理，涵盖共享内存布局、位置管理、写入与读取流程、回绕（wrap-around）机制、镜像映射、内存序语义、批量写入优化以及 `reader_wait` 按需通知。
 
 ---
 
 ## 1. 共享内存布局
 
 ```
-共享内存 (shm_size = 128 + Capacity 字节)
+共享内存 (shm_size = kRingDataOffset + Capacity = 4096 + Capacity 字节)
 ┌──────────────────────────────────────────────────────────────┐
-│                  RingHeader (128 bytes)                       │
-│  ┌───────────────────────────┐ ┌───────────────────────────┐ │
-│  │ write_pos  atomic<u64>    │ │ read_pos   atomic<u64>    │ │
-│  │ + 56B padding             │ │ + 56B padding             │ │
-│  │ (独占一个 64B 缓存行)     │ │ (独占一个 64B 缓存行)     │ │
-│  └───────────────────────────┘ └───────────────────────────┘ │
+│               RingHeader (192 bytes, 3 个缓存行)              │
+│  ┌────────────────────────────────────────────────────────┐  │
+│  │ write_pos    atomic<u64>  + 56B padding   (偏移 0)     │  │
+│  ├────────────────────────────────────────────────────────┤  │
+│  │ read_pos     atomic<u64>  + 56B padding   (偏移 64)    │  │
+│  ├────────────────────────────────────────────────────────┤  │
+│  │ reader_wait  atomic<u32>  + 60B padding   (偏移 128)   │  │
+│  └────────────────────────────────────────────────────────┘  │
+│            填充至 4096 字节（kRingDataOffset，页对齐）         │
 ├──────────────────────────────────────────────────────────────┤
 │                Data Region (Capacity bytes)                   │
-│  偏移 0                                          偏移 Cap-1  │
+│  偏移 4096                                    偏移 4096+Cap-1 │
 │  ┌──────────────────────────────────────────────────────────┐ │
 │  │ b b b b b b b b b b b b b b b ··· b b b b b b b b b b b│ │
 │  └──────────────────────────────────────────────────────────┘ │
@@ -26,14 +29,17 @@
 └──────────────────────────────────────────────────────────────┘
 ```
 
+数据区起点页对齐（4096）是镜像映射的前提，见第 11 节。
+
 ### 两个核心字段
 
 | 字段 | 所在缓存行 | 写方 | 读方 |
 |------|-----------|------|------|
 | `write_pos` | 第 1 缓存行 (偏移 0) | 写入数据后 **store** | 检测新数据时 **load** |
 | `read_pos` | 第 2 缓存行 (偏移 64) | 检测空间时 **load** | 消费数据后 **store** |
+| `reader_wait` | 第 3 缓存行 (偏移 128) | 发布后 **load / exchange** | 睡眠前 **store** |
 
-两个字段各占独立缓存行（`alignas(64)` + 56 字节 padding），避免 **false sharing**——写方修改 `write_pos` 不会使读方的 `read_pos` 所在缓存行失效，反之亦然。
+`reader_wait` 不参与数据同步，只用于按需通知，见第 10 节。三个字段各占独立缓存行（`alignas(64)` + padding），避免 **false sharing**——写方修改 `write_pos` 不会使读方的 `read_pos` 所在缓存行失效，反之亦然；读方睡眠标志的翻转也不会干扰这两个热点变量。
 
 ---
 
@@ -48,10 +54,10 @@
 - **空闲空间** = `Capacity - (write_pos - read_pos)`
 - 64 位永不溢出（以 10GB/s 持续写入也要 58 年才溢出）
 
-### Mask：逻辑偏移 → 物理偏移
+### RingPhys：逻辑偏移 → 物理偏移
 
 ```cpp
-static constexpr std::size_t Mask(uint64_t pos)
+static constexpr std::size_t RingPhys(uint64_t pos)
 {
     return static_cast<std::size_t>(pos & (Capacity - 1));
 }
@@ -61,9 +67,9 @@ static constexpr std::size_t Mask(uint64_t pos)
 
 示例（Capacity = 4096 = 0x1000）：
 ```
-pos = 5000  →  Mask(5000) = 5000 & 0xFFF = 904   ← 物理偏移
-pos = 4096  →  Mask(4096) = 4096 & 0xFFF = 0      ← 刚好回到起点
-pos = 8192  →  Mask(8192) = 8192 & 0xFFF = 0      ← 第二圈起点
+pos = 5000  →  RingPhys(5000) = 5000 & 0xFFF = 904   ← 物理偏移
+pos = 4096  →  RingPhys(4096) = 4096 & 0xFFF = 0      ← 刚好回到起点
+pos = 8192  →  RingPhys(8192) = 8192 & 0xFFF = 0      ← 第二圈起点
 ```
 
 ### 可用空间检查
@@ -74,7 +80,7 @@ pos = 8192  →  Mask(8192) = 8192 & 0xFFF = 0      ← 第二圈起点
 写入条件: (w + len) - r <= Capacity   即 已用 + 新增 <= 总容量
 ```
 
-`max_write_size = Capacity / 2` 限制单次最大写入为容量的一半。这简化了空间管理——无论读写位置如何，一次 `max_write_size` 的写入只要空闲超过一半就一定能成功。
+`max_write_size = Capacity / 2` 限制单次最大写入为容量的一半。这简化了空间管理——无论读写位置如何，一次 `max_write_size` 的写入只要空闲超过一半就一定能成功。编译期还要求 Capacity 为 2 的幂、不小于 1024、不超过 `UINT32_MAX`。
 
 ---
 
@@ -148,7 +154,7 @@ if ((w + len) - r > Capacity)
 **④ 数据拷贝（核心）**
 
 ```cpp
-std::size_t phys_w = Mask(w);
+std::size_t phys_w = RingPhys<Capacity>(w);
 std::size_t tail   = Capacity - phys_w;
 ```
 
@@ -208,7 +214,7 @@ static int ReadExact(void *shm, void *data, uint32_t len)
     avail < len? ───── 是 ──→ return -1  (数据不足，不消费任何字节)
         否
         ▼
-    CopyOut(base, Mask(r), data, len)      ← 处理回绕拷贝
+    CopyOut(base, RingPhys(r), data, len)  ← 处理回绕拷贝
         │
     read_pos.store(r + len, release)       ← 释放已消费空间
         │
@@ -253,7 +259,7 @@ static uint32_t TryRead(void *shm, void *data, uint32_t max_len)
 
 ```
 to_read = min(avail, max_len)
-CopyOut(base, Mask(r), dst, to_read)   ← 同样的回绕处理
+CopyOut(base, RingPhys(r), dst, to_read)  ← 同样的回绕处理
 read_pos.store(r + to_read, release)
 return to_read
 ```
@@ -262,7 +268,7 @@ return to_read
 
 ## 6. 回绕（wrap-around）机制详解
 
-回绕是环形缓冲区的核心难点。本实现采用**拆分拷贝**（split-copy），无需哨兵标记。
+回绕是环形缓冲区的核心难点。本实现采用**拆分拷贝**（split-copy），无需哨兵标记；在镜像映射下（第 11 节）则连拆分都不需要，本节描述的是普通映射下的路径。
 
 ### 6.1 为什么会回绕
 
@@ -405,9 +411,9 @@ len <= free = phys_r - phys_w < Capacity - phys_w = tail
 
 ---
 
-## 7. Peek + CommitRead 两段式零拷贝
+## 7. Peek + CommitRead 零拷贝读取
 
-当可读数据跨越环尾时，无法用单个指针表示。`Peek` 返回两段：
+当可读数据跨越环尾时，无法用单个指针表示。普通映射下 `Peek` 返回两段：
 
 ```cpp
 static int Peek(const void *shm,
@@ -432,6 +438,10 @@ static int Peek(const void *shm,
 ```
 
 调用者拿到两段指针后自行处理（如拼接到本地 buffer），最后调用 `CommitRead(len)` 推进 `read_pos`。
+
+镜像映射下使用 `PeekContig(shm, &data, &len)`：永远只返回一段，可读数据即使跨越环尾，在虚拟地址上也是连续的。`RingChannel::Peek` 会按映射类型自动选择，镜像路径下 `seg2` 恒为空。
+
+`CommitRead` 的 `len` 不得超过当前可读字节数：debug 构建触发 `assert`，release 构建钳制到实际可读字节数，避免破坏 `read_pos <= write_pos` 的不变式。
 
 ---
 
@@ -474,6 +484,17 @@ read_pos.store(r + len, release);  // 释放已消费空间
 
 每一对 release-store / acquire-load 构成一个**同步点**，保证在 store 之前的所有写操作（包括 memcpy 写入的数据）在 load 之后可见。
 
+### reader_wait 的额外约束
+
+按需通知（第 10 节）在 `write_pos` 与 `reader_wait` 之间需要 store→load 的全序，acquire/release 不够，两端各加一个 `seq_cst` 栅栏：
+
+```
+写方: write_pos.store(release) → fence(seq_cst) → reader_wait.load
+读方: reader_wait.store(Waiting) → fence(seq_cst) → write_pos.load
+```
+
+x86 的 TSO 允许 store→load 重排，所以这两个栅栏会生成真正的屏障指令；其余 acquire/release 操作在 x86 上仍是零额外指令。
+
 ---
 
 ## 9. BatchWriter 批量写入优化
@@ -512,20 +533,99 @@ N 次写入 → 3N 次原子操作。
 
 ### BatchWriter 中的回绕
 
-BatchWriter 的 `TryWrite` 使用完全相同的拆分拷贝逻辑处理回绕，只是操作的是本地 `w_` 而非原子变量。多条数据可能跨越环尾——每次 `TryWrite` 独立计算 `phys_w` 和 `tail`，回绕在数据拷贝时透明处理。
+BatchWriter 的 `TryWrite` 使用完全相同的拆分拷贝逻辑处理回绕，只是操作的是本地 `w_` 而非原子变量。多条数据可能跨越环尾——每次 `TryWrite` 独立计算 `phys_w` 和 `tail`，回绕在数据拷贝时透明处理。构造时传入 `mirrored=true`（`RingChannel::StartBatch` 自动传入）时，跨尾写入也只需一次 `memcpy`。
+
+### Reserve / CommitReserve：直写
+
+```cpp
+char *p = batch.Reserve(len);      // 预留 len 字节，返回环内直写指针
+if (p) { /* 原地构造数据 */ batch.CommitReserve(len); }
+```
+
+调用方直接在环内存上构造数据，省掉一次中间拷贝。空间不足时 `Reserve` 返回 `nullptr`；普通映射下预留区域跨环尾时也返回 `nullptr`（调用方应回退到 `TryWrite`），镜像映射下不会因跨尾而失败。`CommitReserve` 在 release 构建下同样校验"已 Reserve 且长度一致"，不满足则不推进写位置。
+
+### Cancel / RewindTo：回滚未发布的写入
+
+- `Cancel()`：丢弃自上次 `Flush` 以来的所有未发布写入，析构时不再发布
+- `RewindTo(pending, count)`：回退到之前记录的 `PendingBytes()/Count()` 状态
+
+对端只能看到 `write_pos` 之前的数据，所以回滚只是把本地 `w_` 退回去，对端无感知。codec 层靠它做异常安全：写帧回调抛异常时回滚，避免向对端发布半截帧。
+
+### 使用约束
+
+- **同一环上同一时刻只允许一个活跃的 BatchWriter**：每个实例都从共享内存快照 `write_pos`，两个并存的实例会写到同一物理位置并互相覆盖
+- moved-from 的 BatchWriter 是惰性对象：`TryWrite`/`Reserve` 直接返回失败，不会误写共享环
+- 移动赋值会先 `Cancel` 目标对象的未发布数据，不会隐式向对端发布半成品批次
 
 ---
 
-## 10. API 一览
+## 10. reader_wait：按需通知
+
+读方正在持续消费时，写方每条消息都 `write(eventfd)` 是浪费。`reader_wait` 让写方只在读方**即将睡眠**时才通知一次：
+
+| 取值 | 含义 |
+|------|------|
+| `kReaderAwake = 0` | 读方处理中，写方无需通知 |
+| `kReaderWaiting = 1` | 读方即将/已经睡眠，写方需通知一次（通知时清零） |
+| `kReaderNotifyAlways = 2` | `Init` 的初值：读方未启用按需通知，写方每次都通知 |
+
+```
+读方 ArmReaderWait(shm, seen_write)      写方 ShouldNotify(shm)
+───────────────────────────────          ──────────────────────
+                                         write_pos.store(release)  ← 先发布数据
+reader_wait.store(Waiting)               fence(seq_cst)
+fence(seq_cst)                           v = reader_wait.load
+write_pos.load → 与 seen_write 比较       Awake  → 不通知
+  变了 → store(Awake)，返回 false         Always → 通知
+  没变 → 返回 true，可以睡眠              Waiting→ exchange(Awake)，抢到者通知
+```
+
+两端各自"先写、栅栏、再读对方变量"，至少有一方能看到对方的写入，因此**不会丢唤醒**；`exchange` 保证一次睡眠周期只有一个写方路径发通知。
+
+两条规则：
+
+1. `seen_write` 必须在**读环之前**取（`RingBuf::WritePos`）。读完之后才取，期间到达的数据会被算进基线，复查时看不出变化，读方带着未处理的数据睡去
+2. `ArmReaderWait` 返回 `false` 表示有新数据，不得睡眠，应继续读取
+
+从未调用过 `ArmReaderWait` 的读方，标志保持 `kReaderNotifyAlways`，行为与引入该机制之前一致。
+
+---
+
+## 11. 镜像映射
+
+`RingChannel` 通过 `MmapRegion::MapMirrored` 把数据区在虚拟地址上**连续映射两圈**，两圈指向同一批物理页：
+
+```
+base          base+4096         base+4096+Cap        base+4096+2·Cap
+ ├─ header/填充页 ─┤── 数据区（第一圈）──┤── 数据区（第二圈）──┤
+                         └──────── 同一批物理页 ────────┘
+```
+
+任何起点在 `[0, Capacity)`、长度不超过 `Capacity` 的窗口在 VA 上都是连续的，因此：
+
+- 跨环尾的写入/读取只需**单次 `memcpy`**：`TryWriteContig` / `TryReadContig` / `ReadExactContig`
+- `PeekContig` 永远返回单段
+- `BatchWriter::Reserve` 不会因跨尾而失败
+
+这组 `*Contig` 方法要求 shm 是镜像映射建立的，普通映射请使用第 3–7 节的两段式方法。镜像只影响本进程的 VA 布局，两端可以一边镜像、一边普通映射；镜像映射失败时 `RingChannel` 自动退化为普通映射。
+
+---
+
+## 12. API 一览
 
 | 方法 | 签名 | 说明 |
 |------|------|------|
-| `Init` | `void Init(void *shm)` | 清零初始化 shm |
+| `Init` | `void Init(void *shm)` | 原地构造 RingHeader 并清零；初值 `reader_wait = kReaderNotifyAlways`；要求 64B 对齐 |
 | `TryWrite` | `int TryWrite(void *shm, const void *data, uint32_t len)` | 写入 len 字节，0/-1 |
 | `TryRead` | `uint32_t TryRead(void *shm, void *data, uint32_t max_len)` | 尽力读，返回实际字节数 |
 | `ReadExact` | `int ReadExact(void *shm, void *data, uint32_t len)` | 精确读 len 字节或不读，0/-1 |
 | `Peek` | `int Peek(shm, &seg1, &seg1_len, &seg2, &seg2_len)` | 两段式零拷贝，0/-1 |
-| `CommitRead` | `void CommitRead(void *shm, uint32_t len)` | 推进 read_pos |
+| `CommitRead` | `void CommitRead(void *shm, uint32_t len)` | 推进 read_pos（越界时 debug assert、release 钳制） |
+| `TryWriteContig` / `TryReadContig` / `ReadExactContig` | 同上三者 | 镜像映射专用，跨尾单次 memcpy |
+| `PeekContig` | `int PeekContig(shm, &data, &len)` | 镜像映射专用，永远单段 |
 | `Available` | `uint64_t Available(const void *shm)` | 可读字节数 |
 | `FreeSpace` | `uint64_t FreeSpace(const void *shm)` | 可写字节数 |
-| `BatchWriter` | RAII class | 批量写入，Flush 时发布 |
+| `WritePos` / `ReadPos` | `uint64_t WritePos(const void *shm)` | 当前位置（`WritePos` 用于取 `seen_write` 基线） |
+| `ArmReaderWait` | `bool ArmReaderWait(void *shm, uint64_t seen_write)` | 读方睡眠前声明，false 表示有新数据 |
+| `ShouldNotify` | `bool ShouldNotify(void *shm)` | 写方发布后调用，判断是否需写 eventfd |
+| `BatchWriter` | RAII class | 批量写入，Flush 时发布；支持 Reserve/CommitReserve、Cancel、RewindTo |
