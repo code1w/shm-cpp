@@ -396,16 +396,52 @@ class RingChannel
 
     /**
      * @brief 通知对端：我们已向写环写入新数据
+     *
+     * 必须在数据发布（write_pos 已 store）之后调用。对端若启用了按需通知
+     * （调用过 PrepareWait），仅在其即将睡眠时才写 eventfd；处理中的读方
+     * 无需唤醒，省掉一次 syscall。对端未启用时每次都写（与旧行为一致）。
      */
     void NotifyPeer() const
     {
         if (!notify_write_efd_)  // 未完成握手 / moved-from
+            return;
+        if (write_region_ && !Ring::ShouldNotify(write_region_.Get()))
             return;
         uint64_t v = 1;
         ssize_t r;
         do {
             r = ::write(notify_write_efd_.Get(), &v, sizeof(v));
         } while (r < 0 && errno == EINTR);
+    }
+
+    /**
+     * @brief 读方：睡眠（回到 poll / 阻塞等待）前调用，声明需要被唤醒
+     *
+     * 调用方必须在"已读空/已处理完"之后、真正睡眠之前调用。返回 false
+     * 表示 write_pos 相对基线已变化（有新数据到达），此时不得睡眠，应继续读取。
+     *
+     * @param seen_write 读方上一轮处理开始前观察到的 write_pos（见 WritePos()）；
+     *                   以"环空"为睡眠条件的读方可传 ReadPos()
+     * @return true 可以睡眠；false 有新数据，需继续读取
+     */
+    [[nodiscard]]
+    bool PrepareWait(uint64_t seen_write)
+    {
+        if (!read_region_)
+            return true;
+        return Ring::ArmReaderWait(read_region_.Get(), seen_write);
+    }
+
+    /** @brief 读环当前 write_pos（通道未初始化时为 0） */
+    uint64_t WritePos() const
+    {
+        return read_region_ ? Ring::WritePos(read_region_.Get()) : 0;
+    }
+
+    /** @brief 读环当前 read_pos（通道未初始化时为 0） */
+    uint64_t ReadPos() const
+    {
+        return read_region_ ? Ring::ReadPos(read_region_.Get()) : 0;
     }
 
     /**

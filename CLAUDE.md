@@ -124,3 +124,4 @@ Linux system headers plus pthread (`shm_server.hpp` 内部持有握手线程，I
 - 同类型消息复用 `std::any` — `Decode` 写入已有 any（同类型原地覆盖）；`ShmConnection::DrainRing` 在整个 drain 中复用同一个 any，避免每条消息构造/析构与堆分配（大对象受益；回调内引用不得外存）
 - `SendCmd` 直写 ring — `comm::codec::Codec::EncodedSize` 报告精确长度时，`SendCmd` 对 ≥256B 消息直接 `Reserve + Encode` 写入 ring（单次拷贝），并支持到 `max_write_size`（默认 4MB）；未知长度的 codec 回退 `encode_buf_`
 - `ChannelBatchWriter::FlushNoNotify` — 发布 write_pos 但不通知，供 `SendCmd` 保留延迟通知合并语义
+- 按需通知（reader_wait）— RingHeader 增加独立缓存行的 `reader_wait`（192B）；读方读空后经 `RingChannel::PrepareWait(seen_write)`（置标志 → seq_cst 栅栏 → 复查 write_pos）声明睡眠，写方 `NotifyPeer` 内 `Ring::ShouldNotify` 仅在读方等待时写一次 eventfd。初值 `kReaderNotifyAlways`，未调用 PrepareWait 的读方（如 `src/server.cpp`/`client.cpp`、test_codec）行为不变。`ShmConnection::DrainRing`/`ShmClient::WaitForReadable` 已接入；基线 `seen` 必须在读环**之前**取，否则丢唤醒（test_ringbuf_boundary Test 17/18 回归）

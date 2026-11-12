@@ -374,9 +374,35 @@ class ShmConnection : public comm::ITcpConnection,
      * 数据跨环尾回绕时自动线性化到内部缓冲（少见路径）。
      * 数据不完整（codec 返回 0）时保留在环中等待下次通知——与 TCP 流语义一致。
      *
+     * 读空后调用 channel_.PrepareWait 声明"即将睡眠"（按需通知）：写方此后
+     * 才会再写 eventfd。PrepareWait 发现新数据到达时继续读，不会丢唤醒。
+     *
      * @return 分发的消息条数；-1 协议错误（codec 要求断开），连接应移除
      */
     int DrainRing()
+    {
+        int total = 0;
+        for (;;)
+        {
+            // 基线必须在读取之前取：此后到达的数据由 PrepareWait 复查发现
+            const uint64_t seen = channel_.WritePos();
+            const int n         = DrainRingOnce();
+            if (n < 0)
+                return -1;
+            total += n;
+            // 消息回调内关闭了连接：由 owner 收尾，无需再武装等待
+            if (state_ == comm::TcpConnStates::closeing ||
+                state_ == comm::TcpConnStates::closeed)
+                break;
+            if (channel_.PrepareWait(seen))
+                break;
+        }
+        return total;
+    }
+
+ private:
+    /// @brief 单轮消费：读到环空或遇到不完整帧为止
+    int DrainRingOnce()
     {
         if (!codec_)
             return -1;
@@ -525,7 +551,6 @@ class ShmConnection : public comm::ITcpConnection,
         return count;
     }
 
- private:
     /// @brief 启用"直接写 ring"的最小编码长度（小消息留在 encode_buf_）
     static constexpr uint32_t kDirectEncodeMinBytes = 256;
 

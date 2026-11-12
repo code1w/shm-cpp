@@ -34,17 +34,28 @@ namespace shm {
 // 共享内存结构（POD，无指针）
 // ---------------------------------------------------------------------------
 
-/** @brief 环形缓冲区控制头，写/读位置各占独立缓存行 */
+/// @brief reader_wait 取值：读方在处理中，写方无需通知
+inline constexpr uint32_t kReaderAwake = 0;
+/// @brief reader_wait 取值：读方即将/已经睡眠，写方需发一次通知（发出后清零）
+inline constexpr uint32_t kReaderWaiting = 1;
+/// @brief reader_wait 取值：读方未启用按需通知（初始值），写方每次都通知
+inline constexpr uint32_t kReaderNotifyAlways = 2;
+
+/** @brief 环形缓冲区控制头，写位置/读位置/读方等待标志各占独立缓存行 */
 struct alignas(64) RingHeader
 {
     std::atomic<uint64_t> write_pos;  ///< 写位置（单调递增字节偏移）
     char pad1[64 - sizeof(std::atomic<uint64_t>)];  ///< 填充至 64 字节（一个缓存行）
     std::atomic<uint64_t> read_pos;   ///< 读位置（单调递增字节偏移）
     char pad2[64 - sizeof(std::atomic<uint64_t>)];  ///< 填充至 64 字节
+    std::atomic<uint32_t> reader_wait;  ///< 读方等待标志（kReader*），读方置位、写方清零
+    char pad3[64 - sizeof(std::atomic<uint32_t>)];  ///< 填充至 64 字节
 };
 
-static_assert(sizeof(RingHeader) == 128, "RingHeader must be 128 bytes (2 cache lines)");
+static_assert(sizeof(RingHeader) == 192, "RingHeader must be 192 bytes (3 cache lines)");
 static_assert(alignof(RingHeader) == 64, "RingHeader must be aligned to 64 bytes");
+static_assert(std::atomic<uint32_t>::is_always_lock_free,
+              "lock-free atomics are required for cross-process shm");
 
 /// @brief 数据区起始偏移（页对齐，供 RingChannel 建立数据区镜像映射）
 inline constexpr std::size_t kRingDataOffset = 4096;
@@ -446,6 +457,9 @@ class RingBuf
         auto *hdr = new (shm) RingHeader{};
         hdr->write_pos.store(0, std::memory_order_relaxed);
         hdr->read_pos.store(0, std::memory_order_relaxed);
+        // 读方尚未声明支持按需通知前，写方保持"每次都通知"，兼容不调用
+        // ArmReaderWait 的裸读方
+        hdr->reader_wait.store(kReaderNotifyAlways, std::memory_order_relaxed);
         // 清零 header 之后的填充页与数据区
         std::memset(static_cast<char *>(shm) + sizeof(RingHeader), 0,
                     shm_size - sizeof(RingHeader));
@@ -732,6 +746,72 @@ class RingBuf
         uint64_t w = hdr->write_pos.load(std::memory_order_acquire);
         uint64_t r = hdr->read_pos.load(std::memory_order_acquire);
         return w - r;
+    }
+
+    /** @brief 读取 write_pos（acquire） */
+    static uint64_t WritePos(const void *shm)
+    {
+        return detail::RingHdr(shm)->write_pos.load(std::memory_order_acquire);
+    }
+
+    /** @brief 读取 read_pos（acquire） */
+    static uint64_t ReadPos(const void *shm)
+    {
+        return detail::RingHdr(shm)->read_pos.load(std::memory_order_acquire);
+    }
+
+    // ---- 按需通知（reader_wait）----
+
+    /**
+     * @brief 读方：声明即将睡眠，并复查是否有新数据（读方调用）
+     *
+     * 流程：置 kReaderWaiting → seq_cst 栅栏 → 复查 write_pos。
+     * 与写方 ShouldNotify 的"发布 write_pos → seq_cst 栅栏 → 读标志"构成
+     * Dekker 式配对：两端至少有一方能看到对方的写入，因此不会丢唤醒。
+     * 首次调用即表示该读方启用按需通知（标志离开 kReaderNotifyAlways）。
+     *
+     * @param shm        读环共享内存指针
+     * @param seen_write 读方上次处理数据时观察到的 write_pos 基线
+     *                   （空环判断可传当前 read_pos）
+     * @return true 无新数据，可以睡眠；false write_pos 已变化，
+     *         已撤销标志，调用方应继续读取而不要睡眠
+     */
+    static bool ArmReaderWait(void *shm, uint64_t seen_write)
+    {
+        auto *hdr = detail::RingHdr(shm);
+        hdr->reader_wait.store(kReaderWaiting, std::memory_order_relaxed);
+        std::atomic_thread_fence(std::memory_order_seq_cst);
+        if (hdr->write_pos.load(std::memory_order_acquire) != seen_write)
+        {
+            // 若写方已抢先清零并通知，这里覆盖为 Awake 无副作用（仅多一次空唤醒）
+            hdr->reader_wait.store(kReaderAwake, std::memory_order_relaxed);
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * @brief 写方：发布数据后判断是否需要通知对端（写方调用）
+     *
+     * 必须在 write_pos 发布之后调用。读方处于 kReaderWaiting 时，本函数
+     * 原子地清零标志并返回 true（每次睡眠周期仅一次通知）；读方在处理中
+     * 返回 false；读方未启用按需通知（kReaderNotifyAlways）恒返回 true。
+     *
+     * @param shm 写环共享内存指针
+     */
+    static bool ShouldNotify(void *shm)
+    {
+        auto *hdr = detail::RingHdr(shm);
+        std::atomic_thread_fence(std::memory_order_seq_cst);
+        uint32_t v = hdr->reader_wait.load(std::memory_order_relaxed);
+        if (v == kReaderAwake)
+            return false;
+        if (v == kReaderNotifyAlways)
+            return true;
+        // kReaderWaiting：抢占清零，只有抢到的一方发通知
+        return hdr->reader_wait.exchange(kReaderAwake,
+                                         std::memory_order_acq_rel) !=
+               kReaderAwake;
     }
 
     /**

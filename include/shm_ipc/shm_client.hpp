@@ -189,12 +189,13 @@ class ShmClient : public comm::ITcpClient
             if (closed_.load(std::memory_order_acquire))
                 return -1;
 
-            // 先试读：数据可能已在环中
+            // 先试读：数据可能已在环中（基线须在读之前取，供 PrepareWait 复查）
+            const uint64_t seen = channel_.WritePos();
             uint32_t n = channel_.TryRead(buf, static_cast<uint32_t>(bsize));
             if (n > 0)
                 return static_cast<int>(n);
 
-            int wr = WaitForReadable(dl);
+            int wr = WaitForReadable(dl, seen);
             if (wr < 0)
                 return wr;  // -1 本端关闭/错误；-2 超时
             if (wr == 0)
@@ -238,10 +239,11 @@ class ShmClient : public comm::ITcpClient
             if (closed_.load(std::memory_order_acquire))
                 return -1;
 
+            const uint64_t seen = channel_.WritePos();
             if (channel_.Peek(seg1, seg1_len, seg2, seg2_len) == 0)
                 return static_cast<int>(*seg1_len + *seg2_len);
 
-            int wr = WaitForReadable(dl);
+            int wr = WaitForReadable(dl, seen);
             if (wr < 0)
                 return wr;
             if (wr == 0)
@@ -289,9 +291,10 @@ class ShmClient : public comm::ITcpClient
     /**
      * @brief 等待 ring 数据/对端事件
      * @param deadline 为空表示无限等待
+     * @param seen     调用方读环检查前观察到的 write_pos（用于按需通知复查）
      * @return 1 需要重新检查 ring；0 对端关闭；-1 本端关闭/错误；-2 超时
      */
-    int WaitForReadable(timespec *deadline)
+    int WaitForReadable(timespec *deadline, uint64_t seen)
     {
         int wait_ms = -1;
         if (deadline)
@@ -304,6 +307,10 @@ class ShmClient : public comm::ITcpClient
                 return -2;
             wait_ms = static_cast<int>(ms);
         }
+
+        // 声明即将睡眠：写方此后才会写 eventfd；复查发现新数据则直接重试读取
+        if (!channel_.PrepareWait(seen))
+            return 1;
 
         pollfd pfds[2] = {{channel_.NotifyReadFd(), POLLIN, 0},
                           {socket_fd_.Get(), POLLIN, 0}};

@@ -22,6 +22,8 @@
  * 14. 镜像满环：phys 非零填满 Capacity，Peek 单段跨两圈、读回内容一致
  * 15. 镜像 BatchWriter：Reserve 跨尾直写 + CommitReserve + Flush
  * 16. Contig API 边界：0/超长/空指针/空环拒绝
+ * 17. reader_wait 状态机：默认恒通知 / Arm 后一次通知 / Arm 复查撤销
+ * 18. reader_wait 丢唤醒压测：eventfd+poll 读方 vs 突发/停顿写方
  *
  * 无测试框架，abort() 失败，打印 "=== TEST PASSED ===" 成功。
  */
@@ -35,8 +37,10 @@
 #include <cstdlib>
 #include <cstring>
 #include <atomic>
+#include <chrono>
 #include <thread>
 #include <vector>
+#include <poll.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -862,6 +866,127 @@ void TestContigGuards()
     std::printf("  PASS: contig zero/oversize/null/empty rejected\n");
 }
 
+// =========================================================================
+// 测试 17：reader_wait 状态机
+// =========================================================================
+
+void TestReaderWaitStateMachine()
+{
+    std::printf("--- Test 17: reader_wait state machine ---\n");
+
+    void *shm = AllocShm();
+
+    // 读方未启用按需通知：写方每次都通知（兼容裸读方）
+    CHECK(SmallRing::ShouldNotify(shm), "default notifies (1)");
+    CHECK(SmallRing::ShouldNotify(shm), "default notifies (2)");
+
+    // 读空后武装：可睡眠；写方只通知一次
+    CHECK(SmallRing::ArmReaderWait(shm, SmallRing::WritePos(shm)),
+          "arm on empty ring -> may sleep");
+    CHECK(SmallRing::ShouldNotify(shm), "waiting reader gets a notify");
+    CHECK(!SmallRing::ShouldNotify(shm), "notify is one-shot per sleep");
+    CHECK(!SmallRing::ShouldNotify(shm), "awake reader not notified");
+
+    // 武装时基线已过期（write_pos 已推进）：拒绝睡眠且撤销标志
+    uint64_t stale = SmallRing::WritePos(shm);
+    char b[8] = {};
+    CHECK(SmallRing::TryWrite(shm, b, sizeof(b)) == 0, "write");
+    CHECK(!SmallRing::ArmReaderWait(shm, stale), "stale baseline -> no sleep");
+    CHECK(!SmallRing::ShouldNotify(shm), "disarmed after failed arm");
+
+    // 再次武装（基线最新）仍可睡眠
+    CHECK(SmallRing::ReadExact(shm, b, sizeof(b)) == 0, "read");
+    CHECK(SmallRing::ArmReaderWait(shm, SmallRing::WritePos(shm)), "re-arm");
+    CHECK(SmallRing::ShouldNotify(shm), "notify after re-arm");
+
+    std::free(shm);
+    ++g_pass_count;
+    std::printf("  PASS: always / one-shot / stale-baseline transitions\n");
+}
+
+// =========================================================================
+// 测试 18：reader_wait 丢唤醒压测
+//   读方模拟事件循环：读空 → Arm → poll(eventfd)；写方突发 + 随机停顿，
+//   仅在 ShouldNotify 为真时写 eventfd。poll 超时但环里有数据 = 丢唤醒。
+// =========================================================================
+
+void TestReaderWaitNoLostWakeup()
+{
+    std::printf("--- Test 18: reader_wait lost-wakeup stress ---\n");
+
+    constexpr uint64_t kMsgs = 400000;
+    void *shm = AllocShm();
+
+    shm::UniqueFd efd;
+    CHECK(shm::CreateEventfd(&efd) == shm::ErrorCode::kOk, "eventfd");
+
+    std::atomic<bool> writer_done{false};
+    std::atomic<uint64_t> notifies{0};
+
+    std::thread writer([&] {
+        uint64_t rng = 88172645463325252ULL;
+        for (uint64_t i = 0; i < kMsgs; ++i)
+        {
+            while (SmallRing::TryWrite(shm, &i, sizeof(i)) != 0)
+                std::this_thread::yield();  // 环满：等读方消费
+            if (SmallRing::ShouldNotify(shm))
+            {
+                uint64_t one = 1;
+                CHECK(::write(efd.Get(), &one, sizeof(one)) == sizeof(one),
+                      "eventfd write");
+                notifies.fetch_add(1, std::memory_order_relaxed);
+            }
+            rng ^= rng << 13; rng ^= rng >> 7; rng ^= rng << 17;
+            // 约 1/512 的概率停顿，让读方真正进入睡眠
+            if ((rng & 511) == 0)
+                std::this_thread::sleep_for(
+                    std::chrono::microseconds(20 + (rng >> 20) % 200));
+        }
+        writer_done.store(true, std::memory_order_release);
+    });
+
+    uint64_t expect = 0, polls = 0;
+    while (expect < kMsgs)
+    {
+        const uint64_t seen = SmallRing::WritePos(shm);
+        uint64_t v;
+        while (SmallRing::ReadExact(shm, &v, sizeof(v)) == 0)
+        {
+            CHECK(v == expect, "order: got %lu want %lu",
+                  (unsigned long)v, (unsigned long)expect);
+            ++expect;
+        }
+        if (expect == kMsgs)
+            break;
+        if (!SmallRing::ArmReaderWait(shm, seen))
+            continue;  // 武装期间有新数据到达，不睡眠
+
+        pollfd pfd{efd.Get(), POLLIN, 0};
+        int pr = ::poll(&pfd, 1, 3000);
+        ++polls;
+        if (pr == 0)
+        {
+            // 超时：环里有数据，或写方已全部写完但读方没被唤醒 = 丢唤醒
+            CHECK(SmallRing::Available(shm) == 0 &&
+                      !writer_done.load(std::memory_order_acquire),
+                  "lost wakeup: poll timeout with data pending (expect=%lu)",
+                  (unsigned long)expect);
+            continue;
+        }
+        uint64_t drained;
+        (void)::read(efd.Get(), &drained, sizeof(drained));
+    }
+
+    writer.join();
+    CHECK(notifies.load() > 0, "notifier never ran");
+    CHECK(notifies.load() < kMsgs, "no notification suppression observed");
+    std::free(shm);
+    ++g_pass_count;
+    std::printf("  PASS: %lu msgs, %lu notifies (%.2f%%), %lu sleeps\n",
+                (unsigned long)kMsgs, (unsigned long)notifies.load(),
+                100.0 * notifies.load() / kMsgs, (unsigned long)polls);
+}
+
 }  // anonymous namespace
 
 int main()
@@ -885,6 +1010,8 @@ int main()
     TestContigFullRing();
     TestMirroredBatchWriter();
     TestContigGuards();
+    TestReaderWaitStateMachine();
+    TestReaderWaitNoLostWakeup();
 
     std::printf("\n=== TEST PASSED === (%d sub-tests)\n", g_pass_count);
     return 0;
