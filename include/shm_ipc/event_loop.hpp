@@ -354,7 +354,7 @@ class EventLoop
     static uint64_t DrainTimerfd(int tfd)
     {
         uint64_t expirations = 0;
-        ssize_t r;
+        ssize_t r            = 0;
         do
         {
             r = ::read(tfd, &expirations, sizeof(expirations));

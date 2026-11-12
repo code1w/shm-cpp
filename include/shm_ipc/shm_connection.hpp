@@ -44,6 +44,9 @@ namespace shm {
 
 /**
  * @brief 共享内存连接（实现 comm::ITcpConnection，对应框架 tcp::TcpConnection）
+ *
+ * @thread-safety 非线程安全：SendCmd / Close / 回调均限定在所属 EventLoop 线程；
+ *                底层 SPSC 环每个方向只允许一个生产者线程和一个消费者线程。
  */
 class ShmConnection : public comm::ITcpConnection,
                       public std::enable_shared_from_this<ShmConnection>
@@ -418,7 +421,8 @@ class ShmConnection : public comm::ITcpConnection,
         {
             const void* seg1  = nullptr;
             const void* seg2  = nullptr;
-            uint32_t seg1_len = 0, seg2_len = 0;
+            uint32_t seg1_len = 0;
+            uint32_t seg2_len = 0;
             if (channel_.Peek(&seg1, &seg1_len, &seg2, &seg2_len) != 0)
             {
                 break;  // 环空

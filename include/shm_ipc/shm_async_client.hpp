@@ -46,6 +46,9 @@ namespace shm {
 
 /**
  * @brief 共享内存异步客户端（实现 comm::ITcpAsyncClient，对应框架 io::TcpAsyncClient）
+ *
+ * @thread-safety 非线程安全：所有公共方法与回调都在其绑定的 EventLoop 线程上
+ *                使用；Connect/Close 不得与事件循环并发执行。
  */
 class ShmAsyncClient : public comm::ITcpAsyncClient
 {

@@ -392,7 +392,7 @@ inline ErrorCode SendFd(int socket, int fd, FdTag tag, int* sys_errno = nullptr)
             std::memcpy(CMSG_DATA(cmsg), &fd, sizeof(int));
         }
 
-        ssize_t n;
+        ssize_t n = 0;
         do
         {
             n = ::sendmsg(socket, &msg, MSG_NOSIGNAL);
@@ -456,7 +456,7 @@ inline ErrorCode RecvFd(int socket, TaggedFd* out, int* sys_errno = nullptr) noe
             msg.msg_controllen = ctrl.size();
         }
 
-        ssize_t n;
+        ssize_t n = 0;
         do
         {
             n = ::recvmsg(socket, &msg, MSG_WAITALL);

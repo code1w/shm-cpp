@@ -58,6 +58,10 @@ namespace shm {
  * 单线程模型：外部持有一个 EventLoop，ShmServer 在其上注册
  * listen fd、各连接的 eventfd（实时读）与 socket fd（断连检测）。
  * fd 交换握手由内部握手线程完成（见文件头注释），不影响事件循环。
+ *
+ * @thread-safety 除握手线程与 loop 线程之间经 hs_mtx_ 保护的队列外，
+ *                所有公共方法（Start/Stop/连接管理/回调设置）仅限 EventLoop
+ *                所属线程调用；回调也在该线程触发。非线程安全，不得跨线程并发使用。
  */
 class ShmServer : public comm::ITcpServer
 {

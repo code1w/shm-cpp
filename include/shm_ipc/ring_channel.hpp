@@ -168,6 +168,11 @@ class ChannelBatchWriter
 
 /**
  * @brief 双向共享内存环形通道
+ *
+ * @thread-safety 每个方向为 SPSC：写环只能由一个线程写入，读环只能由一个线程读取
+ *                （读写两端可以是不同线程/进程）。同一方向的并发写或并发读
+ *                是未定义行为；通道对象本身（含 move）不是线程安全的。
+ *
  * @tparam Capacity 每方向环形缓冲区容量（字节），默认 8MB
  */
 template <std::size_t Capacity = 8 * 1024 * 1024>
@@ -428,7 +433,7 @@ class RingChannel
             return;
         }
         uint64_t v = 1;
-        ssize_t r;
+        ssize_t r  = 0;
         do
         {
             r = ::write(notify_write_efd_.Get(), &v, sizeof(v));
@@ -469,7 +474,7 @@ class RingChannel
     static uint64_t DrainNotify(int efd)
     {
         uint64_t v = 0;
-        ssize_t r;
+        ssize_t r  = 0;
         do
         {
             r = ::read(efd, &v, sizeof(v));
