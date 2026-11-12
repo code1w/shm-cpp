@@ -166,7 +166,7 @@ region.MapMirrored(fd, Ring::shm_size, kRingDataOffset, Ring::capacity,
 | 参数            | 值                         | 含义                                                        |
 | --------------- | -------------------------- | ----------------------------------------------------------- |
 | `size`        | `Ring::shm_size`         | `kRingDataOffset + Capacity`（默认 4096 + 8MB）           |
-| `data_offset` | `kRingDataOffset = 4096` | 数据区在文件中的页对齐偏移；之前是 `RingHeader` + 填充页 |
+| `data_offset` | `kRingDataOffset = 4096` | 数据区在文件中的页对齐偏移；之前是 `RingHeader` + 填充页  |
 | `prot`        | `PROT_READ \| PROT_WRITE` | 读写权限（双方都需要读写：写方写数据，读方写 `read_pos`） |
 | `flags`       | `MAP_SHARED`             | 修改对所有映射同一文件的进程可见                            |
 | `fd`          | memfd                      | 匿名共享内存文件描述符                                      |
@@ -365,10 +365,10 @@ if (ch.StartBatch(&batch) == ErrorCode::kOk)
 
 读方处理过程中本来就在持续消费，写方每条消息都 `write(eventfd)` 是浪费。`reader_wait` 让写方只在读方**即将睡眠**时才发一次通知：
 
-| 取值                     | 含义                                                   |
-| ------------------------ | ------------------------------------------------------ |
-| `kReaderAwake = 0`       | 读方在处理中，写方无需通知                             |
-| `kReaderWaiting = 1`     | 读方即将/已经睡眠，写方需通知一次（通知时清零）        |
+| 取值                        | 含义                                                     |
+| --------------------------- | -------------------------------------------------------- |
+| `kReaderAwake = 0`        | 读方在处理中，写方无需通知                               |
+| `kReaderWaiting = 1`      | 读方即将/已经睡眠，写方需通知一次（通知时清零）          |
 | `kReaderNotifyAlways = 2` | 初始值：读方未启用按需通知，写方每次都通知（兼容旧读方） |
 
 ```
@@ -587,13 +587,13 @@ inline ErrorCode SendFd(int socket, int fd, FdTag tag, int *sys_errno = nullptr)
 
 `RecvFd` 需要防御几类协议问题，失败时已接收的 fd 由 `UniqueFd` 自动关闭，不会泄漏：
 
-| 情形                                   | 处理                                            |
-| -------------------------------------- | ----------------------------------------------- |
-| `SOCK_STREAM` 短读                     | 循环读满 256 字节载荷；`SCM_RIGHTS` 随首字节到达，只解析一次 |
-| 控制消息被截断（`MSG_CTRUNC`）         | `kProtocol`                                     |
-| 缺少 `SCM_RIGHTS` / 控制消息过短       | `kProtocol`                                     |
-| 一条消息携带多个 fd                    | 关闭全部 fd，返回 `kMultipleFds`                |
-| 对端关闭                               | `kPeerClosed`                                   |
+| 情形                               | 处理                                                           |
+| ---------------------------------- | -------------------------------------------------------------- |
+| `SOCK_STREAM` 短读               | 循环读满 256 字节载荷；`SCM_RIGHTS` 随首字节到达，只解析一次 |
+| 控制消息被截断（`MSG_CTRUNC`）   | `kProtocol`                                                  |
+| 缺少 `SCM_RIGHTS` / 控制消息过短 | `kProtocol`                                                  |
+| 一条消息携带多个 fd                | 关闭全部 fd，返回 `kMultipleFds`                             |
+| 对端关闭                           | `kPeerClosed`                                                |
 
 不做短读处理的话，残留的 dummy 字节会被下一次 `RecvFd` 当作数据读走，后续消息的 `SCM_RIGHTS` 丢失或标签错位。
 
@@ -631,11 +631,11 @@ len = payload 字节数（不含 MsgHeader）
 
 ### 7.2 上层类型编码
 
-| codec                  | payload 布局                                             |
-| ---------------------- | -------------------------------------------------------- |
-| `PodCodec<T>`          | `[tag u32][T bytes]`，接收时校验 tag                    |
-| `SimplePodCodec`       | `[tag u32][T bytes]`，`std::any` 模型的通用 POD codec    |
-| `ProtoCodec<T>`        | `[type_name_len u16][type_name][pb bytes]`              |
+| codec              | payload 布局                                              |
+| ------------------ | --------------------------------------------------------- |
+| `PodCodec<T>`    | `[tag u32][T bytes]`，接收时校验 tag                    |
+| `SimplePodCodec` | `[tag u32][T bytes]`，`std::any` 模型的通用 POD codec |
+| `ProtoCodec<T>`  | `[type_name_len u16][type_name][pb bytes]`              |
 
 POD 类型通过 `SHM_IPC_REGISTER_POD` 宏与 4 字节标签绑定：
 
@@ -686,12 +686,12 @@ int TryRecv(RingChannel<Cap> &ch, const void **payload, uint32_t *payload_len);
 
 返回值：
 
-| 返回值 | 含义                                                                                 |
-| ------ | ------------------------------------------------------------------------------------ |
-| `0`    | 成功取得一帧                                                                         |
-| `-1`   | 数据不足（帧头或 payload 尚未完整到达）                                              |
-| `-2`   | 帧跨环尾且超过显式配置的 `MaxBufSize`（默认不设上限，因此默认不会出现）；该帧被标记为待丢弃，下次自动跳过 |
-| `-3`   | 帧头 `len` 非法（超过 `Capacity - 8`，永远不可能完整到达）；协议错误，`read_pos` 不动，调用方应断开连接 |
+| 返回值 | 含义                                                                                                          |
+| ------ | ------------------------------------------------------------------------------------------------------------- |
+| `0`  | 成功取得一帧                                                                                                  |
+| `-1` | 数据不足（帧头或 payload 尚未完整到达）                                                                       |
+| `-2` | 帧跨环尾且超过显式配置的 `MaxBufSize`（默认不设上限，因此默认不会出现）；该帧被标记为待丢弃，下次自动跳过   |
+| `-3` | 帧头 `len` 非法（超过 `Capacity - 8`，永远不可能完整到达）；协议错误，`read_pos` 不动，调用方应断开连接 |
 
 ---
 
@@ -751,15 +751,15 @@ Client 进程                                        Server 进程
 
 ### 9.1 延迟分析
 
-| 阶段                 | 操作                              | 预期延迟                           |
-| -------------------- | --------------------------------- | ---------------------------------- |
-| 编码                 | 帧头 + payload 各 1 次 memcpy     | < 100ns (L1 命中)                  |
-| 写入                 | atomic store + memcpy             | < 200ns                            |
-| 通知                 | eventfd write（仅读方睡眠时发生） | ~1μs (系统调用)                   |
-| 唤醒                 | poll 返回                         | ~1-5μs                            |
-| 读取                 | atomic load + 零拷贝 Peek         | < 200ns                            |
+| 阶段                 | 操作                              | 预期延迟                                        |
+| -------------------- | --------------------------------- | ----------------------------------------------- |
+| 编码                 | 帧头 + payload 各 1 次 memcpy     | < 100ns (L1 命中)                               |
+| 写入                 | atomic store + memcpy             | < 200ns                                         |
+| 通知                 | eventfd write（仅读方睡眠时发生） | ~1μs (系统调用)                                |
+| 唤醒                 | poll 返回                         | ~1-5μs                                         |
+| 读取                 | atomic load + 零拷贝 Peek         | < 200ns                                         |
 | **端到端 RTT** |                                   | **~2-10μs（读方睡眠，需 eventfd 唤醒）** |
-| **忙轮询 RTT** |                                   | **~200-500ns（无 eventfd）** |
+| **忙轮询 RTT** |                                   | **~200-500ns（无 eventfd）**              |
 
 实测数据见 `bench/results/`：`2026-11-10_shm_vs_socket` 中 64B ping-pong RTT 约 450ns，Unix socket 约 10µs。
 
@@ -813,7 +813,7 @@ Client 进程                                        Server 进程
 ```
 写方 CPU                              读方 CPU
 ─────────                             ─────────
-memcpy(payload)      ①               
+memcpy(payload)      ①             
 write_pos = new_val  ②                 load write_pos  → 看到 new_val
                                        memcpy(payload)  → 可能看到旧数据！
 ```
@@ -825,7 +825,7 @@ write_pos = new_val  ②                 load write_pos  → 看到 new_val
 ```
 写方                                  读方
 ─────                                ─────
-memcpy(payload)                    
+memcpy(payload)                  
 write_pos.store(release)  ③          write_pos.load(acquire)  ⑤
        │                                    │
        │  release 保证：                     │  acquire 保证：
@@ -869,22 +869,22 @@ x86 是 TSO（Total Store Order）架构，硬件保证：
 
 ## 11. 源文件索引
 
-| 文件                                      | 职责                                                                                                |
-| ----------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| `include/shm_ipc/error.hpp`             | `ErrorCode` 统一错误码、`ErrnoToErrorCode` errno 归类                                           |
+| 文件                                      | 职责                                                                                                                            |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `include/shm_ipc/error.hpp`             | `ErrorCode` 统一错误码、`ErrnoToErrorCode` errno 归类                                                                       |
 | `include/shm_ipc/common.hpp`            | `UniqueFd`, `MmapRegion`（含 `MapMirrored`）, `CreateMemfd`, `SendFd`/`RecvFd`, `CreateEventfd`, Unix socket 辅助 |
-| `include/shm_ipc/ringbuf.hpp`           | `RingBuf<Cap>` — 无锁 SPSC 字节环、`BatchWriter`、`reader_wait` 按需通知                          |
-| `include/shm_ipc/ring_channel.hpp`      | `RingChannel<Cap>` — 双向通道封装，fd 握手协议，`ChannelBatchWriter`，`PrepareWait`               |
-| `include/shm_ipc/codec.hpp`             | `MsgHeader`, `Encode`/`Decode`, `Send`/`SendFrame`/`SendFrameBatch`, `SHM_IPC_REGISTER_POD`      |
-| `include/shm_ipc/frame_reader.hpp`      | `FrameReader` — 零拷贝流式帧提取（Peek + CommitRead）                                            |
-| `include/shm_ipc/pod_codec.hpp`         | `PodCodec<T>` — POD 消息 codec，payload = `[tag u32][T bytes]`                                   |
-| `include/shm_ipc/simple_pod_codec.hpp`  | `codec::SimplePodCodec` — `std::any` 模型的通用 POD codec                                         |
-| `include/shm_ipc/proto_codec.hpp`       | `ProtoCodec<T>` — protobuf 消息 codec（需要 protobuf）                                            |
-| `include/shm_ipc/messages.hpp`          | `Heartbeat`, `ClientMsg` 应用层 POD 消息定义                                                      |
-| `include/shm_ipc/event_loop.hpp`        | `EventLoop` — poll + timerfd 事件循环                                                              |
-| `include/shm_ipc/client_state.hpp`      | `ClientState` — 连接状态聚合                                                                       |
-| `include/shm_ipc/shm_connection.hpp` 等 | 上层接口：`ShmConnection` / `ShmServer` / `ShmAsyncClient` / `ShmClient`（实现 `include/comm/` 接口）|
-| `src/server.cpp`                        | 多客户端服务端，EventLoop 驱动                                                                      |
-| `src/client.cpp`                        | 客户端，定时发送 + eventfd 接收                                                                     |
-| `bench/bench_shm.cpp`                   | fork + socketpair 回声延迟基准测试                                                                  |
-| `bench/bench_app.cpp`                   | 上层接口（ShmServer + ShmAsyncClient）按批吞吐基准                                                  |
+| `include/shm_ipc/ringbuf.hpp`           | `RingBuf<Cap>` — 无锁 SPSC 字节环、`BatchWriter`、`reader_wait` 按需通知                                                 |
+| `include/shm_ipc/ring_channel.hpp`      | `RingChannel<Cap>` — 双向通道封装，fd 握手协议，`ChannelBatchWriter`，`PrepareWait`                                      |
+| `include/shm_ipc/codec.hpp`             | `MsgHeader`, `Encode`/`Decode`, `Send`/`SendFrame`/`SendFrameBatch`, `SHM_IPC_REGISTER_POD`                       |
+| `include/shm_ipc/frame_reader.hpp`      | `FrameReader` — 零拷贝流式帧提取（Peek + CommitRead）                                                                        |
+| `include/shm_ipc/pod_codec.hpp`         | `PodCodec<T>` — POD 消息 codec，payload = `[tag u32][T bytes]`                                                             |
+| `include/shm_ipc/simple_pod_codec.hpp`  | `codec::SimplePodCodec` — `std::any` 模型的通用 POD codec                                                                  |
+| `include/shm_ipc/proto_codec.hpp`       | `ProtoCodec<T>` — protobuf 消息 codec（需要 protobuf）                                                                       |
+| `include/shm_ipc/messages.hpp`          | `Heartbeat`, `ClientMsg` 应用层 POD 消息定义                                                                                |
+| `include/shm_ipc/event_loop.hpp`        | `EventLoop` — poll + timerfd 事件循环                                                                                        |
+| `include/shm_ipc/client_state.hpp`      | `ClientState` — 连接状态聚合                                                                                                 |
+| `include/shm_ipc/shm_connection.hpp` 等 | 上层接口：`ShmConnection` / `ShmServer` / `ShmAsyncClient` / `ShmClient`（实现 `include/comm/` 接口）                 |
+| `src/server.cpp`                        | 多客户端服务端，EventLoop 驱动                                                                                                  |
+| `src/client.cpp`                        | 客户端，定时发送 + eventfd 接收                                                                                                 |
+| `bench/bench_shm.cpp`                   | fork + socketpair 回声延迟基准测试                                                                                              |
+| `bench/bench_app.cpp`                   | 上层接口（ShmServer + ShmAsyncClient）按批吞吐基准                                                                              |
