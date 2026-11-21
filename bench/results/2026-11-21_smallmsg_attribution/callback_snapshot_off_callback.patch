@@ -1,0 +1,11 @@
+--- current/common.hpp
++++ callback_snapshot_off/common.hpp
+@@ -59,7 +59,7 @@
+     template <typename... Args>
+     decltype(auto) operator()(Args&&... args) const
+     {
+-        auto active = callback_;
++        const auto& active = callback_;
+         return (*active)(std::forward<Args>(args)...);
+     }
+ 

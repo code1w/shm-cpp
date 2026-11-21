@@ -54,30 +54,26 @@ void HeadOfLine()
     healthy.join();
     server.Stop();
 }
-struct ReentrantCodec : comm::codec::Codec
+struct BroadcastCodec : comm::codec::Codec
 {
     shm::ShmServer* server;
     int length;
     bool stop_all;
-    explicit ReentrantCodec(shm::ShmServer* s, int n, bool stop) : server(s), length(n), stop_all(stop) {}
+    explicit BroadcastCodec(shm::ShmServer* s, int n, bool stop) : server(s), length(n), stop_all(stop) {}
     int32_t EncodedSize(const std::any&) const override { return length; }
     int32_t Encode(const std::any&, comm::byte* buf, size_t, size_t*) override
     {
-        if (stop_all)
-            server->Stop();
-        else
-            server->CloseConn(conn_id);
         memset(buf, 42, length);
         return length;
     }
 };
-void BroadcastReentry(int length, bool stop_all = false)
+void BroadcastAndClose(int length, bool stop_all = false)
 {
     shm::EventLoop loop;
     std::string path = "/tmp/shm-review-broadcast-" + std::to_string(getpid());
     shm::ShmServer server(&loop, path);
     Configure(server);
-    auto codec = std::make_shared<ReentrantCodec>(&server, length, stop_all);
+    auto codec = std::make_shared<BroadcastCodec>(&server, length, stop_all);
     server.SetCodecFactory([&] { return codec; });
     server.SetConnectionCallback([&](const auto&) {
         if (server.ConnCount() < (stop_all ? 2u : 1u))
@@ -87,6 +83,8 @@ void BroadcastReentry(int length, bool stop_all = false)
                    10,
                    [&](int, short) {
                        server.Broadcast(std::any{});
+                       if (stop_all) server.Stop();
+                       else server.CloseConn(codec->conn_id);
                        loop.Stop();
                    },
                    &t) == shm::ErrorCode::kOk);
@@ -98,7 +96,7 @@ void BroadcastReentry(int length, bool stop_all = false)
         assert(c.Connect(path));
         while (!done.load())
             std::this_thread::yield();
-        assert(c.Channel().Readable() == 0);
+        assert(c.Channel().Readable() == static_cast<uint64_t>(length));
     };
     std::thread peer(connect);
     std::thread second;
@@ -228,7 +226,7 @@ void NotifyEventfd()
     shm::UniqueFd pipe_read{wrong[0]}, pipe_write{wrong[1]};
     assert(shm::ValidateNotifyEventfd(pipe_read.Get()) == shm::ErrorCode::kProtocol);
 }
-struct ResizeDuringEncodeCodec : comm::codec::Codec
+struct ResizeBetweenCallsCodec : comm::codec::Codec
 {
     std::weak_ptr<shm::ShmConnection> connection;
     int calls = 0;
@@ -236,12 +234,11 @@ struct ResizeDuringEncodeCodec : comm::codec::Codec
     {
         if (calls++)
             assert(capacity >= 512 * 1024);
-        connection.lock()->ResizeBuffer(512 * 1024, 1024 * 1024);
-        buffer[0] = 42;  // ResizeBuffer 返回后，当前借用指针仍须有效
+        buffer[0] = 42;
         return 1;
     }
 };
-void ResizeDuringEncode()
+void ResizeBetweenCalls()
 {
     int sockets[2];
     assert(::socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) == 0);
@@ -256,11 +253,12 @@ void ResizeDuringEncode()
     peer.join();
     shm::EventLoop loop;
     auto conn         = std::make_shared<shm::ShmConnection>(&loop, 1, std::move(a), std::move(client));
-    auto codec        = std::make_shared<ResizeDuringEncodeCodec>();
+    auto codec        = std::make_shared<ResizeBetweenCallsCodec>();
     codec->connection = conn;
     conn->SetCodec(codec);
     conn->OnConnection();
     assert(conn->SendCmd(1));
+    conn->ResizeBuffer(512 * 1024, 1024 * 1024);
     assert(conn->SendCmd(2));
     unsigned char received[2]{};
     assert(server.ReadExact(received, sizeof(received)) == 0);
@@ -269,11 +267,11 @@ void ResizeDuringEncode()
 
 int main()
 {
-    ResizeDuringEncode();
+    ResizeBetweenCalls();
     OneShotDrain();
-    BroadcastReentry(1);
-    BroadcastReentry(256);
-    BroadcastReentry(1, true);
+    BroadcastAndClose(1);
+    BroadcastAndClose(256);
+    BroadcastAndClose(1, true);
     HeadOfLine();
     BatchRestart();
     NotifyEventfd();

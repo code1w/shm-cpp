@@ -1,0 +1,1 @@
+type=small  batch= 256 total=1000000 time=  0.254s rate=  3937198 msg/s      60.1 MB/s

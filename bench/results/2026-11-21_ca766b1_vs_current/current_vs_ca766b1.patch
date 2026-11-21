@@ -1,0 +1,2767 @@
+diff --git a/include/shm_ipc/common.hpp b/include/shm_ipc/common.hpp
+index 84313f2..dc7b89c 100644
+--- a/include/shm_ipc/common.hpp
++++ b/include/shm_ipc/common.hpp
+@@ -10,17 +10,24 @@
+ #define SHM_IPC_COMMON_HPP_
+ 
+ #include <fcntl.h>
++#include <poll.h>
+ #include <linux/memfd.h>
+ #include <sys/eventfd.h>
+ #include <sys/mman.h>
+ #include <sys/socket.h>
++#include <sys/stat.h>
+ #include <sys/syscall.h>
+ #include <sys/un.h>
+ #include <unistd.h>
+ 
++#include <algorithm>
+ #include <array>
++#include <chrono>
++#include <limits>
++#include <memory>
+ #include <cerrno>
+ #include <cstdint>
++#include <cstdio>
+ #include <cstring>
+ #include <string_view>
+ #include <utility>
+@@ -31,6 +38,37 @@ namespace shm {
+ 
+ inline constexpr const char* kDefaultSocketPath = "/tmp/fd-pass.socket";
+ 
++namespace detail {
++
++// 回调更新只替换槽位；调用期间持有原实例，保留 mutable 捕获的状态。
++// 分发时仅复制 shared_ptr，不复制 std::function，也不进行额外分配。
++template <typename Callback>
++class StableCallback
++{
++ public:
++    StableCallback& operator=(Callback callback)
++    {
++        std::shared_ptr<Callback> next;
++        if (callback) next = std::make_shared<Callback>(std::move(callback));
++        callback_ = std::move(next);
++        return *this;
++    }
++    explicit operator bool() const noexcept { return static_cast<bool>(callback_); }
++    Callback Copy() const { return callback_ ? *callback_ : Callback{}; }
++
++    template <typename... Args>
++    decltype(auto) operator()(Args&&... args) const
++    {
++        auto active = callback_;
++        return (*active)(std::forward<Args>(args)...);
++    }
++
++ private:
++    std::shared_ptr<Callback> callback_;
++};
++
++} // namespace detail
++
+ // memfd seal 常量：glibc 2.17 等老版本的 <fcntl.h> 未定义，而
+ // <linux/fcntl.h> 与其 struct flock 定义冲突，故直接使用内核 UAPI 固定值
+ #ifndef MFD_ALLOW_SEALING
+@@ -42,6 +80,10 @@ inline constexpr const char* kDefaultSocketPath = "/tmp/fd-pass.socket";
+ #define F_SEAL_GROW 0x0004    ///< 禁止 ftruncate 扩大文件
+ #endif
+ 
++#ifndef F_GET_SEALS
++#define F_GET_SEALS 1034
++#endif
++
+ // ---------------------------------------------------------------------------
+ // UniqueFd — 移动语义 RAII 文件描述符包装
+ // ---------------------------------------------------------------------------
+@@ -271,7 +313,7 @@ class MmapRegion
+ enum class FdTag : uint32_t
+ {
+     kMemfd   = 0x4D454D46,  ///< "MEMF"
+-    kEventfd = 0x45564644,  ///< "EVFD"
++    kEventfd = 0x45564644,  ///< "EVFD"：通道与独立 eventfd 传递工具
+ };
+ 
+ /** @brief 携带类型标签的文件描述符 */
+@@ -292,6 +334,7 @@ struct TaggedFd
+  * 发给对端后，任何持有 fd 者（含创建者）都无法再 ftruncate 改变大小，
+  * 防止恶意对端握手后缩小文件使接收方映射读越界（SIGBUS）。
+  * seal 不影响已建立的可写映射，本库创建后也不再改文件大小。
++ * 内核不支持封印或添加封印失败时返回错误，不创建缺少尺寸保护的环。
+  *
+  * @param name       memfd 名称（调试用，需 NUL 结尾）
+  * @param size       文件大小（字节）
+@@ -306,14 +349,8 @@ inline ErrorCode CreateMemfd(const char* name, std::size_t size, UniqueFd* out,
+         return ErrorCode::kInvalidArgument;
+     }
+ 
+-    // MFD_ALLOW_SEALING 允许随后 fcntl(F_ADD_SEALS)；内核不识别该标志
+-    // （EINVAL）时退化为普通 memfd，仅失去防 truncate 硬化
+-    int fd =
+-        static_cast<int>(::syscall(__NR_memfd_create, name, static_cast<unsigned>(MFD_CLOEXEC | MFD_ALLOW_SEALING)));
+-    if (fd < 0 && errno == EINVAL)
+-    {
+-        fd = static_cast<int>(::syscall(__NR_memfd_create, name, static_cast<unsigned>(MFD_CLOEXEC)));
+-    }
++    const int fd = static_cast<int>(::syscall(
++        __NR_memfd_create, name, static_cast<unsigned>(MFD_CLOEXEC | MFD_ALLOW_SEALING)));
+     if (fd < 0)
+     {
+         if (sys_errno)
+@@ -332,12 +369,48 @@ inline ErrorCode CreateMemfd(const char* name, std::size_t size, UniqueFd* out,
+         }
+         return ErrnoToErrorCode(err);
+     }
+-    // 封印尺寸（尽力而为：不支持 seal 的内核静默跳过，与历史行为一致）
+-    (void)::fcntl(fd, F_ADD_SEALS, F_SEAL_SHRINK | F_SEAL_GROW);
++    if (::fcntl(fd, F_ADD_SEALS, F_SEAL_SHRINK | F_SEAL_GROW) < 0)
++    {
++        const int err = errno;
++        ::close(fd);
++        return ErrnoFailure(err, sys_errno);
++    }
+     *out = UniqueFd{fd};
+     return ErrorCode::kOk;
+ }
+ 
++namespace detail {
++
++// 所有 fd 交换共用同一个 steady_clock 截止时间；EINTR/短读不重置预算。
++struct IoDeadline
++{
++    std::chrono::steady_clock::time_point end;
++    explicit IoDeadline(int timeout_ms)
++        : end(std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms)) {}
++
++    ErrorCode Wait(int fd, short events, int* sys_errno) const noexcept
++    {
++        for (;;)
++        {
++            const auto remaining = end - std::chrono::steady_clock::now();
++            if (remaining <= std::chrono::steady_clock::duration::zero())
++            {
++                if (sys_errno) *sys_errno = ETIMEDOUT;
++                return ErrorCode::kTimeout;
++            }
++            const auto us = std::chrono::duration_cast<std::chrono::microseconds>(remaining).count();
++            const int ms = static_cast<int>(std::min<int64_t>((us + 999) / 1000, INT32_MAX));
++            pollfd pfd{fd, events, 0};
++            const int rc = ::poll(&pfd, 1, ms);
++            if (rc > 0) return ErrorCode::kOk; // HUP/ERR 交由 sendmsg/recvmsg 解释
++            if (rc == 0) continue; // 用绝对时钟确认真正超时
++            if (errno != EINTR) return ErrnoFailure(errno, sys_errno);
++        }
++    }
++};
++
++} // namespace detail
++
+ /**
+  * @brief 通过 Unix socket 发送文件描述符（SCM_RIGHTS）
+  * @param socket    Unix socket fd
+@@ -346,7 +419,8 @@ inline ErrorCode CreateMemfd(const char* name, std::size_t size, UniqueFd* out,
+  * @param sys_errno 可选：失败时的 errno
+  */
+ [[nodiscard]]
+-inline ErrorCode SendFd(int socket, int fd, FdTag tag, int* sys_errno = nullptr) noexcept
++inline ErrorCode SendFd(int socket, int fd, FdTag tag, int* sys_errno = nullptr,
++                        const detail::IoDeadline* deadline = nullptr) noexcept
+ {
+     if (socket < 0 || fd < 0)
+     {
+@@ -383,9 +457,15 @@ inline ErrorCode SendFd(int socket, int fd, FdTag tag, int* sys_errno = nullptr)
+         ssize_t n = 0;
+         do
+         {
+-            n = ::sendmsg(socket, &msg, MSG_NOSIGNAL);
++            if (deadline)
++            {
++                const ErrorCode ec = deadline->Wait(socket, POLLOUT, sys_errno);
++                if (ec != ErrorCode::kOk) return ec;
++            }
++            n = ::sendmsg(socket, &msg, MSG_NOSIGNAL | (deadline ? MSG_DONTWAIT : 0));
+         } while (n < 0 && errno == EINTR);
+ 
++        if (n < 0 && deadline && (errno == EAGAIN || errno == EWOULDBLOCK)) continue;
+         if (n < 0)
+         {
+             if (sys_errno)
+@@ -420,6 +500,25 @@ inline ErrorCode TakeRightsFd(const msghdr& msg, UniqueFd* owned) noexcept
+     // 静默继续会导致 fd 泄漏或标签错位，必须显式报错
+     if (msg.msg_flags & MSG_CTRUNC)
+     {
++        // 内核仅自动关闭未交付的 fd；控制缓冲区中的 fd 已属于本进程。
++        auto received = msg;
++        for (auto* c = CMSG_FIRSTHDR(&received); c; c = CMSG_NXTHDR(&received, c))
++        {
++            if (c->cmsg_level != SOL_SOCKET || c->cmsg_type != SCM_RIGHTS || c->cmsg_len < CMSG_LEN(0))
++            {
++                continue;
++            }
++            const std::size_t n = (c->cmsg_len - CMSG_LEN(0)) / sizeof(int);
++            for (std::size_t i = 0; i < n; ++i)
++            {
++                int fd = -1;
++                std::memcpy(&fd, CMSG_DATA(c) + i * sizeof(int), sizeof(fd));
++                if (fd >= 0)
++                {
++                    ::close(fd);
++                }
++            }
++        }
+         return ErrorCode::kProtocol;
+     }
+ 
+@@ -467,7 +566,8 @@ inline ErrorCode TakeRightsFd(const msghdr& msg, UniqueFd* owned) noexcept
+  * @param sys_errno 可选：失败时的 errno
+  */
+ [[nodiscard]]
+-inline ErrorCode RecvFd(int socket, TaggedFd* out, int* sys_errno = nullptr) noexcept
++inline ErrorCode RecvFd(int socket, TaggedFd* out, int* sys_errno = nullptr,
++                        const detail::IoDeadline* deadline = nullptr) noexcept
+ {
+     if (socket < 0 || !out)
+     {
+@@ -500,9 +600,15 @@ inline ErrorCode RecvFd(int socket, TaggedFd* out, int* sys_errno = nullptr) noe
+         ssize_t n = 0;
+         do
+         {
+-            n = ::recvmsg(socket, &msg, MSG_WAITALL);
++            if (deadline)
++            {
++                const ErrorCode ec = deadline->Wait(socket, POLLIN, sys_errno);
++                if (ec != ErrorCode::kOk) return ec;
++            }
++            n = ::recvmsg(socket, &msg, MSG_CMSG_CLOEXEC | (deadline ? MSG_DONTWAIT : MSG_WAITALL));
+         } while (n < 0 && errno == EINTR);
+ 
++        if (n < 0 && deadline && (errno == EAGAIN || errno == EWOULDBLOCK)) continue;
+         if (n < 0)
+         {
+             return ErrnoFailure(errno, sys_errno);
+@@ -538,7 +644,8 @@ inline ErrorCode RecvFd(int socket, TaggedFd* out, int* sys_errno = nullptr) noe
+  * @param sys_errno 可选：失败时的 errno
+  */
+ [[nodiscard]]
+-inline ErrorCode RecvFdExpect(int socket, FdTag expected, UniqueFd* out, int* sys_errno = nullptr) noexcept
++inline ErrorCode RecvFdExpect(int socket, FdTag expected, UniqueFd* out, int* sys_errno = nullptr,
++                              const detail::IoDeadline* deadline = nullptr) noexcept
+ {
+     if (!out)
+     {
+@@ -546,7 +653,7 @@ inline ErrorCode RecvFdExpect(int socket, FdTag expected, UniqueFd* out, int* sy
+     }
+ 
+     TaggedFd tagged{};
+-    const ErrorCode ec = RecvFd(socket, &tagged, sys_errno);
++    const ErrorCode ec = RecvFd(socket, &tagged, sys_errno, deadline);
+     if (ec != ErrorCode::kOk)
+     {
+         return ec;
+@@ -586,6 +693,27 @@ inline ErrorCode CreateEventfd(UniqueFd* out, int* sys_errno = nullptr) noexcept
+     return ErrorCode::kOk;
+ }
+ 
++/** @brief 验证 Linux eventfd 的内核类型及非阻塞属性，失败即拒绝握手。
++ * /proc/self/fd 不可访问时返回系统错误，不能仅相信对端提供的类型标签。
++ */
++[[nodiscard]]
++inline ErrorCode ValidateNotifyEventfd(int fd, int* sys_errno = nullptr) noexcept
++{
++    const int flags = ::fcntl(fd, F_GETFL);
++    if (flags < 0) return ErrnoFailure(errno, sys_errno);
++    if (!(flags & O_NONBLOCK)) return ErrorCode::kProtocol;
++    char path[64];
++    std::snprintf(path, sizeof(path), "/proc/self/fd/%d", fd);
++    char target[64];
++    const ssize_t n = ::readlink(path, target, sizeof(target));
++    if (n < 0) return ErrnoFailure(errno, sys_errno);
++    constexpr char expected[] = "anon_inode:[eventfd]";
++    if (n != static_cast<ssize_t>(sizeof(expected) - 1) ||
++        std::memcmp(target, expected, sizeof(expected) - 1) != 0)
++        return ErrorCode::kProtocol;
++    return ErrorCode::kOk;
++}
++
+ /**
+  * @brief 从 uri 中提取 Unix socket 路径
+  *
+@@ -605,11 +733,11 @@ inline std::string_view UriToPath(std::string_view uri) noexcept
+ 
+ /**
+  * @brief 路径写入栈上的 NUL 结尾缓冲区
+- * @return false 表示路径过长或为空
++ * @return false 表示路径过长、为空、含嵌入 NUL 或输出缓冲非法
+  */
+ inline bool CopyUnixPath(std::string_view path, char* buf, std::size_t buf_size) noexcept
+ {
+-    if (path.empty() || path.size() >= buf_size)
++    if (!buf || path.empty() || path.size() >= buf_size || path.find('\0') != std::string_view::npos)
+     {
+         return false;
+     }
+@@ -620,7 +748,7 @@ inline bool CopyUnixPath(std::string_view path, char* buf, std::size_t buf_size)
+ 
+ /**
+  * @brief 创建并绑定 Unix domain socket 监听端
+- * @param path       socket 文件路径（已存在则先 unlink）
++ * @param path       socket 文件路径（已存在则返回错误，绝不替换已有入口）
+  * @param out        成功时写入监听 socket
+  * @param backlog    listen 积压队列长度
+  * @param sys_errno  可选：失败时的 errno
+@@ -639,12 +767,12 @@ inline ErrorCode ListenUnixSocket(std::string_view path, UniqueFd* out, int back
+     {
+         if (sys_errno)
+         {
+-            *sys_errno = ENAMETOOLONG;
++            *sys_errno = path.size() >= sizeof(cpath) ? ENAMETOOLONG : EINVAL;
+         }
+         return ErrorCode::kInvalidArgument;
+     }
+ 
+-    UniqueFd sfd{::socket(AF_UNIX, SOCK_STREAM, 0)};
++    UniqueFd sfd{::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0)};
+     if (!sfd)
+     {
+         if (sys_errno)
+@@ -654,8 +782,6 @@ inline ErrorCode ListenUnixSocket(std::string_view path, UniqueFd* out, int back
+         return ErrnoToErrorCode(errno);
+     }
+ 
+-    ::unlink(cpath);
+-
+     sockaddr_un addr{};
+     addr.sun_family = AF_UNIX;
+     std::memcpy(addr.sun_path, cpath, std::strlen(cpath));
+@@ -668,13 +794,19 @@ inline ErrorCode ListenUnixSocket(std::string_view path, UniqueFd* out, int back
+         }
+         return ErrnoToErrorCode(errno);
+     }
++    // bind 已创建路径。记录节点身份，listen 失败时只回收本次创建的入口。
++    struct stat bound{};
++    const bool have_identity = ::lstat(cpath, &bound) == 0 && S_ISSOCK(bound.st_mode);
+     if (::listen(sfd.Get(), backlog) < 0)
+     {
+-        if (sys_errno)
++        const int err = errno;
++        struct stat current{};
++        if (have_identity && ::lstat(cpath, &current) == 0 && S_ISSOCK(current.st_mode) &&
++            current.st_dev == bound.st_dev && current.st_ino == bound.st_ino)
+         {
+-            *sys_errno = errno;
++            ::unlink(cpath);
+         }
+-        return ErrnoToErrorCode(errno);
++        return ErrnoFailure(err, sys_errno);
+     }
+ 
+     *out = std::move(sfd);
+@@ -686,9 +818,11 @@ inline ErrorCode ListenUnixSocket(std::string_view path, UniqueFd* out, int back
+  * @param path       socket 文件路径
+  * @param out        成功时写入已连接的 socket
+  * @param sys_errno  可选：失败时的 errno
++ * @param shared_deadline 可选：与后续握手共享的截止时间；默认连接超时 5 秒
+  */
+ [[nodiscard]]
+-inline ErrorCode ConnectUnixSocket(std::string_view path, UniqueFd* out, int* sys_errno = nullptr) noexcept
++inline ErrorCode ConnectUnixSocket(std::string_view path, UniqueFd* out, int* sys_errno = nullptr,
++                                   const detail::IoDeadline* shared_deadline = nullptr) noexcept
+ {
+     if (!out)
+     {
+@@ -700,12 +834,12 @@ inline ErrorCode ConnectUnixSocket(std::string_view path, UniqueFd* out, int* sy
+     {
+         if (sys_errno)
+         {
+-            *sys_errno = ENAMETOOLONG;
++            *sys_errno = path.size() >= sizeof(cpath) ? ENAMETOOLONG : EINVAL;
+         }
+         return ErrorCode::kInvalidArgument;
+     }
+ 
+-    UniqueFd sfd{::socket(AF_UNIX, SOCK_STREAM, 0)};
++    UniqueFd sfd{::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0)};
+     if (!sfd)
+     {
+         if (sys_errno)
+@@ -719,14 +853,38 @@ inline ErrorCode ConnectUnixSocket(std::string_view path, UniqueFd* out, int* sy
+     addr.sun_family = AF_UNIX;
+     std::memcpy(addr.sun_path, cpath, std::strlen(cpath));
+ 
+-    if (::connect(sfd.Get(), reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0)
++    const detail::IoDeadline local_deadline{5000};
++    const auto& deadline = shared_deadline ? *shared_deadline : local_deadline;
++    for (;;)
+     {
+-        if (sys_errno)
+-        {
+-            *sys_errno = errno;
++        if (std::chrono::steady_clock::now() >= deadline.end)
++            return ErrnoFailure(ETIMEDOUT, sys_errno);
++        if (::connect(sfd.Get(), reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0) break;
++        const int err = errno;
++        if (err == EINTR) continue;
++        if (err == EAGAIN || err == EWOULDBLOCK)
++        {
++            // AF_UNIX 队列满时尚未开始连接；POLLOUT 可能立即返回，必须限速重试。
++            const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
++                deadline.end - std::chrono::steady_clock::now()).count();
++            if (remaining <= 0) return ErrnoFailure(ETIMEDOUT, sys_errno);
++            if (::poll(nullptr, 0, static_cast<int>(std::min<int64_t>(remaining, 10))) < 0 && errno != EINTR)
++                return ErrnoFailure(errno, sys_errno);
++            continue;
+         }
+-        return ErrnoToErrorCode(errno);
++        if (err != EINPROGRESS && err != EALREADY) return ErrnoFailure(err, sys_errno);
++        const ErrorCode ec = deadline.Wait(sfd.Get(), POLLOUT, sys_errno);
++        if (ec != ErrorCode::kOk) return ec;
++        int socket_error = 0;
++        socklen_t length = sizeof(socket_error);
++        if (::getsockopt(sfd.Get(), SOL_SOCKET, SO_ERROR, &socket_error, &length) != 0)
++            return ErrnoFailure(errno, sys_errno);
++        if (socket_error != 0) return ErrnoFailure(socket_error, sys_errno);
++        break;
+     }
++    const int flags = ::fcntl(sfd.Get(), F_GETFL);
++    if (flags < 0 || ::fcntl(sfd.Get(), F_SETFL, flags & ~O_NONBLOCK) < 0)
++        return ErrnoFailure(errno, sys_errno);
+ 
+     *out = std::move(sfd);
+     return ErrorCode::kOk;
+diff --git a/include/shm_ipc/error.hpp b/include/shm_ipc/error.hpp
+index 4eec6cd..169db62 100644
+--- a/include/shm_ipc/error.hpp
++++ b/include/shm_ipc/error.hpp
+@@ -27,7 +27,7 @@ enum class ErrorCode : int32_t
+     kOk = 0,           ///< 成功
+     kInvalidArgument,  ///< 参数非法（空出参、路径过长等）
+     kSystem,           ///< 系统调用失败（errno 见 sys_errno 出参）
+-    kTimeout,          ///< EAGAIN/EWOULDBLOCK（握手超时等）
++    kTimeout,          ///< EAGAIN/EWOULDBLOCK/ETIMEDOUT（连接、握手超时等）
+     kPeerClosed,       ///< 对端关闭（EOF/EPIPE/ECONNRESET/ENOTCONN）
+     kProtocol,         ///< 协议错误（tag 不符、非法控制消息、CTRUNC）
+     kSizeMismatch,     ///< 对端环尺寸与本地 Capacity 不一致
+@@ -70,6 +70,7 @@ inline ErrorCode ErrnoToErrorCode(int err) noexcept
+ {
+     switch (err)
+     {
++        case ETIMEDOUT:
+         case EAGAIN:
+ #if EWOULDBLOCK != EAGAIN
+         case EWOULDBLOCK:
+diff --git a/include/shm_ipc/event_loop.hpp b/include/shm_ipc/event_loop.hpp
+index 04a6f96..499748f 100644
+--- a/include/shm_ipc/event_loop.hpp
++++ b/include/shm_ipc/event_loop.hpp
+@@ -28,6 +28,7 @@
+ #include <deque>
+ #include <functional>
+ #include <new>
++#include <limits>
+ #include <utility>
+ #include <vector>
+ 
+@@ -44,7 +45,7 @@ class EventLoop
+     using Hook     = std::function<void()>;
+     using HookId   = uint64_t;
+ 
+-    EventLoop()  = default;
++    EventLoop() { wake_error_ = CreateEventfd(&wake_fd_, &wake_errno_); }
+     ~EventLoop() = default;
+ 
+     // 禁止复制和移动（回调可能引用外部局部状态）
+@@ -155,7 +156,7 @@ class EventLoop
+ 
+         try
+         {
+-            owned_timerfds_.emplace_back(tfd);
++            owned_timerfds_.emplace_back(tfd, next_timer_id_++);
+         }
+         catch (const std::bad_alloc&)
+         {
+@@ -186,7 +187,7 @@ class EventLoop
+      * @param sys_errno 可选：失败时的 errno
+      */
+     [[nodiscard]]
+-    ErrorCode AddOneShotTimer(int delay_ms, Callback cb, int* out_tfd, int* sys_errno = nullptr)
++    ErrorCode AddOneShotTimer(int64_t delay_ms, Callback cb, int* out_tfd, int* sys_errno = nullptr)
+     {
+         if (!out_tfd)
+         {
+@@ -202,7 +203,7 @@ class EventLoop
+ 
+         try
+         {
+-            owned_timerfds_.emplace_back(tfd);
++            owned_timerfds_.emplace_back(tfd, next_timer_id_++);
+         }
+         catch (const std::bad_alloc&)
+         {
+@@ -212,7 +213,8 @@ class EventLoop
+ 
+         try
+         {
+-            AddFd(tfd, [this, tfd, cb = std::move(cb)](int fd, short revents) {
++            const uint64_t timer_id = owned_timerfds_.back().id;
++            AddFd(tfd, [this, tfd, timer_id, cb = std::move(cb)](int fd, short revents) {
+                 DrainTimerfd(fd);
+                 // 先打墓碑（本轮不再补触发），但延迟 close：回调拿到的 fd
+                 // 仍有效（旧实现先 RemoveTimer 关闭 fd 再回调，回调内
+@@ -224,10 +226,10 @@ class EventLoop
+                 }
+                 catch (...)
+                 {
+-                    CloseOwnedTimer(tfd);
++                    CloseOwnedTimerById(timer_id);
+                     throw;
+                 }
+-                CloseOwnedTimer(tfd);
++                CloseOwnedTimerById(timer_id);
+             });
+         }
+         catch (const std::bad_alloc&)
+@@ -255,15 +257,40 @@ class EventLoop
+     }
+ 
+     /**
+-     * @brief 运行事件循环，直到 Stop() 被调用
++     * @brief 运行事件循环，直到 Stop() 被调用；同一实例不允许嵌套或并发 Run
+      * @param poll_timeout_ms poll 超时（毫秒），-1 表示阻塞等待
+      * @param sys_errno       可选：poll 失败时的 errno
+-     * @return kOk 正常停止；kNoMemory 构建 pollfd 数组失败；
++     * @return kInvalidArgument 已有 Run 尚未退出（errno 出参为 EBUSY）；
++     *         kOk 正常停止；kNoMemory 构建 pollfd 数组失败；
+      *         kSystem/kTimeout poll 失败；用户回调异常仍向外传播
+      */
+     [[nodiscard]]
+     ErrorCode Run(int poll_timeout_ms = 500, int* sys_errno = nullptr)
+     {
++        // Stop 只请求退出，不能让仍在分发/回收的外层 Run 提前失去所有权。
++        bool expected = false;
++        if (!run_active_.compare_exchange_strong(expected, true, std::memory_order_acquire,
++                                                 std::memory_order_relaxed))
++        {
++            if (sys_errno) *sys_errno = EBUSY;
++            return ErrorCode::kInvalidArgument;
++        }
++        struct RunGuard
++        {
++            std::atomic<bool>& active;
++            std::atomic<bool>& running;
++            ~RunGuard()
++            {
++                running.store(false, std::memory_order_relaxed);
++                active.store(false, std::memory_order_release);
++            }
++        } guard{run_active_, running_};
++
++        if (wake_error_ != ErrorCode::kOk)
++        {
++            if (sys_errno) *sys_errno = wake_errno_;
++            return wake_error_;
++        }
+         running_.store(true, std::memory_order_relaxed);
+         while (running_.load(std::memory_order_relaxed))
+         {
+@@ -272,7 +299,7 @@ class EventLoop
+             std::vector<std::size_t> idx;
+             try
+             {
+-                pfds.reserve(entries_.size());
++                pfds.reserve(entries_.size() + 1);
+                 idx.reserve(entries_.size());
+                 for (std::size_t k = 0; k < entries_.size(); ++k)
+                 {
+@@ -283,6 +310,7 @@ class EventLoop
+                     pfds.push_back({entries_[k].fd, entries_[k].events, 0});
+                     idx.push_back(k);
+                 }
++                pfds.push_back({wake_fd_.Get(), POLLIN, 0});
+             }
+             catch (const std::bad_alloc&)
+             {
+@@ -305,11 +333,17 @@ class EventLoop
+                 return ErrnoToErrorCode(errno);
+             }
+ 
++            if (pfds.back().revents & POLLIN)
++            {
++                uint64_t count;
++                while (::read(wake_fd_.Get(), &count, sizeof(count)) < 0 && errno == EINTR) {}
++            }
++
+             // 分发事件。分发期间 AddFd 只追加（deque 追加不失效既有元素引用）、
+             // RemoveFd 只打墓碑（分发前重查），下标映射保持稳定
+             try
+             {
+-                for (std::size_t i = 0; i < pfds.size() && running_.load(std::memory_order_relaxed); ++i)
++                for (std::size_t i = 0; i < idx.size() && running_.load(std::memory_order_relaxed); ++i)
+                 {
+                     Entry& e = entries_[idx[i]];
+                     if (!e.dead && pfds[i].revents != 0 && e.cb)
+@@ -344,12 +378,22 @@ class EventLoop
+     }
+ 
+     /** @brief 停止事件循环（线程安全、信号安全） */
+-    void Stop() { running_.store(false, std::memory_order_relaxed); }
++    void Stop() noexcept
++    {
++        const int saved_errno = errno;
++        running_.store(false, std::memory_order_relaxed);
++        const uint64_t one = 1;
++        if (wake_fd_)
++        {
++            while (::write(wake_fd_.Get(), &one, sizeof(one)) < 0 && errno == EINTR) {}
++        }
++        errno = saved_errno;
++    }
+ 
+     /**
+-     * @brief 排空 timerfd（必须在定时器回调中调用以清除事件）
++     * @brief 非阻塞排空 timerfd：周期回调需调用；一次性回调已由包装层排空
+      * @param tfd timerfd 文件描述符
+-     * @return 到期次数
++     * @return 到期次数，已排空时返回 0
+      */
+     static uint64_t DrainTimerfd(int tfd)
+     {
+@@ -368,14 +412,20 @@ class EventLoop
+      * @param out_fd 成功时写入 timerfd
+      */
+     [[nodiscard]]
+-    static ErrorCode CreateTimerfd(int initial_ms, int interval_ms, int* out_fd, int* sys_errno) noexcept
++    static ErrorCode CreateTimerfd(int64_t initial_ms, int64_t interval_ms, int* out_fd, int* sys_errno) noexcept
+     {
+         if (!out_fd)
+         {
+             return ErrorCode::kInvalidArgument;
+         }
+ 
+-        const int tfd = ::timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC);
++        if (initial_ms / 1000 > std::numeric_limits<time_t>::max() ||
++            interval_ms / 1000 > std::numeric_limits<time_t>::max())
++        {
++            return ErrorCode::kInvalidArgument;
++        }
++
++        const int tfd = ::timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
+         if (tfd < 0)
+         {
+             if (sys_errno)
+@@ -447,13 +497,27 @@ class EventLoop
+     void CloseOwnedTimer(int tfd)
+     {
+         auto it = std::find_if(owned_timerfds_.begin(), owned_timerfds_.end(),
+-                               [tfd](const UniqueFd& u) { return u.Get() == tfd; });
++                               [tfd](const OwnedTimer& timer) { return timer.fd.Get() == tfd; });
+         if (it != owned_timerfds_.end())
+         {
+             owned_timerfds_.erase(it);
+         }
+     }
+ 
++    void CloseOwnedTimerById(uint64_t id)
++    {
++        auto it = std::find_if(owned_timerfds_.begin(), owned_timerfds_.end(),
++                              [id](const OwnedTimer& timer) { return timer.id == id; });
++        if (it != owned_timerfds_.end()) owned_timerfds_.erase(it);
++    }
++
++    struct OwnedTimer
++    {
++        UniqueFd fd;
++        uint64_t id;
++        OwnedTimer(int descriptor, uint64_t identity) noexcept : fd(descriptor), id(identity) {}
++    };
++
+     /** @brief 回收所有墓碑条目（仅在非分发阶段调用） */
+     void CompactDead()
+     {
+@@ -464,11 +528,16 @@ class EventLoop
+     // deque 而非 vector：回调内 AddFd 追加时，既有元素的引用不失效，
+     // 分发循环中持有的 Entry& 在回调执行期间始终有效
+     std::deque<Entry> entries_;                        ///< fd 监听条目列表
+-    std::vector<UniqueFd> owned_timerfds_;             ///< EventLoop 持有的 timerfd 列表
++    std::vector<OwnedTimer> owned_timerfds_;             ///< EventLoop 持有的 timerfd 列表
+     std::vector<std::pair<HookId, Hook>> post_hooks_;  ///< 分发批次结束钩子
++    UniqueFd wake_fd_;
++    ErrorCode wake_error_ = ErrorCode::kOk;
++    int wake_errno_ = 0;
++    uint64_t next_timer_id_ = 1;
+     HookId next_hook_id_ = 1;                          ///< 下一个钩子 ID
+     /// 事件循环运行标志（atomic 以支持信号处理器写入）；纯停止标志，不发布其他数据，故各处用 relaxed
+     std::atomic<bool> running_{false};
++    std::atomic<bool> run_active_{false};  ///< Run 独占所有权，至分发/回收完全退出才释放
+ };
+ 
+ }  // namespace shm
+diff --git a/include/shm_ipc/frame_reader.hpp b/include/shm_ipc/frame_reader.hpp
+index a3559d3..609c586 100644
+--- a/include/shm_ipc/frame_reader.hpp
++++ b/include/shm_ipc/frame_reader.hpp
+@@ -9,6 +9,7 @@
+ #include <cstdint>
+ #include <cstring>
+ #include <vector>
++#include <utility>
+ 
+ #include "codec.hpp"
+ #include "ring_channel.hpp"
+@@ -37,6 +38,14 @@ class FrameReader
+ 
+     virtual ~FrameReader() = default;
+ 
++    FrameReader(const FrameReader&) = delete;
++    FrameReader& operator=(const FrameReader&) = delete;
++    // 仅移动构造转移待提交帧；移动赋值会丢失目标待提交帧，故禁用。
++    FrameReader(FrameReader&& other) noexcept
++        : hdr_(other.hdr_), pending_commit_(std::exchange(other.pending_commit_, 0)),
++          buf_(std::move(other.buf_)) {}
++    FrameReader& operator=(FrameReader&&) = delete;
++
+     /**
+      * @brief 尝试从 RingChannel 中零拷贝读取一个完整帧
+      *
+@@ -48,7 +57,7 @@ class FrameReader
+      * @param[out] payload     payload 指针（指向 ring 内部或内部缓冲区）
+      * @param[out] payload_len payload 字节数
+      * @return 0 成功，-1 数据不足，-2 帧跨环尾且超过回退缓冲区上限
+-     *         MaxBufSize（默认不设上限），-3 帧头长度非法（协议错误，
++     *         MaxBufSize（默认不设上限），-3 帧头长度或环控制头非法（协议错误，
+      *         连接应视为损坏并断开）
+      *
+      * @note -2 时帧被标记为待丢弃：下次 TryRecv/Commit 会自动跳过该帧，
+@@ -70,7 +79,9 @@ class FrameReader
+         const void* seg2  = nullptr;
+         uint32_t seg2_len = 0;
+ 
+-        if (ch.Peek(&seg1, &seg1_len, &seg2, &seg2_len) != 0)
++        const int peek = ch.Peek(&seg1, &seg1_len, &seg2, &seg2_len);
++        if (peek == -2) return -3;  // 控制头损坏，同协议错误处理
++        if (peek != 0)
+         {
+             return -1;
+         }
+diff --git a/include/shm_ipc/proto_codec.hpp b/include/shm_ipc/proto_codec.hpp
+index b442160..9ec7efb 100644
+--- a/include/shm_ipc/proto_codec.hpp
++++ b/include/shm_ipc/proto_codec.hpp
+@@ -11,6 +11,7 @@
+ #define SHM_IPC_PROTO_CODEC_HPP_
+ 
+ #include <cstring>
++#include <limits>
+ #include <string>
+ #include <vector>
+ 
+@@ -118,8 +119,9 @@ class ProtoCodec : public ICodec
+     static uint32_t EncodeTo(const T& msg, void* buf, uint32_t buf_size, uint32_t seq)
+     {
+         std::string name = msg.GetTypeName();
+-        auto name_len    = static_cast<uint16_t>(name.size());
+-        auto pb_len      = static_cast<uint32_t>(msg.ByteSizeLong());
++        uint16_t name_len = 0;
++        uint32_t pb_len = 0;
++        if (!CheckedSize(msg, name, &name_len, &pb_len)) return 0;
+ 
+         const uint32_t payload_len = kTypeNameLenSize + name_len + pb_len;
+         char* p                    = EncodeFrame(buf, buf_size, payload_len, seq);
+@@ -134,7 +136,7 @@ class ProtoCodec : public ICodec
+         std::memcpy(p, name.data(), name_len);
+         p += name_len;
+ 
+-        msg.SerializeToArray(p, static_cast<int>(pb_len));
++        if (!msg.SerializeToArray(p, static_cast<int>(pb_len))) return 0;
+         return kMsgHeaderSize + payload_len;
+     }
+ 
+@@ -188,6 +190,7 @@ class ProtoCodec : public ICodec
+      */
+     static bool DecodeFrom(const void* payload, uint32_t payload_len, T* out)
+     {
++        if (payload_len > static_cast<uint32_t>(std::numeric_limits<int>::max())) return false;
+         return out->ParseFromArray(payload, static_cast<int>(payload_len));
+     }
+ 
+@@ -205,9 +208,9 @@ class ProtoCodec : public ICodec
+     static int Send(RingChannel<Cap>& ch, const T& msg, uint32_t seq)
+     {
+         std::string name = msg.GetTypeName();
+-        auto name_len    = static_cast<uint16_t>(name.size());
+-        auto pb_len      = static_cast<uint32_t>(msg.ByteSizeLong());
+-        if (pb_len > RingChannel<Cap>::kMaxWriteSize)
++        uint16_t name_len = 0;
++        uint32_t pb_len = 0;
++        if (!CheckedSize(msg, name, &name_len, &pb_len) || pb_len > RingChannel<Cap>::kMaxWriteSize)
+         {
+             return -1;
+         }
+@@ -216,10 +219,7 @@ class ProtoCodec : public ICodec
+         return SendFrame(ch, payload_len, seq, [&](auto& batch) {
+             batch.TryWrite(&name_len, kTypeNameLenSize);
+             batch.TryWrite(name.data(), name_len);
+-            if (pb_len > 0)
+-            {
+-                SerializeToBatch(batch, msg, pb_len);
+-            }
++            if (!SerializeToBatch(batch, msg, pb_len)) batch.Cancel();
+         });
+     }
+ 
+@@ -232,21 +232,20 @@ class ProtoCodec : public ICodec
+     static int SendBatch(typename RingChannel<Cap>::ChannelBatchWriter& batch, const T& msg, uint32_t seq)
+     {
+         std::string name = msg.GetTypeName();
+-        auto name_len    = static_cast<uint16_t>(name.size());
+-        auto pb_len      = static_cast<uint32_t>(msg.ByteSizeLong());
+-        if (pb_len > RingChannel<Cap>::kMaxWriteSize)
++        uint16_t name_len = 0;
++        uint32_t pb_len = 0;
++        if (!CheckedSize(msg, name, &name_len, &pb_len) || pb_len > RingChannel<Cap>::kMaxWriteSize)
+         {
+             return -1;
+         }
+         uint32_t payload_len = kTypeNameLenSize + name_len + pb_len;
+ 
++        const uint64_t before = batch.PendingBytes();
++        const int before_count = batch.Count();
+         return SendFrameBatch<Cap>(batch, payload_len, seq, [&](auto& b) {
+             b.TryWrite(&name_len, kTypeNameLenSize);
+             b.TryWrite(name.data(), name_len);
+-            if (pb_len > 0)
+-            {
+-                SerializeToBatch(b, msg, pb_len);
+-            }
++            if (!SerializeToBatch(b, msg, pb_len)) b.RewindTo(before, before_count);
+         });
+     }
+ 
+@@ -286,6 +285,17 @@ class ProtoCodec : public ICodec
+     }
+ 
+  private:
++    static bool CheckedSize(const T& msg, const std::string& name, uint16_t* name_len, uint32_t* pb_len)
++    {
++        const auto size = msg.ByteSizeLong();
++        if (name.size() > UINT16_MAX || size > static_cast<uint64_t>(std::numeric_limits<int>::max())) return false;
++        const uint64_t total = kMsgHeaderSize + kTypeNameLenSize + static_cast<uint64_t>(name.size()) + size;
++        if (total > UINT32_MAX) return false;
++        *name_len = static_cast<uint16_t>(name.size());
++        *pb_len = static_cast<uint32_t>(size);
++        return true;
++    }
++
+     /**
+      * @brief 校验帧内 type_name 是否与 T 的实际类型名一致
+      */
+@@ -303,13 +313,19 @@ class ProtoCodec : public ICodec
+      * 优先使用 Reserve 获取直写指针（零拷贝），跨环尾时回退到临时缓冲区。
+      */
+     template <typename BatchWriter>
+-    static void SerializeToBatch(BatchWriter& batch, const T& msg, uint32_t pb_len)
++    static bool SerializeToBatch(BatchWriter& batch, const T& msg, uint32_t pb_len)
+     {
++        if (pb_len == 0)
++        {
++            char empty = 0;
++            return msg.SerializeToArray(&empty, 0);
++        }
+         char* ptr = batch.Reserve(pb_len);
+         if (ptr)
+         {
+-            msg.SerializeToArray(ptr, static_cast<int>(pb_len));
++            if (!msg.SerializeToArray(ptr, static_cast<int>(pb_len))) return false;
+             batch.CommitReserve(pb_len);
++            return true;
+         }
+         else
+         {
+@@ -322,8 +338,8 @@ class ProtoCodec : public ICodec
+                 heap_buf.resize(pb_len);
+                 buf = heap_buf.data();
+             }
+-            msg.SerializeToArray(buf, static_cast<int>(pb_len));
+-            batch.TryWrite(buf, pb_len);
++            if (!msg.SerializeToArray(buf, static_cast<int>(pb_len))) return false;
++            return batch.TryWrite(buf, pb_len) == 0;
+         }
+     }
+ };
+diff --git a/include/shm_ipc/ring_channel.hpp b/include/shm_ipc/ring_channel.hpp
+index 544be42..94785b0 100644
+--- a/include/shm_ipc/ring_channel.hpp
++++ b/include/shm_ipc/ring_channel.hpp
+@@ -3,11 +3,11 @@
+  * @brief 双向共享内存环形通道（C++17）
+  *
+  * 封装一对字节流环形缓冲区（一写一读），并包含 memfd 创建、
+- * eventfd 创建及 fd 交换握手逻辑。
++ * 通知 eventfd 创建及 fd 交换握手逻辑。
+  *
+- * 通知机制：每个方向拥有一个共享 eventfd。读方创建后通过
+- * SCM_RIGHTS 发送给写方。写方调用 NotifyPeer() 写入 eventfd；
+- * 读方轮询 NotifyReadFd() 的 POLLIN 事件。
++ * 通知机制：每个方向使用一个非阻塞 eventfd。读方保留本地 fd，并通过
++ * SCM_RIGHTS 将其传给对端；写方发布数据后按 reader_wait 状态写入计数唤醒读方。
++ * 两端必须保持共享 eventfd 的 O_NONBLOCK 属性，不得修改其阻塞模式。
+  */
+ 
+ #ifndef SHM_IPC_RING_CHANNEL_HPP_
+@@ -41,32 +41,11 @@ class RingChannel;
+ 
+ namespace detail {
+ 
+-/// @brief RAII：握手期间设置 socket 收发超时（5秒，防止半连接阻塞），
+-///        结束（含异常路径）恢复默认阻塞模式
+-struct HandshakeGuard
+-{
+-    explicit HandshakeGuard(int fd) : fd_(fd)
+-    {
+-        timeval tv{};
+-        tv.tv_sec  = 5;
+-        tv.tv_usec = 0;
+-        ::setsockopt(fd_, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+-        ::setsockopt(fd_, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+-    }
+-    ~HandshakeGuard()
+-    {
+-        timeval tv{};
+-        ::setsockopt(fd_, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+-        ::setsockopt(fd_, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+-    }
+-    int fd_;
+-};
+-
+ /**
+  * @brief RAII 通道级批量写入器
+  *
+  * 封装 RingBuf::BatchWriter，Flush 时自动调用 NotifyPeer()。
+- * 将 N 次写入的原子操作从 3N 降至 2，eventfd 通知从 N 降至 1。
++ * 将 N 次写入的原子操作从 3N 降至 2，通知 eventfd 通知从 N 降至 1。
+  *
+  * @code
+  * {
+@@ -198,7 +177,7 @@ class RingChannel
+ 
+     RingChannel() = default;
+ 
+-    // 移动语义（持有 memfd、mmap 区域、eventfd），禁止复制
++    // 移动语义（持有 memfd、mmap 区域、通知 eventfd），禁止复制
+     RingChannel(RingChannel&&)                 = default;
+     RingChannel& operator=(RingChannel&&)      = default;
+     RingChannel(const RingChannel&)            = delete;
+@@ -211,19 +190,20 @@ class RingChannel
+      *
+      *   客户端（kClient）              服务端（kServer）
+      *   1. 发送 memfd_c2s      →       1. 接收 memfd_c2s
+-     *   2. 发送 efd_client     →       2. 接收 efd_client（服务端写入唤醒客户端）
++     *   2. 发送 notify_client     →       2. 接收 notify_client（服务端写入唤醒客户端）
+      *   3. 接收 memfd_s2c      ←       3. 创建并发送 memfd_s2c
+-     *   4. 接收 efd_server     ←       4. 创建并发送 efd_server（客户端写入唤醒服务端）
++     *   4. 接收 notify_server     ←       4. 创建并发送 notify_server（客户端写入唤醒服务端）
+      *
+      * @param socket_fd 已建立连接的 Unix socket fd
+      * @param role      本端角色
+      * @param out       成功时写入初始化完成的 RingChannel（失败时保持原状）
+      * @param sys_errno 可选：失败时的 errno
++     * @param shared_deadline 可选：连接与握手共用的期限；为空时握手预算为 5 秒
+      * @return kOk 成功；kSizeMismatch 对端环尺寸不符；其余见 ErrorCode
+      */
+     [[nodiscard]]
+     static ErrorCode CreateRingChannel(int socket_fd, ChannelRole role, RingChannel* out,
+-                                       int* sys_errno = nullptr) noexcept
++                                       int* sys_errno = nullptr, const detail::IoDeadline* shared_deadline = nullptr) noexcept
+     {
+         if (!out || socket_fd < 0)
+         {
+@@ -231,7 +211,8 @@ class RingChannel
+         }
+ 
+         RingChannel ch;
+-        const detail::HandshakeGuard guard{socket_fd};  // 握手超时，返回时恢复
++        const detail::IoDeadline local_deadline{5000};
++        const detail::IoDeadline& deadline = shared_deadline ? *shared_deadline : local_deadline;
+ 
+         ErrorCode ec = ErrorCode::kOk;
+         if (role == ChannelRole::kClient)
+@@ -241,17 +222,17 @@ class RingChannel
+             {
+                 return ec;
+             }
+-            ec = CreateEventfd(&ch.notify_read_efd_, sys_errno);
++            ec = ch.CreateNotifyEventfd(sys_errno);
+             if (ec != ErrorCode::kOk)
+             {
+                 return ec;
+             }
+-            ec = ch.SendLocalFds(socket_fd, sys_errno);  // 先发：memfd_c2s、efd_client
++            ec = ch.SendLocalFds(socket_fd, sys_errno, &deadline);  // 先发：memfd_c2s、notify_client
+             if (ec != ErrorCode::kOk)
+             {
+                 return ec;
+             }
+-            ec = ch.RecvPeerFds(socket_fd, sys_errno);  // 后收：memfd_s2c、efd_server
++            ec = ch.RecvPeerFds(socket_fd, sys_errno, &deadline);  // 后收：memfd_s2c、notify_server
+             if (ec != ErrorCode::kOk)
+             {
+                 return ec;
+@@ -259,7 +240,7 @@ class RingChannel
+         }
+         else
+         {
+-            ec = ch.RecvPeerFds(socket_fd, sys_errno);  // 先收：memfd_c2s、efd_client
++            ec = ch.RecvPeerFds(socket_fd, sys_errno, &deadline);  // 先收：memfd_c2s、notify_client
+             if (ec != ErrorCode::kOk)
+             {
+                 return ec;
+@@ -269,12 +250,12 @@ class RingChannel
+             {
+                 return ec;
+             }
+-            ec = CreateEventfd(&ch.notify_read_efd_, sys_errno);
++            ec = ch.CreateNotifyEventfd(sys_errno);
+             if (ec != ErrorCode::kOk)
+             {
+                 return ec;
+             }
+-            ec = ch.SendLocalFds(socket_fd, sys_errno);  // 后发：memfd_s2c、efd_server
++            ec = ch.SendLocalFds(socket_fd, sys_errno, &deadline);  // 后发：memfd_s2c、notify_server
+             if (ec != ErrorCode::kOk)
+             {
+                 return ec;
+@@ -350,7 +331,7 @@ class RingChannel
+      * @param seg1_len 输出：第一段长度
+      * @param seg2     输出：第二段数据指针（回绕部分）
+      * @param seg2_len 输出：第二段长度
+-     * @return 0 有数据，-1 缓冲区为空
++     * @return 0 有数据，-1 缓冲区为空，-2 控制头位置损坏
+      */
+     int Peek(const void** seg1, uint32_t* seg1_len, const void** seg2, uint32_t* seg2_len)
+     {
+@@ -426,25 +407,25 @@ class RingChannel
+     // ---- 通知 ----
+ 
+     /**
+-     * @brief 返回用于轮询（POLLIN）的 eventfd，对端写入时触发
+-     * @return eventfd 文件描述符
++     * @brief 返回用于轮询（POLLIN）的通知 eventfd，对端写入时触发
++     * @return 通知 eventfd 文件描述符
+      */
+     [[nodiscard]]
+     int NotifyReadFd() const noexcept
+     {
+-        return notify_read_efd_.Get();
++        return notify_read_fd_.Get();
+     }
+ 
+     /**
+      * @brief 通知对端：我们已向写环写入新数据
+      *
+      * 必须在数据发布（write_pos 已 store）之后调用。对端若启用了按需通知
+-     * （调用过 PrepareWait），仅在其即将睡眠时才写 eventfd；处理中的读方
++     * （调用过 PrepareWait），仅在其即将睡眠时才写通知 eventfd；处理中的读方
+      * 无需唤醒，省掉一次 syscall。对端未启用时每次都写（与旧行为一致）。
+      */
+     void NotifyPeer() const
+     {
+-        if (!notify_write_efd_)
++        if (!notify_write_fd_)
+         {  // 未完成握手 / moved-from
+             return;
+         }
+@@ -456,10 +437,19 @@ class RingChannel
+         ssize_t r  = 0;
+         do
+         {
+-            r = ::write(notify_write_efd_.Get(), &v, sizeof(v));
++            r = ::write(notify_write_fd_.Get(), &v, sizeof(v));
+         } while (r < 0 && errno == EINTR);
+     }
+ 
++    /** @brief 主动唤醒本地读方，供上层显式安排再次读取。 */
++    void WakeReader() const noexcept
++    {
++        if (!notify_read_fd_) return;
++        const uint64_t one = 1;
++        while (::write(notify_read_fd_.Get(), &one, sizeof(one)) < 0 && errno == EINTR) {}
++        // EAGAIN 表示 eventfd 计数饱和，本地 fd 已可读，无需再次写入。
++    }
++
+     /**
+      * @brief 读方：睡眠（回到 poll / 阻塞等待）前调用，声明需要被唤醒
+      *
+@@ -495,19 +485,16 @@ class RingChannel
+     }
+ 
+     /**
+-     * @brief 排空 eventfd（在通知回调中调用）
+-     * @param efd eventfd 文件描述符
+-     * @return 读出的计数值
++     * @brief 非阻塞读取合并通知计数（在通知回调中调用）
++     * @param fd 通知 fd（通道或内部 eventfd）
++     * @return 本次合并读出的 eventfd 计数，不能视为消息数量
+      */
+-    static uint64_t DrainNotify(int efd)
++    static uint64_t DrainNotify(int fd)
+     {
+-        uint64_t v = 0;
+-        ssize_t r  = 0;
+-        do
+-        {
+-            r = ::read(efd, &v, sizeof(v));
+-        } while (r < 0 && errno == EINTR);
+-        return v;
++        uint64_t value = 0;
++        ssize_t n;
++        do { n = ::read(fd, &value, sizeof(value)); } while (n < 0 && errno == EINTR);
++        return n == sizeof(value) ? value : 0;
+     }
+ 
+     /// @brief 单次写入最大字节数
+@@ -528,6 +515,11 @@ class RingChannel
+     }
+ 
+  private:
++    ErrorCode CreateNotifyEventfd(int* sys_errno) noexcept
++    {
++        return CreateEventfd(&notify_read_fd_, sys_errno);
++    }
++
+     /// @brief 创建写环：memfd + mmap + 清零初始化
+     /// @param name      memfd 名称（调试用）
+     /// @param sys_errno 可选：失败时的 errno
+@@ -553,26 +545,33 @@ class RingChannel
+         return ErrorCode::kOk;
+     }
+ 
+-    /// @brief 发送本端 fd：写环 memfd + "唤醒自身"的 eventfd
+-    ErrorCode SendLocalFds(int socket_fd, int* sys_errno = nullptr) const noexcept
++    /// @brief 发送本端 fd：写环 memfd + "唤醒自身"的通知 eventfd
++    ErrorCode SendLocalFds(int socket_fd, int* sys_errno, const detail::IoDeadline* deadline) const noexcept
+     {
+-        const ErrorCode ec = SendFd(socket_fd, write_memfd_.Get(), FdTag::kMemfd, sys_errno);
++        const ErrorCode ec = SendFd(socket_fd, write_memfd_.Get(), FdTag::kMemfd, sys_errno, deadline);
+         if (ec != ErrorCode::kOk)
+         {
+             return ec;
+         }
+-        return SendFd(socket_fd, notify_read_efd_.Get(), FdTag::kEventfd, sys_errno);
++        return SendFd(socket_fd, notify_read_fd_.Get(), FdTag::kEventfd, sys_errno, deadline);
+     }
+ 
+-    /// @brief 接收对端 fd：读环 memfd（mmap 挂载）+ "唤醒对端"的 eventfd
+-    ErrorCode RecvPeerFds(int socket_fd, int* sys_errno = nullptr) noexcept
++    /// @brief 接收对端 fd：读环 memfd（mmap 挂载）+ "唤醒对端"的通知 eventfd
++    ErrorCode RecvPeerFds(int socket_fd, int* sys_errno, const detail::IoDeadline* deadline) noexcept
+     {
+-        ErrorCode ec = RecvFdExpect(socket_fd, FdTag::kMemfd, &read_memfd_, sys_errno);
++        ErrorCode ec = RecvFdExpect(socket_fd, FdTag::kMemfd, &read_memfd_, sys_errno, deadline);
+         if (ec != ErrorCode::kOk)
+         {
+             return ec;
+         }
+ 
++        const int seals = ::fcntl(read_memfd_.Get(), F_GET_SEALS);
++        const int required = F_SEAL_SHRINK | F_SEAL_GROW;
++        if (seals < 0 || (seals & required) != required)
++        {
++            return ErrorCode::kProtocol;
++        }
++
+         // 必须先校验对端 memfd 尺寸再 mmap/访问：
+         // 两端 Capacity 不一致或对端发送 0 字节/被截断的 memfd 时，
+         // 按本地 Ring::kShmSize 映射并在环尾读写会越过文件尾（SIGBUS）
+@@ -602,7 +601,9 @@ class RingChannel
+                 return ec;
+             }
+         }
+-        return RecvFdExpect(socket_fd, FdTag::kEventfd, &notify_write_efd_, sys_errno);
++        ec = RecvFdExpect(socket_fd, FdTag::kEventfd, &notify_write_fd_, sys_errno, deadline);
++        if (ec != ErrorCode::kOk) return ec;
++        return ValidateNotifyEventfd(notify_write_fd_.Get(), sys_errno);
+     }
+ 
+     UniqueFd write_memfd_;     ///< 写环对应的 memfd
+@@ -610,8 +611,8 @@ class RingChannel
+     UniqueFd read_memfd_;      ///< 读环对应的 memfd
+     MmapRegion read_region_;   ///< 读环的 mmap 映射区域
+ 
+-    UniqueFd notify_write_efd_;  ///< 写入此 eventfd 以唤醒对端
+-    UniqueFd notify_read_efd_;   ///< 对端写入此 eventfd 以唤醒自身
++    UniqueFd notify_write_fd_;  ///< 写入此通知 eventfd 以唤醒对端
++    UniqueFd notify_read_fd_;   ///< 对端写入此通知 eventfd 以唤醒自身
+ };
+ 
+ /// @brief 默认配置别名（8MB 环）
+diff --git a/include/shm_ipc/ringbuf.hpp b/include/shm_ipc/ringbuf.hpp
+index 4896c13..399f85e 100644
+--- a/include/shm_ipc/ringbuf.hpp
++++ b/include/shm_ipc/ringbuf.hpp
+@@ -241,7 +241,7 @@ class BatchWriter
+             return -1;
+         }
+ 
+-        if ((w_ + len) - r_ > Capacity)
++        if (w_ - r_ > Capacity || len > Capacity - (w_ - r_))
+         {
+             return -1;
+         }
+@@ -352,7 +352,8 @@ class BatchWriter
+     [[nodiscard]]
+     uint64_t FreeBytes() const noexcept
+     {
+-        return Capacity - (w_ - r_);
++        const uint64_t used = w_ - r_;
++        return used <= Capacity ? Capacity - used : 0;
+     }
+ 
+     /**
+@@ -375,7 +376,7 @@ class BatchWriter
+         {
+             return nullptr;
+         }
+-        if ((w_ + len) - r_ > Capacity)
++        if (w_ - r_ > Capacity || len > Capacity - (w_ - r_))
+         {
+             return nullptr;
+         }
+@@ -522,7 +523,7 @@ class RingBuf
+         const uint64_t w = hdr->write_pos.load(std::memory_order_relaxed);
+         const uint64_t r = hdr->read_pos.load(std::memory_order_acquire);
+ 
+-        if ((w + len) - r > Capacity)
++        if (w - r > Capacity || len > Capacity - (w - r))
+         {
+             return -1;
+         }
+@@ -573,7 +574,7 @@ class RingBuf
+         const uint64_t w     = hdr->write_pos.load(std::memory_order_acquire);
+         const uint64_t avail = w - r;
+ 
+-        if (avail == 0)
++        if (avail == 0 || avail > Capacity)
+         {
+             return 0;
+         }
+@@ -617,7 +618,7 @@ class RingBuf
+         const uint64_t w     = hdr->write_pos.load(std::memory_order_acquire);
+         const uint64_t avail = w - r;
+ 
+-        if (avail < len)
++        if (avail > Capacity || avail < len)
+         {
+             return -1;
+         }
+@@ -645,7 +646,7 @@ class RingBuf
+         // relaxed：write_pos 仅本端（单生产者）修改，读自己的值无需同步
+         const uint64_t w = hdr->write_pos.load(std::memory_order_relaxed);
+         const uint64_t r = hdr->read_pos.load(std::memory_order_acquire);
+-        if ((w + len) - r > Capacity)
++        if (w - r > Capacity || len > Capacity - (w - r))
+         {
+             return -1;
+         }
+@@ -669,7 +670,7 @@ class RingBuf
+         const uint64_t r     = hdr->read_pos.load(std::memory_order_relaxed);
+         const uint64_t w     = hdr->write_pos.load(std::memory_order_acquire);
+         const uint64_t avail = w - r;
+-        if (avail == 0)
++        if (avail == 0 || avail > Capacity)
+         {
+             return 0;
+         }
+@@ -702,7 +703,7 @@ class RingBuf
+         // relaxed：read_pos 仅本端（单消费者）修改，读自己的值无需同步
+         const uint64_t r = hdr->read_pos.load(std::memory_order_relaxed);
+         const uint64_t w = hdr->write_pos.load(std::memory_order_acquire);
+-        if (w - r < len)
++        if (w - r > Capacity || w - r < len)
+         {
+             return -1;
+         }
+@@ -726,6 +727,10 @@ class RingBuf
+         const uint64_t r     = hdr->read_pos.load(std::memory_order_relaxed);
+         const uint64_t w     = hdr->write_pos.load(std::memory_order_acquire);
+         const uint64_t avail = w - r;
++        if (avail > Capacity)
++        {
++            return -2;  // 控制头损坏，不能暴露越界数据段
++        }
+         if (avail == 0)
+         {
+             return -1;
+@@ -747,7 +752,7 @@ class RingBuf
+      * @param seg1_len 输出：第一段长度
+      * @param seg2     输出：第二段数据指针（回绕部分，可能为 nullptr）
+      * @param seg2_len 输出：第二段长度（可能为 0）
+-     * @return 0 有数据，-1 缓冲区为空
++     * @return 0 有数据，-1 缓冲区为空，-2 控制头位置损坏
+      */
+     static int Peek(const void* shm, const void** seg1, uint32_t* seg1_len, const void** seg2, uint32_t* seg2_len)
+     {
+@@ -765,6 +770,10 @@ class RingBuf
+         const uint64_t w     = hdr->write_pos.load(std::memory_order_acquire);
+         const uint64_t avail = w - r;
+ 
++        if (avail > Capacity)
++        {
++            return -2;  // 控制头损坏，不能暴露越界数据段
++        }
+         if (avail == 0)
+         {
+             return -1;
+@@ -804,6 +813,10 @@ class RingBuf
+         // relaxed：read_pos 仅本端（单消费者）修改，读自己的值无需同步
+         const uint64_t r     = hdr->read_pos.load(std::memory_order_relaxed);
+         const uint64_t avail = hdr->write_pos.load(std::memory_order_acquire) - r;
++        if (avail > Capacity)
++        {
++            return;  // 损坏的位置不得用于推进读游标
++        }
+         assert(static_cast<uint64_t>(len) <= avail);
+         if (static_cast<uint64_t>(len) > avail)
+         {
+@@ -822,7 +835,8 @@ class RingBuf
+         auto* hdr        = detail::RingHdr(shm);
+         const uint64_t w = hdr->write_pos.load(std::memory_order_acquire);
+         const uint64_t r = hdr->read_pos.load(std::memory_order_acquire);
+-        return w - r;
++        const uint64_t avail = w - r;
++        return avail <= Capacity ? avail : 0;
+     }
+ 
+     /** @brief 读取 write_pos（acquire） */
+@@ -897,7 +911,14 @@ class RingBuf
+      * @param shm 共享内存指针（const）
+      * @return 可写字节数
+      */
+-    static uint64_t FreeSpace(const void* shm) { return Capacity - Available(shm); }
++    static uint64_t FreeSpace(const void* shm)
++    {
++        auto* hdr = detail::RingHdr(shm);
++        const uint64_t w = hdr->write_pos.load(std::memory_order_relaxed);
++        const uint64_t r = hdr->read_pos.load(std::memory_order_acquire);
++        const uint64_t used = w - r;
++        return used <= Capacity ? Capacity - used : 0;
++    }
+ };
+ 
+ /// @brief 默认配置别名（8MB 环）
+diff --git a/include/shm_ipc/shm_async_client.hpp b/include/shm_ipc/shm_async_client.hpp
+index 48f5535..4a78c7a 100644
+--- a/include/shm_ipc/shm_async_client.hpp
++++ b/include/shm_ipc/shm_async_client.hpp
+@@ -136,12 +136,14 @@ class ShmAsyncClient : public comm::ITcpAsyncClient
+             return;
+         }
+ 
++        const uint64_t attempt = ++connect_generation_;
+         state_          = comm::TcpClientStates::connecting;
+         last_error_     = ErrorCode::kOk;
+         last_sys_errno_ = 0;
+ 
++        const detail::IoDeadline deadline{5000};
+         UniqueFd sock;
+-        ErrorCode ec = ConnectUnixSocket(UriToPath(uri), &sock, &last_sys_errno_);
++        ErrorCode ec = ConnectUnixSocket(UriToPath(uri), &sock, &last_sys_errno_, &deadline);
+         if (ec != ErrorCode::kOk)
+         {
+             FailConnect(uri, ec);
+@@ -149,36 +151,50 @@ class ShmAsyncClient : public comm::ITcpAsyncClient
+         }
+ 
+         DefaultRingChannel channel;
+-        ec = DefaultRingChannel::CreateRingChannel(sock.Get(), ChannelRole::kClient, &channel, &last_sys_errno_);
++        ec = DefaultRingChannel::CreateRingChannel(sock.Get(), ChannelRole::kClient, &channel, &last_sys_errno_, &deadline);
+         if (ec != ErrorCode::kOk)
+         {
+             FailConnect(uri, ec);
+             return;
+         }
+ 
+-        auto codec = codec_factory_ ? codec_factory_() : nullptr;
+-        if (!codec)
+-        {
+-            FailConnect(uri, ErrorCode::kInvalidArgument);
+-            return;
+-        }
+-
+         try
+         {
++            auto codec = codec_factory_ ? codec_factory_() : nullptr;
++            if (!codec)
++            {
++                FailConnect(uri, ErrorCode::kInvalidArgument);
++                return;
++            }
+             InstallConnection(std::move(sock), std::move(channel), std::move(codec));
+         }
+         catch (const std::bad_alloc&)
+         {
++            if (attempt != connect_generation_) return;  // 旧尝试不得清理重入建立的新连接
+             // 分配失败：清理已注册的 fd/连接，按连接失败处理
+             if (conn_)
+             {
+                 loop_->RemoveFd(conn_->NotifyFd());
+                 loop_->RemoveFd(conn_->SocketFd());
++                conn_->Close();
+                 conn_.reset();
+             }
+             FailConnect(uri, ErrorCode::kNoMemory);
+             // TODO 自动重连（与框架一致，暂未实现）
+         }
++        catch (...)
++        {
++            if (attempt != connect_generation_) throw;
++            if (conn_)
++            {
++                loop_->RemoveFd(conn_->NotifyFd());
++                loop_->RemoveFd(conn_->SocketFd());
++                conn_->Close();
++                conn_.reset();
++            }
++            state_ = comm::TcpClientStates::close;
++            throw;  // 用户工厂/建连回调异常保持传播，状态已回滚
++        }
+     }
+ 
+     /**
+@@ -246,10 +262,10 @@ class ShmAsyncClient : public comm::ITcpAsyncClient
+         const uint64_t id = 1;
+         auto conn         = std::make_shared<ShmConnection>(loop_, id, std::move(sock), std::move(channel));
+         codec->conn_id    = id;
+-        conn->SetMessageCallback(messagecb_);
+-        conn->SetCloseCallback(closecb_);
+-        conn->SetConnectionCallback(connectioncb_);
+-        conn->SetVerifyCallback(verifycb_);
++        conn->SetMessageCallback(messagecb_.Copy());
++        conn->SetCloseCallback(closecb_.Copy());
++        conn->SetConnectionCallback(connectioncb_.Copy());
++        conn->SetVerifyCallback(verifycb_.Copy());
+         conn->SetCodec(codec);
+         conn->SetConnType(comm::TcpConnType::TcpConn_Client);
+         conn->ResizeBuffer(init_buffer_size_, max_buffer_size_);
+@@ -298,7 +314,7 @@ class ShmAsyncClient : public comm::ITcpAsyncClient
+         }
+         const int n = conn->DrainRing();
+         // 协议错误，或消息回调内调用了 Close()（连接进入 closeing）
+-        if (n < 0 || conn->State() == comm::TcpConnStates::closeing)
++        if (conn_ == conn && (n < 0 || conn->State() == comm::TcpConnStates::closeing))
+         {
+             Teardown();
+         }
+@@ -320,7 +336,11 @@ class ShmAsyncClient : public comm::ITcpAsyncClient
+             {
+                 // 对端关闭：先读掉环中可能残留的最后数据，再收尾
+                 conn->DrainRing();
+-                Teardown();
++                // 消息/关闭回调可能已重连；旧连接的 EOF 不得清理新连接。
++                if (conn_ == conn)
++                {
++                    Teardown();
++                }
+             }
+         }
+     }
+@@ -344,14 +364,15 @@ class ShmAsyncClient : public comm::ITcpAsyncClient
+     }
+ 
+     EventLoop* loop_ = nullptr;                        ///< 外部事件循环
++    uint64_t connect_generation_ = 0;  ///< 每次 Connect 的事务身份，含回调内重连
+     ShmConnPtr conn_;                                  ///< 当前连接（client 托管其生命周期）
+     int state_ = comm::TcpClientStates::close;         ///< 连接状态（初值同框架：close）
+-    comm::ConnectionCallback connectioncb_;            ///< 连接建立回调
+-    comm::AnyMessageCallback messagecb_;               ///< 消息回调
+-    comm::CloseCallback closecb_;                      ///< 连接关闭回调
+-    comm::VerifyCallback verifycb_;                    ///< 验证回调
+-    comm::ConnectErrorCallback errorcb_;               ///< 连接失败回调
+-    comm::codec::CodecFactoryCallback codec_factory_;  ///< codec 工厂
++    detail::StableCallback<comm::ConnectionCallback> connectioncb_;            ///< 连接建立回调
++    detail::StableCallback<comm::AnyMessageCallback> messagecb_;               ///< 消息回调
++    detail::StableCallback<comm::CloseCallback> closecb_;                      ///< 连接关闭回调
++    detail::StableCallback<comm::VerifyCallback> verifycb_;                    ///< 验证回调
++    detail::StableCallback<comm::ConnectErrorCallback> errorcb_;               ///< 连接失败回调
++    detail::StableCallback<comm::codec::CodecFactoryCallback> codec_factory_;  ///< codec 工厂
+     std::any context_;                                 ///< 用户上下文（建连时同步到连接）
+     bool autoreconnect_{false};                        ///< 自动重连标志（透传给 error 回调）
+     ErrorCode last_error_ = ErrorCode::kOk;            ///< 最近一次 Connect 错误码
+diff --git a/include/shm_ipc/shm_client.hpp b/include/shm_ipc/shm_client.hpp
+index 7474713..dd9c8cc 100644
+--- a/include/shm_ipc/shm_client.hpp
++++ b/include/shm_ipc/shm_client.hpp
+@@ -33,6 +33,7 @@
+ #include <time.h>
+ #include <unistd.h>
+ 
++#include <algorithm>
+ #include <atomic>
+ #include <cerrno>
+ #include <cstdint>
+@@ -80,8 +81,9 @@ class ShmClient : public comm::ITcpClient
+         last_error_     = ErrorCode::kOk;
+         last_sys_errno_ = 0;
+ 
++        const detail::IoDeadline deadline{5000};
+         UniqueFd sock;
+-        ErrorCode ec = ConnectUnixSocket(UriToPath(uri), &sock, &last_sys_errno_);
++        ErrorCode ec = ConnectUnixSocket(UriToPath(uri), &sock, &last_sys_errno_, &deadline);
+         if (ec != ErrorCode::kOk)
+         {
+             last_error_ = ec;
+@@ -89,7 +91,7 @@ class ShmClient : public comm::ITcpClient
+         }
+ 
+         DefaultRingChannel channel;
+-        ec = DefaultRingChannel::CreateRingChannel(sock.Get(), ChannelRole::kClient, &channel, &last_sys_errno_);
++        ec = DefaultRingChannel::CreateRingChannel(sock.Get(), ChannelRole::kClient, &channel, &last_sys_errno_, &deadline);
+         if (ec != ErrorCode::kOk)
+         {
+             last_error_ = ec;
+@@ -98,6 +100,7 @@ class ShmClient : public comm::ITcpClient
+ 
+         socket_fd_ = std::move(sock);
+         channel_   = std::move(channel);
++        peer_eof_.store(false, std::memory_order_relaxed);
+         closed_.store(false, std::memory_order_release);
+         return true;
+     }
+@@ -110,7 +113,8 @@ class ShmClient : public comm::ITcpClient
+     [[nodiscard]]
+     bool Connected() const noexcept override
+     {
+-        return socket_fd_.Get() >= 0 && !closed_.load(std::memory_order_acquire);
++        return socket_fd_.Get() >= 0 && !closed_.load(std::memory_order_acquire) &&
++               !peer_eof_.load(std::memory_order_acquire);
+     }
+ 
+     /**
+@@ -165,6 +169,7 @@ class ShmClient : public comm::ITcpClient
+ 
+     /**
+      * @brief 阻塞读取：直到读到数据或对端关闭
++     * 对端 EOF 后可继续读完残留数据，读空后重复读取均返回 0。
+      * @return 实际读取的字节数（>0）；对端关闭返回 0；本端 Close() 或
+      *         未连接返回 -1
+      */
+@@ -182,11 +187,20 @@ class ShmClient : public comm::ITcpClient
+      */
+     int ReadMessage(char* buf, size_t bsize, int timeout_ms)
+     {
+-        if (!Connected())
++        if (socket_fd_.Get() < 0 || closed_.load(std::memory_order_acquire))
+         {
+             return -1;
+         }
+ 
++        if (bsize == 0) return 0;  // 零长度请求立即成功，不武装等待
++        if (!buf)
++        {
++            last_error_ = ErrorCode::kInvalidArgument;
++            return -1;
++        }
++        const uint32_t max_len = static_cast<uint32_t>(
++            std::min(bsize, DefaultRingBuf::kCapacity));
++
+         timespec deadline{};
+         timespec* dl = InitDeadline(timeout_ms, &deadline);
+         for (;;)
+@@ -199,12 +213,20 @@ class ShmClient : public comm::ITcpClient
+ 
+             // 先试读：数据可能已在环中（基线须在读之前取，供 PrepareWait 复查）
+             const uint64_t seen = channel_.WritePos();
+-            uint32_t n          = channel_.TryRead(buf, static_cast<uint32_t>(bsize));
++            if (seen - channel_.ReadPos() > DefaultRingBuf::kCapacity)
++            {
++                last_error_ = ErrorCode::kProtocol;
++                Close();
++                return -1;
++            }
++            uint32_t n          = channel_.TryRead(buf, max_len);
+             if (n > 0)
+             {
+                 return static_cast<int>(n);
+             }
+ 
++            if (peer_eof_.load(std::memory_order_acquire)) return 0;
++
+             const int wr = WaitForReadable(dl, seen);
+             if (wr < 0)
+             {
+@@ -212,9 +234,8 @@ class ShmClient : public comm::ITcpClient
+             }
+             if (wr == 0)
+             {
+-                // 对端关闭：最后再读一次环中残留数据
+-                n = channel_.TryRead(buf, static_cast<uint32_t>(bsize));
+-                return n > 0 ? static_cast<int>(n) : 0;
++                // 重新检查环：EOF 与最后一次数据发布可能同时到达。
++                continue;
+             }
+         }
+     }
+@@ -241,7 +262,7 @@ class ShmClient : public comm::ITcpClient
+         {
+             return -1;
+         }
+-        if (!Connected())
++        if (socket_fd_.Get() < 0 || closed_.load(std::memory_order_acquire))
+         {
+             return -1;
+         }
+@@ -256,11 +277,20 @@ class ShmClient : public comm::ITcpClient
+             }
+ 
+             const uint64_t seen = channel_.WritePos();
+-            if (channel_.Peek(seg1, seg1_len, seg2, seg2_len) == 0)
++            const int peek = channel_.Peek(seg1, seg1_len, seg2, seg2_len);
++            if (peek == -2)
++            {
++                last_error_ = ErrorCode::kProtocol;
++                Close();
++                return -1;
++            }
++            if (peek == 0)
+             {
+                 return static_cast<int>(*seg1_len + *seg2_len);
+             }
+ 
++            if (peer_eof_.load(std::memory_order_acquire)) return 0;
++
+             const int wr = WaitForReadable(dl, seen);
+             if (wr < 0)
+             {
+@@ -268,12 +298,8 @@ class ShmClient : public comm::ITcpClient
+             }
+             if (wr == 0)
+             {
+-                // 对端关闭：返回环中残留数据（若有）
+-                if (channel_.Peek(seg1, seg1_len, seg2, seg2_len) == 0)
+-                {
+-                    return static_cast<int>(*seg1_len + *seg2_len);
+-                }
+-                return 0;
++                // 与 ReadMessage 一致，EOF 后仍可分多次消费尾部数据。
++                continue;
+             }
+         }
+     }
+@@ -372,8 +398,9 @@ class ShmClient : public comm::ITcpClient
+             char b{};
+             if (::read(socket_fd_.Get(), &b, 1) <= 0)
+             {
+-                socket_fd_.Reset();
+-                return 0;  // 对端关闭
++                // 与跨线程 Close 一致：fd 保持稳定，至 Connect/析构才回收。
++                peer_eof_.store(true, std::memory_order_release);
++                return 0;  // 对端关闭；尾部数据由读接口继续消费
+             }
+         }
+         if (pfds[0].revents & POLLIN)
+@@ -385,6 +412,7 @@ class ShmClient : public comm::ITcpClient
+ 
+     UniqueFd socket_fd_;                     ///< 连接 socket（断连检测）
+     DefaultRingChannel channel_;             ///< 双向共享内存通道
++    std::atomic<bool> peer_eof_{false};      ///< 对端 EOF，与本端 Close 分开
+     std::atomic<bool> closed_{true};         ///< 本端已关闭标志（Close/读线程跨线程通信）
+     ErrorCode last_error_ = ErrorCode::kOk;  ///< 最近一次 Connect 错误码
+     int last_sys_errno_   = 0;               ///< 最近一次 Connect 的 errno
+diff --git a/include/shm_ipc/shm_connection.hpp b/include/shm_ipc/shm_connection.hpp
+index 7b2d788..273b3ed 100644
+--- a/include/shm_ipc/shm_connection.hpp
++++ b/include/shm_ipc/shm_connection.hpp
+@@ -63,7 +63,7 @@ class ShmConnection : public comm::ITcpConnection,
+         : loop_(loop), id_(id), socket_fd_(std::move(socket_fd)), channel_(std::move(channel)), encode_buf_(128 * 1024)
+     {}
+ 
+-    ~ShmConnection() override = default;
++    ~ShmConnection() override { RemoveVerifyTimer(); }
+ 
+     // 禁止复制和移动（事件回调通过 shared_ptr 引用本对象）
+     ShmConnection(const ShmConnection&)            = delete;
+@@ -97,12 +97,23 @@ class ShmConnection : public comm::ITcpConnection,
+             return false;
+         }
+ 
++        if (sending_) return false;
++        auto self = weak_from_this().lock();  // codec 可以重入 owner 并移除当前连接
++        auto codec = codec_;
++        // 当前 Encode 借用的缓冲独立保活；重入 ResizeBuffer 只调整下一次调用的缓冲。
++        auto working_buffer = std::move(encode_buf_);
++        EncodeGuard guard(sending_, encode_buf_, working_buffer);
++        const auto still_open = [&] {
++            return codec_ == codec && (state_ == comm::TcpConnStates::established ||
++                                      state_ == comm::TcpConnStates::verifing);
++        };
+         try
+         {
+             // 快速路径：codec 能报告精确编码长度时，直接在 ring 中预留
+             // 空间并编码，把 "any → encode_buf_ → ring" 两次拷贝降为一次。
+             // 小消息继续走 encode_buf_（缓存命中，避免 Reserve/Commit 开销）。
+-            const int32_t need = codec_->EncodedSize(pkg);
++            const int32_t need = codec->EncodedSize(pkg);
++            if (!still_open()) return false;
+             if (need >= static_cast<int32_t>(kDirectEncodeMinBytes) &&
+                 static_cast<uint32_t>(need) <= DefaultRingChannel::kMaxWriteSize)
+             {
+@@ -110,31 +121,31 @@ class ShmConnection : public comm::ITcpConnection,
+                 if (channel_.StartBatch(&batch) == ErrorCode::kOk)
+                 {
+                     char* dst = batch.Reserve(static_cast<uint32_t>(need));
+-                    if (!dst)
++                    // Reserve 失败也可能是普通映射跨尾，回退到缓冲编码路径。
++                    if (dst)
+                     {
+-                        return false;  // 环空间不足（与 WriteRaw 预检一致）
+-                    }
+-
+-                    size_t out = 0;
+-                    const int32_t len =
+-                        codec_->Encode(pkg, reinterpret_cast<comm::byte*>(dst), static_cast<size_t>(need), &out);
+-                    if (len == need)
+-                    {
+-                        batch.CommitReserve(static_cast<uint32_t>(len));
+-                        batch.Flush();  // 发布 write_pos 并按需通知对端
+-                        return true;
+-                    }
++                        size_t out = 0;
++                        const int32_t len =
++                            codec->Encode(pkg, reinterpret_cast<comm::byte*>(dst), static_cast<size_t>(need), &out);
++                        if (!still_open()) { batch.Cancel(); return false; }
++                        if (len == need)
++                        {
++                            batch.CommitReserve(static_cast<uint32_t>(len));
++                            batch.Flush();  // 发布 write_pos 并按需通知对端
++                            return true;
++                        }
+ 
+-                    // 预留不足/长度不符：回滚后走原有 encode_buf_ 路径
+-                    batch.Cancel();
+-                    if (len == comm::kCodecSkipPackage)
+-                    {
+-                        return true;
+-                    }
+-                    if (len == comm::kCodecDisconnect)
+-                    {
+-                        Close();
+-                        return false;
++                        // 预留不足/长度不符：回滚后走原有 encode_buf_ 路径
++                        batch.Cancel();
++                        if (len == comm::kCodecSkipPackage)
++                        {
++                            return true;
++                        }
++                        if (len == comm::kCodecDisconnect)
++                        {
++                            Close();
++                            return false;
++                        }
+                     }
+                 }
+             }
+@@ -143,7 +154,8 @@ class ShmConnection : public comm::ITcpConnection,
+             {
+                 size_t out = 0;
+                 const int32_t len =
+-                    codec_->Encode(pkg, reinterpret_cast<comm::byte*>(encode_buf_.data()), encode_buf_.size(), &out);
++                    codec->Encode(pkg, reinterpret_cast<comm::byte*>(working_buffer.data()), working_buffer.size(), &out);
++                if (!still_open()) return false;
+                 if (len == comm::kCodecSkipPackage)
+                 {
+                     return true;  // 丢包（同框架）
+@@ -157,13 +169,18 @@ class ShmConnection : public comm::ITcpConnection,
+                 {
+                     // out 为所需大小：为 0（内部错误）或不超过现有缓冲仍要求
+                     // 扩容（codec 违约）时放弃，避免无限重试
+-                    if (out == 0 || out <= encode_buf_.size() || !GrowEncodeBuffer(out))
++                    if (out == 0 || out <= working_buffer.size() || out > max_buffer_size_)
+                     {
+                         return false;
+                     }
++                    working_buffer.resize(out);
+                     continue;
+                 }
+-                return WriteRaw(encode_buf_.data(), static_cast<uint32_t>(len));
++                if (len <= 0 || static_cast<size_t>(len) > working_buffer.size())
++                {
++                    return false;  // codec 返回值违约，禁止越界读取编码缓冲
++                }
++                return WriteRaw(working_buffer.data(), static_cast<uint32_t>(len));
+             }
+         }
+         catch (const std::bad_alloc&)
+@@ -223,7 +240,7 @@ class ShmConnection : public comm::ITcpConnection,
+      */
+     void StartVerifyTimer(int64_t expired_ms, int64_t interval_ms, comm::TimeAction action) override
+     {
+-        if (verify_timer_)
++        if (verify_timer_ >= 0)
+         {
+             return;
+         }
+@@ -231,10 +248,13 @@ class ShmConnection : public comm::ITcpConnection,
+ 
+         int tfd            = 0;
+         const ErrorCode ec = loop_->AddOneShotTimer(
+-            static_cast<int>(expired_ms),
+-            [this, action = std::move(action)](int, short) mutable {
+-                verify_timer_ = 0;  // 定时器已自行移除
+-                action(0);
++            expired_ms,
++            [weak = weak_from_this(), action = std::move(action)](int, short) mutable {
++                if (auto conn = weak.lock())
++                {
++                    conn->verify_timer_ = -1;  // 定时器已自行移除
++                    action(0);
++                }
+             },
+             &tfd);
+         if (ec == ErrorCode::kOk)
+@@ -310,6 +330,10 @@ class ShmConnection : public comm::ITcpConnection,
+         {
+             state_ = comm::TcpConnStates::established;
+         }
++        if (state_ != comm::TcpConnStates::established && state_ != comm::TcpConnStates::verifing)
++        {
++            return;  // 验证回调已拒绝或移除连接，不再产生建连事件
++        }
+         if (connectioncb_)
+         {
+             connectioncb_(shared_from_this());
+@@ -332,6 +356,10 @@ class ShmConnection : public comm::ITcpConnection,
+      */
+     void OnVerify(bool succ)
+     {
++        if (state_ != comm::TcpConnStates::verifing)
++        {
++            return;  // 过期或重复验证结果不得改变连接生命周期
++        }
+         RemoveVerifyTimer();
+         if (succ)
+         {
+@@ -351,9 +379,20 @@ class ShmConnection : public comm::ITcpConnection,
+         if (state_ != comm::TcpConnStates::closeed)
+         {
+             state_ = comm::TcpConnStates::closeed;
++            ::shutdown(socket_fd_.Get(), SHUT_RDWR);
++            RemoveVerifyTimer();
+             if (closecb_)
+             {
+-                closecb_(shared_from_this());
++                try
++                {
++                    closecb_(shared_from_this());
++                }
++                catch (...)
++                {
++                    context_.reset();
++                    rpc_context_.reset();
++                    throw;
++                }
+             }
+         }
+         if (context_.has_value())
+@@ -376,32 +415,59 @@ class ShmConnection : public comm::ITcpConnection,
+      * 读空后调用 channel_.PrepareWait 声明"即将睡眠"（按需通知）：写方此后
+      * 才会再写 eventfd。PrepareWait 发现新数据到达时继续读，不会丢唤醒。
+      *
++     * 不设置帧数、字节数或时间预算；持续读取到环空、遇到不完整消息或连接关闭。
++     *
++     * @note codec/消息回调异常会关闭连接并继续传播；已投递的消息不重放。
++     *       回调重入 DrainRing 返回 0，由外层读取继续处理。
++     *
+      * @return 分发的消息条数；-1 协议错误（codec 要求断开），连接应移除
+      */
+     int DrainRing()
+     {
+-        int total = 0;
+-        for (;;)
++        if (state_ != comm::TcpConnStates::established && state_ != comm::TcpConnStates::verifing)
+         {
+-            // 基线必须在读取之前取：此后到达的数据由 PrepareWait 复查发现
+-            const uint64_t seen = channel_.WritePos();
+-            const int n         = DrainRingOnce();
+-            if (n < 0)
+-            {
+-                return -1;
+-            }
+-            total += n;
+-            // 消息回调内关闭了连接：由 owner 收尾，无需再武装等待
+-            if (state_ == comm::TcpConnStates::closeing || state_ == comm::TcpConnStates::closeed)
+-            {
+-                break;
+-            }
+-            if (channel_.PrepareWait(seen))
++            return 0;
++        }
++        // 回调重入时由外层继续消费，不能再次解码尚未提交的视图。
++        if (draining_) return 0;
++        auto self = weak_from_this().lock();  // 用户 codec 可重入 owner，移除连接
++        struct DrainGuard
++        {
++            bool& active;
++            explicit DrainGuard(bool& value) : active(value) { active = true; }
++            ~DrainGuard() { active = false; }
++        } guard(draining_);
++        try
++        {
++            int total = 0;
++            for (;;)
+             {
+-                break;
++                // 基线必须在读取之前取：此后到达的数据由 PrepareWait 复查发现
++                const uint64_t seen = channel_.WritePos();
++                const int n         = DrainRingOnce();
++                if (n < 0)
++                {
++                    return -1;
++                }
++                total += n;
++                // 消息回调内关闭了连接：由 owner 收尾，无需再武装等待
++                if (state_ == comm::TcpConnStates::closeing || state_ == comm::TcpConnStates::closeed)
++                {
++                    break;
++                }
++                if (channel_.PrepareWait(seen))
++                {
++                    break;
++                }
+             }
++            return total;
++        }
++        catch (...)
++        {
++            // codec/消息回调抛异常后，状态可能已推进，不能继续解码或重放。
++            Close();
++            throw;
+         }
+-        return total;
+     }
+ 
+  private:
+@@ -423,85 +489,33 @@ class ShmConnection : public comm::ITcpConnection,
+             const void* seg2  = nullptr;
+             uint32_t seg1_len = 0;
+             uint32_t seg2_len = 0;
+-            if (channel_.Peek(&seg1, &seg1_len, &seg2, &seg2_len) != 0)
++            const int peek = channel_.Peek(&seg1, &seg1_len, &seg2, &seg2_len);
++            if (peek == -2) return -1;  // 损坏环：owner 关闭连接
++            if (peek != 0)
+             {
+                 break;  // 环空
+             }
+ 
+             const comm::byte* buf = static_cast<const comm::byte*>(seg1);
+             uint32_t buflen       = seg1_len;
+-            bool partial_view     = false;
+ 
+             if (seg2_len > 0)
+             {
+-                // 数据跨环尾：只线性化"当前帧"而不是全部可读数据。
+-                // 先探测首帧大小；codec 未报告时退化为线性化全部。
++                // Decode 可以维护序号/解密状态，不能作为长度探测器重复调用。
++                // 非镜像回绕时先线性化所有可读字节，再正式解码一次。
+                 const uint32_t total = seg1_len + seg2_len;
+-                uint32_t want        = total;
+-
+-                size_t need      = 0;
+-                const int32_t rc = codec_->Decode(static_cast<const comm::byte*>(seg1), seg1_len, pkg, &need);
+-                if (rc == comm::kCodecDisconnect)
+-                {
+-                    return -1;
+-                }
+-                if (rc > 0)
+-                {
+-                    want = static_cast<uint32_t>(rc);  // 首帧完全在 seg1
+-                }
+-                else if (rc == comm::kCodecSkipPackage && need > 0 && need <= seg1_len)
+-                {
+-                    want = static_cast<uint32_t>(need);  // 心跳消费长度
+-                }
+-                else if (rc == comm::kCodecNeedMoreBuffer && need > seg1_len && need <= total)
++                try
+                 {
+-                    want = static_cast<uint32_t>(need);  // 首帧跨尾，按需复制
++                    if (staging_.size() < total) staging_.resize(total);
+                 }
+-                // 其他情况（codec 未报告 need 等）退化为 total
+-
+-                if (want > total)
++                catch (const std::bad_alloc&)
+                 {
+-                    want = total;
+-                }
+-
+-                // 拷贝 want 字节；若 codec 需要更多（例如 seg1 连 tag 都不完整），
+-                // 按它报告的 need 再增长，最多 3 次，避免死循环
+-                for (int attempt = 0; attempt < 3; ++attempt)
+-                {
+-                    try
+-                    {
+-                        if (staging_.size() < want)
+-                        {
+-                            staging_.resize(want);
+-                        }
+-                    }
+-                    catch (const std::bad_alloc&)
+-                    {
+-                        return -1;  // 线性化缓冲分配失败
+-                    }
+-                    // want 可能小于 seg1_len（只复制首帧），必须按
+-                    // min(seg1_len, want) 截断，否则会越界写 staging_
+-                    const uint32_t first = (seg1_len < want) ? seg1_len : want;
+-                    std::memcpy(staging_.data(), seg1, first);
+-                    if (want > first)
+-                    {
+-                        std::memcpy(staging_.data() + first, seg2, want - first);
+-                    }
+-
+-                    size_t more = 0;
+-                    const int32_t probe2 =
+-                        codec_->Decode(reinterpret_cast<const comm::byte*>(staging_.data()), want, pkg, &more);
+-                    if (probe2 == comm::kCodecNeedMoreBuffer && more > want && more <= total)
+-                    {
+-                        want = static_cast<uint32_t>(more);
+-                        continue;
+-                    }
+-                    break;
++                    return -1;
+                 }
+-
+-                buf          = reinterpret_cast<const comm::byte*>(staging_.data());
+-                buflen       = want;
+-                partial_view = (want < total);
++                std::memcpy(staging_.data(), seg1, seg1_len);
++                std::memcpy(staging_.data() + seg1_len, seg2, seg2_len);
++                buf = reinterpret_cast<const comm::byte*>(staging_.data());
++                buflen = total;
+             }
+ 
+             // 在连续视图上批量解码：整个批次只 CommitRead 一次
+@@ -509,7 +523,26 @@ class ShmConnection : public comm::ITcpConnection,
+             for (;;)
+             {
+                 size_t out        = 0;
+-                const int32_t len = codec_->Decode(buf + off, buflen - off, pkg, &out);
++                auto codec = codec_;
++                if (!codec)
++                {
++                    if (off) channel_.CommitRead(off);
++                    Close();
++                    return -1;
++                }
++                const int32_t len = codec->Decode(buf + off, buflen - off, pkg, &out);
++                // 解码中更换 codec 无法安全解释当前帧，关闭而不重新投递。
++                if (codec_ != codec)
++                {
++                    if (off) channel_.CommitRead(off);
++                    Close();
++                    return -1;
++                }
++                if (state_ == comm::TcpConnStates::closeing || state_ == comm::TcpConnStates::closeed)
++                {
++                    if (off) channel_.CommitRead(off);
++                    return count;
++                }
+                 if (len == comm::kCodecDisconnect)
+                 {
+                     if (off)
+@@ -520,6 +553,12 @@ class ShmConnection : public comm::ITcpConnection,
+                 }
+                 if (len == comm::kCodecNeedMoreBuffer)
+                 {
++                    // 环满且当前帧没有进展时，续写永远无法完成。
++                    // 已解码前缀先提交；下一轮再判断剩余帧，避免误拒绝。
++                    if (off == 0 && buflen == DefaultRingBuf::kCapacity)
++                    {
++                        return -1;
++                    }
+                     break;  // 数据不完整，等待对端续写
+                 }
+                 if (len == comm::kCodecSkipPackage)
+@@ -538,6 +577,17 @@ class ShmConnection : public comm::ITcpConnection,
+                     {
+                         SendKeepaliveResponse();
+                     }
++                    if (codec_ != codec)
++                    {
++                        channel_.CommitRead(off);
++                        Close();
++                        return -1;
++                    }
++                    if (state_ == comm::TcpConnStates::closeing || state_ == comm::TcpConnStates::closeed)
++                    {
++                        channel_.CommitRead(off);
++                        return count;
++                    }
+                     if (off == buflen)
+                     {
+                         break;
+@@ -562,8 +612,22 @@ class ShmConnection : public comm::ITcpConnection,
+                     return -1;  // 防御：codec 消耗长度越界
+                 }
+                 off += static_cast<uint32_t>(len);
+-                OnMessage(pkg);
++                try
++                {
++                    OnMessage(pkg);
++                }
++                catch (...)
++                {
++                    // 此帧已交付给应用，提交至当前帧，避免重复投递。
++                    channel_.CommitRead(off);
++                    throw;
++                }
+                 ++count;
++                if (state_ == comm::TcpConnStates::closeing || state_ == comm::TcpConnStates::closeed)
++                {
++                    channel_.CommitRead(off);
++                    return count;
++                }
+                 if (off == buflen)
+                 {
+                     break;
+@@ -580,7 +644,7 @@ class ShmConnection : public comm::ITcpConnection,
+                 break;  // 没有进展：等待更多数据/通知
+             }
+ 
+-            if (partial_view || off < buflen)
++            if (off < buflen)
+             {
+                 continue;  // 还有数据（或未完整帧）跨尾，重新 Peek
+             }
+@@ -592,19 +656,20 @@ class ShmConnection : public comm::ITcpConnection,
+     /// @brief 启用"直接写 ring"的最小编码长度（小消息留在 encode_buf_）
+     static constexpr uint32_t kDirectEncodeMinBytes = 256;
+ 
+-    /// @brief 编码缓冲按需扩容，超过上限返回 false
+-    bool GrowEncodeBuffer(size_t need)
++    // 普通编码与心跳共享借用规则：重入扩容不影响正在使用的缓冲。
++    struct EncodeGuard
+     {
+-        if (need > max_buffer_size_)
+-        {
+-            return false;
+-        }
+-        if (need > encode_buf_.size())
++        bool& active;
++        std::vector<char>& cached;
++        std::vector<char>& working;
++        EncodeGuard(bool& value, std::vector<char>& buffer, std::vector<char>& borrowed)
++            : active(value), cached(buffer), working(borrowed) { active = true; }
++        ~EncodeGuard()
+         {
+-            encode_buf_.resize(need);
++            if (cached.size() < working.size()) cached = std::move(working);
++            active = false;
+         }
+-        return true;
+-    }
++    };
+ 
+     /// @brief 原始字节写入环（可跨多次 TryWrite），写完统一通知对端
+     bool WriteRaw(const void* data, uint32_t len)
+@@ -638,20 +703,25 @@ class ShmConnection : public comm::ITcpConnection,
+     /// @brief 收到心跳包后回发心跳响应
+     void SendKeepaliveResponse()
+     {
+-        if (!codec_)
+-        {
+-            return;
+-        }
++        if (!codec_ || sending_ ||
++            (state_ != comm::TcpConnStates::established && state_ != comm::TcpConnStates::verifing)) return;
++        auto self = weak_from_this().lock();
++        auto codec = codec_;
++        auto working_buffer = std::move(encode_buf_);
++        EncodeGuard guard(sending_, encode_buf_, working_buffer);
+         try
+         {
+             for (;;)
+             {
+                 size_t size = 0;
+                 const int32_t len =
+-                    codec_->SendKeepAlive(reinterpret_cast<comm::byte*>(encode_buf_.data()), encode_buf_.size(), &size);
++                    codec->SendKeepAlive(reinterpret_cast<comm::byte*>(working_buffer.data()), working_buffer.size(), &size);
++                if (codec_ != codec ||
++                    (state_ != comm::TcpConnStates::established && state_ != comm::TcpConnStates::verifing)) return;
+                 if (len > 0)
+                 {
+-                    WriteRaw(encode_buf_.data(), static_cast<uint32_t>(len));
++                    if (static_cast<size_t>(len) > working_buffer.size()) return;
++                    WriteRaw(working_buffer.data(), static_cast<uint32_t>(len));
+                     return;
+                 }
+                 if (len != comm::kCodecNeedMoreBuffer)
+@@ -661,10 +731,11 @@ class ShmConnection : public comm::ITcpConnection,
+                 // 缓冲不足：扩容后重试。所需大小为 0（内部错误）或不超过现有
+                 // 缓冲仍要求扩容（codec 违约）时放弃——绝不能把 encode_buf_ 中
+                 // 上一条消息的残留字节当作响应发给对端
+-                if (size == 0 || size <= encode_buf_.size() || !GrowEncodeBuffer(size))
++                if (size == 0 || size <= working_buffer.size() || size > max_buffer_size_)
+                 {
+                     return;
+                 }
++                working_buffer.resize(size);
+             }
+         }
+         catch (const std::bad_alloc&)
+@@ -675,10 +746,10 @@ class ShmConnection : public comm::ITcpConnection,
+ 
+     void RemoveVerifyTimer()
+     {
+-        if (verify_timer_)
++        if (verify_timer_ >= 0)
+         {
+             loop_->RemoveTimer(static_cast<int>(verify_timer_));
+-            verify_timer_ = 0;
++            verify_timer_ = -1;
+         }
+     }
+ 
+@@ -688,15 +759,17 @@ class ShmConnection : public comm::ITcpConnection,
+     UniqueFd socket_fd_;                                      ///< 连接 socket（断连检测）
+     DefaultRingChannel channel_;                              ///< 双向共享内存通道
+     comm::codec::CodecPtr codec_;                             ///< 编解码器（每连接一个实例）
+-    comm::ConnectionCallback connectioncb_;                   ///< 连接建立回调
+-    comm::AnyMessageCallback messagecb_;                      ///< 消息回调
+-    comm::CloseCallback closecb_;                             ///< 连接关闭回调
+-    comm::VerifyCallback verifycb_;                           ///< 验证回调
++    detail::StableCallback<comm::ConnectionCallback> connectioncb_;                   ///< 连接建立回调
++    detail::StableCallback<comm::AnyMessageCallback> messagecb_;                      ///< 消息回调
++    detail::StableCallback<comm::CloseCallback> closecb_;                             ///< 连接关闭回调
++    detail::StableCallback<comm::VerifyCallback> verifycb_;                           ///< 验证回调
+     std::any context_;                                        ///< 用户上下文
+     std::any rpc_context_;                                    ///< RPC 上下文
+-    comm::TimerID verify_timer_ = 0;                          ///< 验证超时定时器
++    comm::TimerID verify_timer_ = -1;                          ///< 验证超时定时器
+     comm::CloseType close_type_{comm::CloseType::Passive};    ///< 关闭类型
+     comm::TcpConnType conntype_{comm::TcpConnType::Unknown};  ///< 连接类型
++    bool sending_{false};                                    ///< 编码调用作用域重入保护
++    bool draining_{false};                                    ///< 读取作用域重入保护
+     bool keepalive_{false};                                   ///< 是否自动响应心跳包
+     std::vector<char> encode_buf_;                            ///< 编码缓冲区
+     std::vector<char> staging_;                               ///< 跨环尾解码线性化缓冲（惰性分配）
+diff --git a/include/shm_ipc/shm_server.hpp b/include/shm_ipc/shm_server.hpp
+index 0c5864c..b7110b6 100644
+--- a/include/shm_ipc/shm_server.hpp
++++ b/include/shm_ipc/shm_server.hpp
+@@ -16,8 +16,8 @@
+  *
+  * shm 实现的特点：
+  * - uri 支持 "shm:///path"、"uds:///path" 或裸路径（本地 Unix socket）
+- * - accept 后的 fd 交换握手由内部后台线程完成（每连接阻塞超时 5 秒），
+- *   恶意/僵死连接只占用握手线程，不会拖慢事件循环上的其他连接；
++ * - accept 后的 fd 交换握手由有界后台任务独立完成（每连接总超时 5 秒），
++ *   慢握手不会串行阻塞其他握手，任务数量受 max_clients 限制；
+  *   握手完成后经 eventfd 通知事件循环收编（回调仍在 loop 线程触发）
+  * - SetRateLimit / SetKeepAlive 仅记录（本地通信无需限流，断连由 EOF 即时感知）
+  * - 所有方法必须在 EventLoop 所在线程调用；进程需自行忽略 SIGPIPE
+@@ -29,9 +29,10 @@
+ #include <assert.h>
+ #include <unistd.h>
+ 
+-#include <condition_variable>
++#include <atomic>
+ #include <cstdint>
+ #include <deque>
++#include <exception>
+ #include <memory>
+ #include <mutex>
+ #include <new>
+@@ -65,6 +66,7 @@ namespace shm {
+  */
+ class ShmServer : public comm::ITcpServer
+ {
++    struct HandshakeTask;
+  public:
+     /**
+      * @param loop 外部事件循环（必须比 ShmServer 存活更久）
+@@ -75,7 +77,10 @@ class ShmServer : public comm::ITcpServer
+         : loop_(loop), uri_(std::string(uri)), name_(std::string(name))
+     {}
+ 
+-    ~ShmServer() override { Stop(); }
++    ~ShmServer() override
++    {
++        try { Stop(); } catch (...) {}  // 清理完成后，析构不得传播用户回调异常
++    }
+ 
+     // 禁止复制和移动（EventLoop 回调持有 this）
+     ShmServer(const ShmServer&)            = delete;
+@@ -125,7 +130,22 @@ class ShmServer : public comm::ITcpServer
+         assert(messagecb_);
+         assert(closecb_);
+         assert(codec_factory_);
+-        return Listen();
++        last_error_ = ErrorCode::kOk;
++        last_sys_errno_ = 0;
++        try
++        {
++            return Listen();
++        }
++        catch (const std::bad_alloc&)
++        {
++            try { Stop(); } catch (...) {}
++            return FailStart(ErrorCode::kNoMemory);
++        }
++        catch (...)
++        {
++            try { Stop(); } catch (...) {}
++            return FailStart(ErrorCode::kSystem);
++        }
+     }
+ 
+     /**
+@@ -139,29 +159,18 @@ class ShmServer : public comm::ITcpServer
+             return;
+         }
+         started_ = false;
++        ++run_generation_;
+ 
+-        // 1) 通知握手线程退出，并 shutdown 未完成握手的 socket
+-        //    （打断其阻塞中的 recvmsg，使其立即失败返回）
++        // 停止所有在途任务；各 fd 的移动/关闭与 shutdown 由同一互斥量保护。
+         {
+             const std::lock_guard<std::mutex> lk(hs_mtx_);
+             hs_stopping_ = true;
+-            for (auto& fd : hs_pending_)
+-            {
+-                if (fd.Get() >= 0)
+-                {
+-                    ::shutdown(fd.Get(), SHUT_RDWR);
+-                }
+-            }
+-            if (hs_current_.Get() >= 0)
+-            {
+-                ::shutdown(hs_current_.Get(), SHUT_RDWR);
+-            }
+-        }
+-        hs_cv_.notify_all();
+-        if (hs_thread_.joinable())
+-        {
+-            hs_thread_.join();
++            for (auto& job : hs_jobs_)
++                if (job.task->socket) ::shutdown(job.task->socket.Get(), SHUT_RDWR);
+         }
++        for (auto& job : hs_jobs_)
++            if (job.worker.joinable()) job.worker.join();
++        hs_jobs_.clear();
+ 
+         // 2) 注销监听与握手完成通知 fd
+         if (listen_fd_)
+@@ -179,23 +188,19 @@ class ShmServer : public comm::ITcpServer
+         // 3) 丢弃握手完成但未及收编的连接（未触发过 OnConnection，静默销毁）
+         {
+             const std::lock_guard<std::mutex> lk(hs_mtx_);
+-            hs_pending_.clear();
+             hs_done_.clear();
+-            hs_current_.Reset();
+         }
+ 
+-        // RemoveConn 会修改 conns_，先拷贝一份再逐个移除
+-        std::vector<ShmConnPtr> conns;
+-        conns.reserve(conns_.size());
+-        for (auto& [id, conn] : conns_)
++        // 无分配清理；单个关闭回调异常不得阻止其他连接与路径回收。
++        std::exception_ptr callback_error;
++        while (!conns_.empty())
+         {
+-            conns.push_back(conn);
++            auto conn = conns_.begin()->second;
++            try { RemoveConn(conn); }
++            catch (...) { if (!callback_error) callback_error = std::current_exception(); }
+         }
+-        for (auto& conn : conns)
+-        {
+-            RemoveConn(conn);
+-        }
+-        UnlinkUnixSocket(UriToPath(uri_));
++        CleanupSocketPath();
++        if (callback_error) std::rethrow_exception(callback_error);
+     }
+ 
+     // ------------------------------------------------------------------
+@@ -226,10 +231,10 @@ class ShmServer : public comm::ITcpServer
+      */
+     void Broadcast(const std::any& pkg)
+     {
+-        for (auto& [id, conn] : conns_)
+-        {
+-            conn->SendCmd(pkg);
+-        }
++        std::vector<ShmConnPtr> snapshot;
++        snapshot.reserve(conns_.size());
++        for (const auto& entry : conns_) snapshot.push_back(entry.second);
++        for (const auto& conn : snapshot) conn->SendCmd(pkg);
+     }
+ 
+     /** @brief 主动关闭指定连接（立即移除并触发 close 回调） */
+@@ -262,12 +267,23 @@ class ShmServer : public comm::ITcpServer
+     int LastSysErrno() const noexcept { return last_sys_errno_; }
+ 
+  private:
++    void CleanupSocketPath() noexcept
++    {
++        if (!owns_socket_path_) return;
++        owns_socket_path_ = false;
++        char path[sizeof(sockaddr_un::sun_path)];
++        struct stat st{};
++        if (CopyUnixPath(UriToPath(uri_), path, sizeof(path)) && ::lstat(path, &st) == 0 &&
++            S_ISSOCK(st.st_mode) && st.st_dev == socket_device_ && st.st_ino == socket_inode_)
++        {
++            ::unlink(path);
++        }
++    }
++
+     /// @brief 创建监听、握手线程与完成通知 fd，并注册 accept 回调
+     bool Listen()
+     {
+-        // 已在监听：直接成功。不做此守卫时，二次 Start 会对仍 joinable 的
+-        // hs_thread_ move 赋值（std::terminate），且 hs_wake_fd_ 赋值会
+-        // 关闭旧 eventfd（旧线程仍在使用）
++        // Start 幂等：不能重置仍被握手任务使用的完成通知 fd。
+         if (started_)
+         {
+             return true;
+@@ -279,6 +295,19 @@ class ShmServer : public comm::ITcpServer
+             return FailStart(ec);
+         }
+ 
++        char path[sizeof(sockaddr_un::sun_path)];
++        struct stat st{};
++        if (!CopyUnixPath(UriToPath(uri_), path, sizeof(path)) || ::lstat(path, &st) != 0)
++        {
++            const int err = errno;
++            listen_fd_.Reset();
++            last_sys_errno_ = err;
++            return FailStart(ErrorCode::kSystem);
++        }
++        socket_device_ = st.st_dev;
++        socket_inode_ = st.st_ino;
++        owns_socket_path_ = true;
++
+         {
+             // 支持 Stop 后再次 Start：复位握手线程状态
+             const std::lock_guard<std::mutex> lk(hs_mtx_);
+@@ -289,28 +318,12 @@ class ShmServer : public comm::ITcpServer
+         if (ec != ErrorCode::kOk)
+         {
+             listen_fd_.Reset();
++            CleanupSocketPath();
+             return FailStart(ec);
+         }
+ 
+-        try
+-        {
+-            hs_thread_ = std::thread([this] { HandshakeWorker(); });
+-        }
+-        catch (const std::system_error& e)
+-        {
+-            listen_fd_.Reset();
+-            hs_wake_fd_.Reset();
+-            last_sys_errno_ = e.code().value();
+-            return FailStart(ErrorCode::kSystem);
+-        }
+-        catch (const std::bad_alloc&)
+-        {
+-            listen_fd_.Reset();
+-            hs_wake_fd_.Reset();
+-            return FailStart(ErrorCode::kNoMemory);
+-        }
+-
+         started_ = true;
++        ++run_generation_;
+         try
+         {
+             loop_->AddFd(listen_fd_.Get(), [this](int fd, short revents) { OnAccept(fd, revents); });
+@@ -347,88 +360,94 @@ class ShmServer : public comm::ITcpServer
+         return false;
+     }
+ 
+-    /// @brief accept 回调：接受新连接，fd 交给握手线程（不阻塞事件循环）
++    /// @brief 回收已退出的握手任务（仅 loop 线程访问任务容器）。
++    void ReapHandshakes()
++    {
++        for (auto it = hs_jobs_.begin(); it != hs_jobs_.end();)
++        {
++            if (!it->task->finished.load(std::memory_order_acquire)) { ++it; continue; }
++            if (it->worker.joinable()) it->worker.join();
++            it = hs_jobs_.erase(it);
++        }
++    }
++
++    /// @brief 每个已接受连接独立握手；任务数量受 max_clients_ 限制，无串行等待队列。
+     void OnAccept(int lfd, short /*revents*/)
+     {
++        ReapHandshakes();
+         {
+-            // 上限计数含握手中的连接，防止握手期间超额
+             const std::lock_guard<std::mutex> lk(hs_mtx_);
+-            const std::size_t inflight = hs_pending_.size() + hs_done_.size() + (hs_current_.Get() >= 0 ? 1 : 0);
++            std::size_t inflight = hs_done_.size();
++            for (const auto& job : hs_jobs_) if (job.task->socket) ++inflight;
+             if (max_clients_ <= 0 || conns_.size() + inflight >= static_cast<std::size_t>(max_clients_))
+             {
+-                const UniqueFd rejected{::accept(lfd, nullptr, nullptr)};
+-                return;  // accept 后立即关闭，对端握手时收到 EOF
++                const UniqueFd rejected{::accept4(lfd, nullptr, nullptr, SOCK_CLOEXEC)};
++                return;
+             }
+         }
+-
+-        UniqueFd cfd{::accept(lfd, nullptr, nullptr)};
+-        if (!cfd)
+-        {
+-            return;
+-        }
+-
++        UniqueFd socket{::accept4(lfd, nullptr, nullptr, SOCK_CLOEXEC)};
++        if (!socket) return;
++        try
+         {
+-            const std::lock_guard<std::mutex> lk(hs_mtx_);
+-            hs_pending_.push_back(std::move(cfd));
++            auto task = std::make_shared<HandshakeTask>(std::move(socket), run_generation_);
++            // 先完成容器分配，再创建线程：失败时不留下无人 join 的 joinable thread。
++            hs_jobs_.push_back(HandshakeJob{task, std::thread{}});
++            try
++            {
++                hs_jobs_.back().worker = std::thread([this, task] { HandshakeWorker(task); });
++            }
++            catch (...)
++            {
++                hs_jobs_.pop_back();
++                throw;
++            }
+         }
+-        hs_cv_.notify_one();
++        catch (const std::bad_alloc&) {}  // 资源耗尽：仅拒绝该连接，保持 loop 可用
++        catch (const std::system_error&) {}
+     }
+ 
+-    /// @brief 握手线程主体：逐个完成 fd 交换（阻塞，每连接 5 秒超时）
+-    void HandshakeWorker()
++    void HandshakeWorker(const std::shared_ptr<HandshakeTask>& task)
+     {
+-        for (;;)
++        DefaultRingChannel channel;
++        const bool ok = DefaultRingChannel::CreateRingChannel(task->socket.Get(), ChannelRole::kServer,
++                                                              &channel, nullptr, &task->deadline) == ErrorCode::kOk;
++        bool notify = false;
+         {
++            const std::lock_guard<std::mutex> lk(hs_mtx_);
++            if (ok && !hs_stopping_)
+             {
+-                std::unique_lock<std::mutex> lk(hs_mtx_);
+-                hs_cv_.wait(lk, [this] { return hs_stopping_ || !hs_pending_.empty(); });
+-                if (hs_pending_.empty())
++                try
+                 {
+-                    return;  // stopping 且无待握手连接
++                    hs_done_.push_back(HandshakeDone{std::move(task->socket), std::move(channel), task->generation});
++                    notify = true;
+                 }
+-                hs_current_ = std::move(hs_pending_.front());
+-                hs_pending_.pop_front();
++                catch (const std::bad_alloc&) {}
+             }
+-
+-            DefaultRingChannel channel;
+-            // 握手失败（对端超时、乱发数据、尺寸不符或 Stop 的 shutdown
+-            // 打断）：fd 与半成品通道由 RAII 释放
+-            const bool ok = DefaultRingChannel::CreateRingChannel(hs_current_.Get(), ChannelRole::kServer, &channel) ==
+-                            ErrorCode::kOk;
+-
+-            bool notify = false;
++            task->socket.Reset();
++        }
++        if (notify)
++        {
++            const uint64_t one = 1;
++            ssize_t written;
++            do { written = ::write(hs_wake_fd_.Get(), &one, sizeof(one)); } while (written < 0 && errno == EINTR);
++            if (written < 0 && errno != EAGAIN && errno != EWOULDBLOCK)
+             {
+                 const std::lock_guard<std::mutex> lk(hs_mtx_);
+-                if (ok && !hs_stopping_)
+-                {
+-                    try
+-                    {
+-                        hs_done_.push_back(HandshakeDone{std::move(hs_current_), std::move(channel)});
+-                        notify = true;
+-                    }
+-                    catch (const std::bad_alloc&)
+-                    {
+-                        // 工作线程内分配失败：丢弃该连接，继续服务其他连接
+-                        notify = false;
+-                    }
+-                }
+-                hs_current_.Reset();
+-            }
+-            if (notify)
+-            {
+-                uint64_t v = 1;
+-                // hs_wake_fd_ 与 server 同生命周期（Stop 不关闭），写不会命中复用 fd
+-                (void)::write(hs_wake_fd_.Get(), &v, sizeof(v));
++                hs_done_.clear();
+             }
+         }
++        task->finished.store(true, std::memory_order_release);
+     }
+ 
+     /// @brief 握手完成回调（事件循环线程）：收编新连接并触发 OnConnection
+     void OnHandshakeComplete(int efd, short /*revents*/)
+     {
+-        DefaultRingChannel::DrainNotify(efd);
+-
++        ReapHandshakes();
++        const uint64_t generation = run_generation_;
++        // deque 构造可能分配失败：必须在清除通知前完成。
++        // 否则 hs_done_ 仍非空却失去唤醒，恢复 Run 后连接会无限等待。
+         std::deque<HandshakeDone> ready;
++        DefaultRingChannel::DrainNotify(efd);
+         {
+             const std::lock_guard<std::mutex> lk(hs_mtx_);
+             ready.swap(hs_done_);
+@@ -437,7 +456,7 @@ class ShmServer : public comm::ITcpServer
+         {
+             HandshakeDone done = std::move(ready.front());
+             ready.pop_front();
+-            if (!started_)
++            if (!started_ || run_generation_ != generation || done.generation != generation)
+             {
+                 break;  // 回调内已调用 Stop()：剩余连接静默丢弃
+             }
+@@ -453,22 +472,24 @@ class ShmServer : public comm::ITcpServer
+             return;  // 握手期间已达上限：静默丢弃（RAII 关闭）
+         }
+ 
++        const uint64_t generation = run_generation_;
+         auto codec = codec_factory_ ? codec_factory_() : nullptr;
+-        if (!codec)
++        if (!codec || !started_ || generation != run_generation_)
+         {
+             return;  // codec 工厂返回空（同框架：拒绝该连接）
+         }
+ 
++        const uint64_t id = next_id_++;
++        ShmConnPtr conn;
+         try
+         {
+-            const uint64_t id = next_id_++;
+-            auto conn         = std::make_shared<ShmConnection>(loop_, id, std::move(cfd), std::move(channel));
++            conn = std::make_shared<ShmConnection>(loop_, id, std::move(cfd), std::move(channel));
+             codec->keepalive  = keepalive_;
+             codec->conn_id    = id;
+-            conn->SetMessageCallback(messagecb_);
+-            conn->SetCloseCallback(closecb_);
+-            conn->SetConnectionCallback(connectioncb_);
+-            conn->SetVerifyCallback(verifycb_);
++            conn->SetMessageCallback(messagecb_.Copy());
++            conn->SetCloseCallback(closecb_.Copy());
++            conn->SetConnectionCallback(connectioncb_.Copy());
++            conn->SetVerifyCallback(verifycb_.Copy());
+             conn->SetCodec(codec);
+             conn->SetKeepAlive(keepalive_);
+             conn->SetConnType(comm::TcpConnType::TcpConn_Task);
+@@ -480,13 +501,21 @@ class ShmServer : public comm::ITcpServer
+             loop_->AddFd(conn->NotifyFd(), [this, id](int fd, short revents) { OnConnNotify(fd, revents, id); });
+             // socket：仅用于断连检测
+             loop_->AddFd(conn->SocketFd(), [this, id](int fd, short revents) { OnConnSocket(fd, revents, id); });
+-
+-            conn->OnConnection();
+         }
+         catch (const std::bad_alloc&)
+         {
+-            // 分配失败：丢弃该连接（RAII 关闭 fd/通道）
++            // 注册是事务：连接表与两个 fd 监听必须一起回滚。
++            if (conn)
++            {
++                loop_->RemoveFd(conn->NotifyFd());
++                loop_->RemoveFd(conn->SocketFd());
++                conns_.erase(id);
++                conn->Close();
++            }
++            return;
+         }
++        // 应用回调在注册完成后触发，其异常由 EventLoop 按原有语义处理。
++        conn->OnConnection();
+     }
+ 
+     /// @brief eventfd 回调：对端写入新数据，立即消费并解码分发
+@@ -543,28 +572,43 @@ class ShmServer : public comm::ITcpServer
+     {
+         UniqueFd sockfd;             ///< 握手完成的连接 socket
+         DefaultRingChannel channel;  ///< 握手完成的双向通道
++        uint64_t generation;         ///< 接受连接时的服务代次
+     };
+ 
+     EventLoop* loop_;                                 ///< 外部事件循环
+     std::string uri_;                                 ///< 监听 uri
+     std::string name_;                                ///< 服务端名称
++    dev_t socket_device_ = 0;
++    ino_t socket_inode_ = 0;
++    bool owns_socket_path_ = false;
+     UniqueFd listen_fd_;                              ///< 监听 socket
+     std::unordered_map<uint64_t, ShmConnPtr> conns_;  ///< 连接表（id -> conn）
+     uint64_t next_id_     = 1;                        ///< 下一个连接 ID
+     int max_clients_      = 16;                       ///< 最大并发客户端数
++    uint64_t run_generation_ = 0;                    ///< 防止回调停止/重启后安装旧连接
+     bool started_         = false;                    ///< 是否已 Start
+     ErrorCode last_error_ = ErrorCode::kOk;           ///< 最近一次 Start 错误码
+     int last_sys_errno_   = 0;                        ///< 最近一次 Start 的 errno
+ 
+-    // ---- 异步握手（后台线程 ↔ 事件循环线程）----
+-    std::mutex hs_mtx_;                  ///< 保护下方队列与标志
+-    std::condition_variable hs_cv_;      ///< 唤醒握手线程
+-    std::deque<UniqueFd> hs_pending_;    ///< 待握手 socket（loop → worker）
+-    std::deque<HandshakeDone> hs_done_;  ///< 握手完成待收编（worker → loop）
+-    UniqueFd hs_current_;                ///< worker 正在握手的 socket（Stop 时 shutdown 用）
+-    UniqueFd hs_wake_fd_;                ///< 握手完成通知 eventfd（worker → loop）
+-    std::thread hs_thread_;              ///< 握手线程
+-    bool hs_stopping_ = false;           ///< 握手线程停止标志
++    struct HandshakeTask
++    {
++        UniqueFd socket;
++        detail::IoDeadline deadline{5000};
++        uint64_t generation;
++        std::atomic<bool> finished{false};
++        HandshakeTask(UniqueFd fd, uint64_t run) noexcept : socket(std::move(fd)), generation(run) {}
++    };
++    struct HandshakeJob
++    {
++        std::shared_ptr<HandshakeTask> task;
++        std::thread worker;
++    };
++    // 任务容器只由 loop 线程增删；socket 的移动与 hs_done_ 由 hs_mtx_ 保护。
++    std::mutex hs_mtx_;
++    std::vector<HandshakeJob> hs_jobs_;
++    std::deque<HandshakeDone> hs_done_;
++    UniqueFd hs_wake_fd_;
++    bool hs_stopping_ = false;
+ 
+     bool keepalive_{false};                  ///< 心跳开关（同框架字段）
+     uint32_t io_keepalive_timeout_{0};       ///< 心跳超时（仅记录）
+@@ -572,13 +616,13 @@ class ShmServer : public comm::ITcpServer
+     uint32_t max_buffer_size_{1024 * 1024};  ///< 编码缓冲上限（同框架默认）
+     uint32_t rate_limit_{0};                 ///< 限流（仅记录）
+ 
+-    comm::ConnectionCallback connectioncb_;            ///< 连接建立回调
+-    comm::CloseCallback closecb_;                      ///< 连接关闭回调
+-    comm::AnyMessageCallback messagecb_;               ///< 消息回调
+-    comm::VerifyCallback verifycb_;                    ///< 验证回调
+-    comm::codec::CodecFactoryCallback codec_factory_;  ///< codec 工厂
+-    comm::StartFailedCallback failedcb_;               ///< 启动失败回调
+-    comm::StartSuccessCallback successcb_;             ///< 启动成功回调
++    detail::StableCallback<comm::ConnectionCallback> connectioncb_;            ///< 连接建立回调
++    detail::StableCallback<comm::CloseCallback> closecb_;                      ///< 连接关闭回调
++    detail::StableCallback<comm::AnyMessageCallback> messagecb_;               ///< 消息回调
++    detail::StableCallback<comm::VerifyCallback> verifycb_;                    ///< 验证回调
++    detail::StableCallback<comm::codec::CodecFactoryCallback> codec_factory_;  ///< codec 工厂
++    detail::StableCallback<comm::StartFailedCallback> failedcb_;               ///< 启动失败回调
++    detail::StableCallback<comm::StartSuccessCallback> successcb_;             ///< 启动成功回调
+ };
+ 
+ }  // namespace shm

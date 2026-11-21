@@ -1,0 +1,32 @@
+--- current/shm_connection.hpp
++++ combined/shm_connection.hpp
+@@ -98,13 +98,12 @@
+         }
+ 
+         if (sending_) return false;
+-        auto self = weak_from_this().lock();  // codec 可以重入 owner 并移除当前连接
+-        auto codec = codec_;
++        auto* codec = codec_.get();
+         // 当前 Encode 借用的缓冲独立保活；重入 ResizeBuffer 只调整下一次调用的缓冲。
+-        auto working_buffer = std::move(encode_buf_);
++        auto& working_buffer = encode_buf_;
+         EncodeGuard guard(sending_, encode_buf_, working_buffer);
+         const auto still_open = [&] {
+-            return codec_ == codec && (state_ == comm::TcpConnStates::established ||
++            return codec_.get() == codec && (state_ == comm::TcpConnStates::established ||
+                                       state_ == comm::TcpConnStates::verifing);
+         };
+         try
+@@ -520,10 +519,11 @@
+ 
+             // 在连续视图上批量解码：整个批次只 CommitRead 一次
+             uint32_t off = 0;
++            auto codec = codec_;
+             for (;;)
+             {
+                 size_t out        = 0;
+-                auto codec = codec_;
++                if (codec_ != codec) codec = codec_;
+                 if (!codec)
+                 {
+                     if (off) channel_.CommitRead(off);

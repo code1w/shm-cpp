@@ -1,0 +1,14 @@
+# started on Sat Nov 21 18:18:43 2026
+
+
+ Performance counter stats for '/tmp/shm-contract-perf/build/bench_app 64':
+
+         629881937      cycles:u                                                    
+        1032172084      instructions:u            #    1.64  insn per cycle         
+
+       0.331670237 seconds time elapsed
+
+       0.259572000 seconds user
+       0.269306000 seconds sys
+
+

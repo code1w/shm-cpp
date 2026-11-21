@@ -1,0 +1,135 @@
+--- current/shm_connection.hpp
++++ legacy_sender/shm_connection.hpp
+@@ -97,23 +97,12 @@
+             return false;
+         }
+ 
+-        if (sending_) return false;
+-        auto self = weak_from_this().lock();  // codec 可以重入 owner 并移除当前连接
+-        auto codec = codec_;
+-        // 当前 Encode 借用的缓冲独立保活；重入 ResizeBuffer 只调整下一次调用的缓冲。
+-        auto working_buffer = std::move(encode_buf_);
+-        EncodeGuard guard(sending_, encode_buf_, working_buffer);
+-        const auto still_open = [&] {
+-            return codec_ == codec && (state_ == comm::TcpConnStates::established ||
+-                                      state_ == comm::TcpConnStates::verifing);
+-        };
+         try
+         {
+             // 快速路径：codec 能报告精确编码长度时，直接在 ring 中预留
+             // 空间并编码，把 "any → encode_buf_ → ring" 两次拷贝降为一次。
+             // 小消息继续走 encode_buf_（缓存命中，避免 Reserve/Commit 开销）。
+-            const int32_t need = codec->EncodedSize(pkg);
+-            if (!still_open()) return false;
++            const int32_t need = codec_->EncodedSize(pkg);
+             if (need >= static_cast<int32_t>(kDirectEncodeMinBytes) &&
+                 static_cast<uint32_t>(need) <= DefaultRingChannel::kMaxWriteSize)
+             {
+@@ -121,31 +110,31 @@
+                 if (channel_.StartBatch(&batch) == ErrorCode::kOk)
+                 {
+                     char* dst = batch.Reserve(static_cast<uint32_t>(need));
+-                    // Reserve 失败也可能是普通映射跨尾，回退到缓冲编码路径。
+-                    if (dst)
+-                    {
+-                        size_t out = 0;
+-                        const int32_t len =
+-                            codec->Encode(pkg, reinterpret_cast<comm::byte*>(dst), static_cast<size_t>(need), &out);
+-                        if (!still_open()) { batch.Cancel(); return false; }
+-                        if (len == need)
+-                        {
+-                            batch.CommitReserve(static_cast<uint32_t>(len));
+-                            batch.Flush();  // 发布 write_pos 并按需通知对端
+-                            return true;
+-                        }
+-
+-                        // 预留不足/长度不符：回滚后走原有 encode_buf_ 路径
+-                        batch.Cancel();
+-                        if (len == comm::kCodecSkipPackage)
+-                        {
+-                            return true;
+-                        }
+-                        if (len == comm::kCodecDisconnect)
+-                        {
+-                            Close();
+-                            return false;
+-                        }
++                    if (!dst)
++                    {
++                        return false;  // 环空间不足（与 WriteRaw 预检一致）
++                    }
++
++                    size_t out = 0;
++                    const int32_t len =
++                        codec_->Encode(pkg, reinterpret_cast<comm::byte*>(dst), static_cast<size_t>(need), &out);
++                    if (len == need)
++                    {
++                        batch.CommitReserve(static_cast<uint32_t>(len));
++                        batch.Flush();  // 发布 write_pos 并按需通知对端
++                        return true;
++                    }
++
++                    // 预留不足/长度不符：回滚后走原有 encode_buf_ 路径
++                    batch.Cancel();
++                    if (len == comm::kCodecSkipPackage)
++                    {
++                        return true;
++                    }
++                    if (len == comm::kCodecDisconnect)
++                    {
++                        Close();
++                        return false;
+                     }
+                 }
+             }
+@@ -154,8 +143,7 @@
+             {
+                 size_t out = 0;
+                 const int32_t len =
+-                    codec->Encode(pkg, reinterpret_cast<comm::byte*>(working_buffer.data()), working_buffer.size(), &out);
+-                if (!still_open()) return false;
++                    codec_->Encode(pkg, reinterpret_cast<comm::byte*>(encode_buf_.data()), encode_buf_.size(), &out);
+                 if (len == comm::kCodecSkipPackage)
+                 {
+                     return true;  // 丢包（同框架）
+@@ -169,18 +157,13 @@
+                 {
+                     // out 为所需大小：为 0（内部错误）或不超过现有缓冲仍要求
+                     // 扩容（codec 违约）时放弃，避免无限重试
+-                    if (out == 0 || out <= working_buffer.size() || out > max_buffer_size_)
++                    if (out == 0 || out <= encode_buf_.size() || !GrowEncodeBuffer(out))
+                     {
+                         return false;
+                     }
+-                    working_buffer.resize(out);
+                     continue;
+                 }
+-                if (len <= 0 || static_cast<size_t>(len) > working_buffer.size())
+-                {
+-                    return false;  // codec 返回值违约，禁止越界读取编码缓冲
+-                }
+-                return WriteRaw(working_buffer.data(), static_cast<uint32_t>(len));
++                return WriteRaw(encode_buf_.data(), static_cast<uint32_t>(len));
+             }
+         }
+         catch (const std::bad_alloc&)
+@@ -655,6 +638,19 @@
+ 
+     /// @brief 启用"直接写 ring"的最小编码长度（小消息留在 encode_buf_）
+     static constexpr uint32_t kDirectEncodeMinBytes = 256;
++
++    bool GrowEncodeBuffer(size_t need)
++    {
++        if (need > max_buffer_size_)
++        {
++            return false;
++        }
++        if (need > encode_buf_.size())
++        {
++            encode_buf_.resize(need);
++        }
++        return true;
++    }
+ 
+     // 普通编码与心跳共享借用规则：重入扩容不影响正在使用的缓冲。
+     struct EncodeGuard

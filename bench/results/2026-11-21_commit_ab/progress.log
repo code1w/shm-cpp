@@ -1,0 +1,60 @@
+round 1 throughput before/after passed
+round 1 rtt after/before passed
+round=1 app=small batch=1 order=before/after before=99070 after=95801 change=-3.3%
+round=1 app=small batch=8 order=after/before before=770029 after=718901 change=-6.6%
+round=1 app=small batch=64 order=before/after before=3966688 after=3493613 change=-11.9%
+round=1 app=small batch=256 order=after/before before=10139512 after=4174761 change=-58.8%
+round=1 app=big4k batch=8 order=before/after before=429288 after=437504 change=+1.9%
+round=1 app=big4k batch=64 order=after/before before=998309 after=937432 change=-6.1%
+round=1 app=big4k batch=256 order=before/after before=1132437 after=955148 change=-15.7%
+round=1 app=huge1m batch=1 order=after/before before=1247 after=1264 change=+1.4%
+round=1 app=huge1m batch=2 order=before/after before=1920 after=1754 change=-8.6%
+round=1 app=huge1m batch=4 order=after/before before=2667 after=2193 change=-17.8%
+round 2 throughput after/before passed
+round 2 rtt before/after passed
+round=2 app=small batch=1 order=after/before before=99636 after=95862 change=-3.8%
+round=2 app=small batch=8 order=before/after before=751315 after=715354 change=-4.8%
+round=2 app=small batch=64 order=after/before before=4465037 after=3591823 change=-19.6%
+round=2 app=small batch=256 order=before/after before=7154750 after=3246640 change=-54.6%
+round=2 app=big4k batch=8 order=after/before before=434112 after=431323 change=-0.6%
+round=2 app=big4k batch=64 order=before/after before=998253 after=902255 change=-9.6%
+round=2 app=big4k batch=256 order=after/before before=1160619 after=984113 change=-15.2%
+round=2 app=huge1m batch=1 order=before/after before=1235 after=1215 change=-1.6%
+round=2 app=huge1m batch=2 order=after/before before=1946 after=1799 change=-7.6%
+round=2 app=huge1m batch=4 order=before/after before=2623 after=2099 change=-20.0%
+round 3 throughput before/after passed
+round 3 rtt after/before passed
+round=3 app=small batch=1 order=before/after before=98559 after=96595 change=-2.0%
+round=3 app=small batch=8 order=after/before before=773741 after=721853 change=-6.7%
+round=3 app=small batch=64 order=before/after before=4508931 after=3211626 change=-28.8%
+round=3 app=small batch=256 order=after/before before=9923093 after=3795616 change=-61.7%
+round=3 app=big4k batch=8 order=before/after before=461637 after=441949 change=-4.3%
+round=3 app=big4k batch=64 order=after/before before=1114149 after=936351 change=-16.0%
+round=3 app=big4k batch=256 order=before/after before=1151230 after=965239 change=-16.2%
+round=3 app=huge1m batch=1 order=after/before before=1264 after=1234 change=-2.4%
+round=3 app=huge1m batch=2 order=before/after before=1997 after=1686 change=-15.6%
+round=3 app=huge1m batch=4 order=after/before before=2566 after=2160 change=-15.8%
+round 4 throughput after/before passed
+round 4 rtt before/after passed
+round=4 app=small batch=1 order=after/before before=98486 after=95421 change=-3.1%
+round=4 app=small batch=8 order=before/after before=752192 after=707255 change=-6.0%
+round=4 app=small batch=64 order=after/before before=3996352 after=3237368 change=-19.0%
+round=4 app=small batch=256 order=before/after before=7108447 after=4168986 change=-41.4%
+round=4 app=big4k batch=8 order=after/before before=495563 after=447303 change=-9.7%
+round=4 app=big4k batch=64 order=before/after before=1017356 after=875638 change=-13.9%
+round=4 app=big4k batch=256 order=after/before before=1174358 after=1018563 change=-13.3%
+round=4 app=huge1m batch=1 order=before/after before=1232 after=1265 change=+2.7%
+round=4 app=huge1m batch=2 order=after/before before=1999 after=1763 change=-11.8%
+round=4 app=huge1m batch=4 order=before/after before=2503 after=2177 change=-13.0%
+round 5 throughput before/after passed
+round 5 rtt after/before passed
+round=5 app=small batch=1 order=before/after before=99117 after=96295 change=-2.8%
+round=5 app=small batch=8 order=after/before before=775632 after=720398 change=-7.1%
+round=5 app=small batch=64 order=before/after before=4141224 after=3170886 change=-23.4%
+round=5 app=small batch=256 order=after/before before=9428641 after=3801812 change=-59.7%
+round=5 app=big4k batch=8 order=before/after before=458730 after=414452 change=-9.7%
+round=5 app=big4k batch=64 order=after/before before=1109043 after=932082 change=-16.0%
+round=5 app=big4k batch=256 order=before/after before=1168838 after=963274 change=-17.6%
+round=5 app=huge1m batch=1 order=after/before before=1247 after=1251 change=+0.3%
+round=5 app=huge1m batch=2 order=before/after before=1995 after=1714 change=-14.1%
+round=5 app=huge1m batch=4 order=after/before before=2529 after=2080 change=-17.8%

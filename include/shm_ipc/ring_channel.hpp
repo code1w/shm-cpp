@@ -441,7 +441,7 @@ class RingChannel
         } while (r < 0 && errno == EINTR);
     }
 
-    /** @brief 限额收包后唤醒本地读方，确保剩余数据在下一轮继续处理。 */
+    /** @brief 主动唤醒本地读方，供上层显式安排再次读取。 */
     void WakeReader() const noexcept
     {
         if (!notify_read_fd_) return;

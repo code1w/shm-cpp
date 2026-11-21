@@ -1,0 +1,14 @@
+# started on Sat Nov 21 18:18:56 2026
+
+
+ Performance counter stats for '/tmp/shm-residual-attribution/baseline/build/bench_app 64':
+
+        5201046567      cycles:u                                                    
+        9353514654      instructions:u            #    1.80  insn per cycle         
+
+       2.456438001 seconds time elapsed
+
+       1.897071000 seconds user
+       2.082482000 seconds sys
+
+

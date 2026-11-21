@@ -1,0 +1,94 @@
+--- current/shm_connection.hpp
++++ direct_dispatch/shm_connection.hpp
+@@ -115,7 +115,7 @@
+             // 快速路径：codec 能报告精确编码长度时，直接在 ring 中预留
+             // 空间并编码，把 "any → encode_buf_ → ring" 两次拷贝降为一次。
+             // 小消息继续走 encode_buf_（缓存命中，避免 Reserve/Commit 开销）。
+-            const int32_t need = CallCodec([&] { return codec->EncodedSize(pkg); });
++            const int32_t need = codec->EncodedSize(pkg);
+             if (need >= static_cast<int32_t>(kDirectEncodeMinBytes) &&
+                 static_cast<uint32_t>(need) <= DefaultRingChannel::kMaxWriteSize)
+             {
+@@ -128,10 +128,8 @@
+                     {
+                         size_t out = 0;
+                         const int32_t len =
+-                            CallCodec([&] {
+-                                return codec->Encode(pkg, reinterpret_cast<comm::byte*>(dst),
++                            codec->Encode(pkg, reinterpret_cast<comm::byte*>(dst),
+                                                      static_cast<size_t>(need), &out);
+-                            });
+                         if (len == need)
+                         {
+                             batch.CommitReserve(static_cast<uint32_t>(len));
+@@ -158,10 +156,8 @@
+             {
+                 size_t out = 0;
+                 const int32_t len =
+-                    CallCodec([&] {
+-                        return codec->Encode(pkg, reinterpret_cast<comm::byte*>(encode_buf_.data()),
++                    codec->Encode(pkg, reinterpret_cast<comm::byte*>(encode_buf_.data()),
+                                              encode_buf_.size(), &out);
+-                    });
+                 if (len == comm::kCodecSkipPackage)
+                 {
+                     return true;  // 丢包（同框架）
+@@ -334,7 +330,7 @@
+         if (verifycb_)
+         {
+             state_ = comm::TcpConnStates::verifing;
+-            CallCallback(verifycb_active_, [&] { verifycb_(shared_from_this()); });
++            verifycb_(shared_from_this());
+         }
+         else
+         {
+@@ -346,7 +342,7 @@
+         }
+         if (connectioncb_)
+         {
+-            CallCallback(connectioncb_active_, [&] { connectioncb_(shared_from_this()); });
++            connectioncb_(shared_from_this());
+         }
+     }
+ 
+@@ -357,7 +353,7 @@
+     {
+         if (messagecb_ && (state_ == comm::TcpConnStates::established || state_ == comm::TcpConnStates::verifing))
+         {
+-            CallCallback(messagecb_active_, [&] { messagecb_(shared_from_this(), pkg); });
++            messagecb_(shared_from_this(), pkg);
+         }
+     }
+ 
+@@ -397,7 +393,7 @@
+             {
+                 try
+                 {
+-                    CallCallback(closecb_active_, [&] { closecb_(shared_from_this()); });
++                    closecb_(shared_from_this());
+                 }
+                 catch (...)
+                 {
+@@ -530,9 +526,7 @@
+             for (;;)
+             {
+                 size_t out        = 0;
+-                const int32_t len = CallCodec([&] {
+-                    return codec->Decode(buf + off, buflen - off, pkg, &out);
+-                });
++                const int32_t len = codec->Decode(buf + off, buflen - off, pkg, &out);
+                 if (len == comm::kCodecDisconnect)
+                 {
+                     if (off)
+@@ -716,10 +710,8 @@
+             for (;;)
+             {
+                 size_t size = 0;
+-                const int32_t len = CallCodec([&] {
+-                    return codec->SendKeepAlive(reinterpret_cast<comm::byte*>(encode_buf_.data()),
++                const int32_t len = codec->SendKeepAlive(reinterpret_cast<comm::byte*>(encode_buf_.data()),
+                                                encode_buf_.size(), &size);
+-                });
+                 if (len > 0)
+                 {
+                     if (static_cast<size_t>(len) > encode_buf_.size()) return;

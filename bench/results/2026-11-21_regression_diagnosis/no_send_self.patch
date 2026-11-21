@@ -1,0 +1,11 @@
+--- current/shm_connection.hpp
++++ no_send_self/shm_connection.hpp
+@@ -99,7 +99,7 @@
+         }
+ 
+         if (sending_) return false;
+-        auto self = weak_from_this().lock();  // codec 可以重入 owner 并移除当前连接
++        // Diagnostic only: caller owns the connection in this benchmark.
+         auto codec = codec_;
+         // 当前 Encode 借用的缓冲独立保活；重入 ResizeBuffer 只调整下一次调用的缓冲。
+         auto working_buffer = std::move(encode_buf_);

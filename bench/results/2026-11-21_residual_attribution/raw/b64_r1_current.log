@@ -1,0 +1,3 @@
+probe role=client poll_calls=142958
+probe role=server poll_calls=131113
+type=small  batch=  64 total=8388608 time=  1.781s rate=  4711189 msg/s      71.9 MB/s

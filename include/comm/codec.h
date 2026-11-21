@@ -10,6 +10,10 @@
  *   Decode:  >0 消费字节数（pkg 已填充）；0 数据不完整；-1 断开连接；
  *            -2 心跳包（*size 为消费字节数）
  *
+ * shm::ShmConnection 调用这些虚函数时，codec只做编解码，不重入所属
+ * 连接的管理/收发，不替换codec或调整连接缓冲。连接和codec由调用方
+ * 保证在操作期间有效；容量不足通过返回值和 *size 请求扩容。
+ *
  * 迁移现有 codec 的两种方式：
  * 1. 零改动：comm::codec::Adapt(std::make_shared<你的codec>(...)) 包装后即可用
  * 2. 换基类：把 codec 类的基类 codec::Codec 改为 comm::codec::Codec

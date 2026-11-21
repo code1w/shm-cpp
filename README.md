@@ -34,11 +34,17 @@ make -j$(nproc)
 
 通道通知使用非阻塞 eventfd（`EFD_NONBLOCK | EFD_CLOEXEC`），握手标签为 `kEventfd`。已放弃 Unix datagram socketpair 通知方案；使用该方案的旧客户端和服务端需要同步升级。`NotifyReadFd()` 用于 poll，`RingChannel::DrainNotify()` 一次读取合并计数，返回值不能视为消息数。
 
-共享 eventfd 通过 SCM_RIGHTS 传递，两端共享其 file status flags。通信双方必须保持 `O_NONBLOCK`，不得通过 `F_SETFL` 清除该属性；握手只校验当时的属性，不提供握手后对端改属性的隔离。此版本采用遵守协议的可信对端模型。读取预算、reader_wait 按需通知和本地 WakeReader 唤醒继续保留。
+共享 eventfd 通过 SCM_RIGHTS 传递，两端共享其 file status flags。通信双方必须保持 `O_NONBLOCK`，不得通过 `F_SETFL` 清除该属性；握手只校验当时的属性，不提供握手后对端改属性的隔离。此版本采用遵守协议的可信对端模型。在少连接、消息量受控的使用前提下，`ShmConnection::DrainRing()` 不设置读取预算，持续处理到环空、遇到不完整消息或连接关闭；`reader_wait` 按需通知继续保留。`RingChannel::WakeReader()` 仅作为显式本地唤醒接口，不再用于自动拆分读取批次。
 
 服务端为各在途连接独立执行握手，任务数量受 `SetMaxClients()` 约束；每条连接有 5 秒总期限，Stop 会打断并回收所有握手任务。连接结果绑定接受时的服务代次，Stop/Start 后不会收编旧结果。定时器 fd 为非阻塞；周期回调需排空计数，一次性回调已由包装层排空，再次排空安全返回 0。
 
 边界回归可运行 `./build/test_audit_core_fixes` 和 `./build/test_audit_round2_fixes`，覆盖通知失败、fd 0、广播重入关闭、慢握手隔离、批次重启与eventfd 计数饱和、合并排空及端点验证。可通过 `-DSHM_IPC_SANITIZE=address,undefined` 构建对应 sanitizer 检查。
+
+## 连接调用约定
+
+`ShmConnection` 是单线程、受控codec接口：所有收发与连接管理在所属 EventLoop 线程执行，调用方在整个操作期间持有稳定的连接强引用。`Encode`、`EncodedSize`、`Decode`、`SendKeepAlive` 只做编解码，不调用连接管理/收发方法，不关闭连接、替换codec或调整连接缓冲；容量不足通过返回值与所需大小交给传输层处理。
+
+codec及收发配置只在收发操作之外修改；不嵌套调用 `SendCmd` 或 `DrainRing`，不替换正在执行的回调。消息回调可以正常回复或 `Close`，owner已有的局部强引用负责完成收尾。Debug检查本连接的常见违约行为并assert；Release依赖该约定，热路径不额外复制连接/codec/回调的shared_ptr快照，也不移动编码缓冲所有权。
 
 ## 快速开始
 

@@ -1,0 +1,10 @@
+--- current/shm_connection.hpp
++++ arm_early/shm_connection.hpp
+@@ -331,6 +331,7 @@
+     void OnConnection()
+     {
+         AssertCodecIdle();
++        if (!channel_.PrepareWait(channel_.ReadPos())) channel_.WakeReader();
+         if (verifycb_)
+         {
+             state_ = comm::TcpConnStates::verifing;

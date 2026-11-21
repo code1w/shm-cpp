@@ -1,0 +1,14 @@
+# started on Sat Nov 21 14:58:44 2026
+
+
+ Performance counter stats for '/bin/true':
+
+           1096210      cycles:u                                                    
+           1153010      instructions:u            #    1.05  insn per cycle         
+
+       0.013698150 seconds time elapsed
+
+       0.001139000 seconds user
+       0.002279000 seconds sys
+
+

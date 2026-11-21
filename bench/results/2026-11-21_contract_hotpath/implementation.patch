@@ -1,0 +1,542 @@
+diff --git a/include/comm/codec.h b/include/comm/codec.h
+index 3578f4c..a6851ef 100644
+--- a/include/comm/codec.h
++++ b/include/comm/codec.h
+@@ -10,6 +10,10 @@
+  *   Decode:  >0 消费字节数（pkg 已填充）；0 数据不完整；-1 断开连接；
+  *            -2 心跳包（*size 为消费字节数）
+  *
++ * shm::ShmConnection 调用这些虚函数时，codec只做编解码，不重入所属
++ * 连接的管理/收发，不替换codec或调整连接缓冲。连接和codec由调用方
++ * 保证在操作期间有效；容量不足通过返回值和 *size 请求扩容。
++ *
+  * 迁移现有 codec 的两种方式：
+  * 1. 零改动：comm::codec::Adapt(std::make_shared<你的codec>(...)) 包装后即可用
+  * 2. 换基类：把 codec 类的基类 codec::Codec 改为 comm::codec::Codec
+diff --git a/include/shm_ipc/shm_connection.hpp b/include/shm_ipc/shm_connection.hpp
+index aac647f..6248fca 100644
+--- a/include/shm_ipc/shm_connection.hpp
++++ b/include/shm_ipc/shm_connection.hpp
+@@ -25,7 +25,6 @@
+ #include <unistd.h>
+ 
+ #include <algorithm>
+-#include <chrono>
+ #include <cstdint>
+ #include <cstring>
+ #include <memory>
+@@ -48,6 +47,11 @@ namespace shm {
+  *
+  * @thread-safety 非线程安全：SendCmd / Close / 回调均限定在所属 EventLoop 线程；
+  *                底层 SPSC 环每个方向只允许一个生产者线程和一个消费者线程。
++ * 调用契约：调用方在整个操作期间持有稳定的连接强引用；codec与收发配置
++ * 仅在操作之外修改。codec虚函数只做编解码，不重入连接管理/收发；禁止
++ * 嵌套SendCmd/DrainRing，禁止执行中的回调自替换。消息回调可以正常回复
++ * 或Close，由owner已有的强引用保证生命周期。Debug违规时assert，Release
++ * 依赖契约，不为任意重入复制shared_ptr快照。
+  */
+ class ShmConnection : public comm::ITcpConnection,
+                       public std::enable_shared_from_this<ShmConnection>
+@@ -64,7 +68,12 @@ class ShmConnection : public comm::ITcpConnection,
+         : loop_(loop), id_(id), socket_fd_(std::move(socket_fd)), channel_(std::move(channel)), encode_buf_(128 * 1024)
+     {}
+ 
+-    ~ShmConnection() override { RemoveVerifyTimer(); }
++    ~ShmConnection() override
++    {
++        assert(!sending_ && !draining_ && !codec_active_ && !messagecb_active_ &&
++               !connectioncb_active_ && !closecb_active_ && !verifycb_active_);
++        RemoveVerifyTimer();
++    }
+ 
+     // 禁止复制和移动（事件回调通过 shared_ptr 引用本对象）
+     ShmConnection(const ShmConnection&)            = delete;
+@@ -98,23 +107,15 @@ class ShmConnection : public comm::ITcpConnection,
+             return false;
+         }
+ 
+-        if (sending_) return false;
+-        auto self = weak_from_this().lock();  // codec 可以重入 owner 并移除当前连接
+-        auto codec = codec_;
+-        // 当前 Encode 借用的缓冲独立保活；重入 ResizeBuffer 只调整下一次调用的缓冲。
+-        auto working_buffer = std::move(encode_buf_);
+-        EncodeGuard guard(sending_, encode_buf_, working_buffer);
+-        const auto still_open = [&] {
+-            return codec_ == codec && (state_ == comm::TcpConnStates::established ||
+-                                      state_ == comm::TcpConnStates::verifing);
+-        };
++        AssertCodecIdle();
++        DebugFlagGuard send_scope(sending_);
++        auto* codec = codec_.get();  // 调用方保证连接及codec在整个发送期间有效
+         try
+         {
+             // 快速路径：codec 能报告精确编码长度时，直接在 ring 中预留
+             // 空间并编码，把 "any → encode_buf_ → ring" 两次拷贝降为一次。
+             // 小消息继续走 encode_buf_（缓存命中，避免 Reserve/Commit 开销）。
+-            const int32_t need = codec->EncodedSize(pkg);
+-            if (!still_open()) return false;
++            const int32_t need = CallCodec([&] { return codec->EncodedSize(pkg); });
+             if (need >= static_cast<int32_t>(kDirectEncodeMinBytes) &&
+                 static_cast<uint32_t>(need) <= DefaultRingChannel::kMaxWriteSize)
+             {
+@@ -127,8 +128,10 @@ class ShmConnection : public comm::ITcpConnection,
+                     {
+                         size_t out = 0;
+                         const int32_t len =
+-                            codec->Encode(pkg, reinterpret_cast<comm::byte*>(dst), static_cast<size_t>(need), &out);
+-                        if (!still_open()) { batch.Cancel(); return false; }
++                            CallCodec([&] {
++                                return codec->Encode(pkg, reinterpret_cast<comm::byte*>(dst),
++                                                     static_cast<size_t>(need), &out);
++                            });
+                         if (len == need)
+                         {
+                             batch.CommitReserve(static_cast<uint32_t>(len));
+@@ -155,8 +158,10 @@ class ShmConnection : public comm::ITcpConnection,
+             {
+                 size_t out = 0;
+                 const int32_t len =
+-                    codec->Encode(pkg, reinterpret_cast<comm::byte*>(working_buffer.data()), working_buffer.size(), &out);
+-                if (!still_open()) return false;
++                    CallCodec([&] {
++                        return codec->Encode(pkg, reinterpret_cast<comm::byte*>(encode_buf_.data()),
++                                             encode_buf_.size(), &out);
++                    });
+                 if (len == comm::kCodecSkipPackage)
+                 {
+                     return true;  // 丢包（同框架）
+@@ -170,18 +175,18 @@ class ShmConnection : public comm::ITcpConnection,
+                 {
+                     // out 为所需大小：为 0（内部错误）或不超过现有缓冲仍要求
+                     // 扩容（codec 违约）时放弃，避免无限重试
+-                    if (out == 0 || out <= working_buffer.size() || out > max_buffer_size_)
++                    if (out == 0 || out <= encode_buf_.size() || out > max_buffer_size_)
+                     {
+                         return false;
+                     }
+-                    working_buffer.resize(out);
++                    encode_buf_.resize(out);
+                     continue;
+                 }
+-                if (len <= 0 || static_cast<size_t>(len) > working_buffer.size())
++                if (len <= 0 || static_cast<size_t>(len) > encode_buf_.size())
+                 {
+                     return false;  // codec 返回值违约，禁止越界读取编码缓冲
+                 }
+-                return WriteRaw(working_buffer.data(), static_cast<uint32_t>(len));
++                return WriteRaw(encode_buf_.data(), static_cast<uint32_t>(len));
+             }
+         }
+         catch (const std::bad_alloc&)
+@@ -199,6 +204,7 @@ class ShmConnection : public comm::ITcpConnection,
+      */
+     void Close() override
+     {
++        AssertCodecIdle();
+         if (state_ == comm::TcpConnStates::established || state_ == comm::TcpConnStates::verifing)
+         {
+             close_type_ = comm::CloseType::Active;
+@@ -227,9 +233,9 @@ class ShmConnection : public comm::ITcpConnection,
+ 
+     comm::CloseType GetCloseType() const override { return close_type_; }
+ 
+-    void SetContext(std::any context) override { context_ = std::move(context); }
++    void SetContext(std::any context) override { AssertCodecIdle(); context_ = std::move(context); }
+     const std::any& Context() const override { return context_; }
+-    void SetRpcContext(std::any context) override { rpc_context_ = std::move(context); }
++    void SetRpcContext(std::any context) override { AssertCodecIdle(); rpc_context_ = std::move(context); }
+     const std::any& RpcContext() const override { return rpc_context_; }
+ 
+     /**
+@@ -241,6 +247,7 @@ class ShmConnection : public comm::ITcpConnection,
+      */
+     void StartVerifyTimer(int64_t expired_ms, int64_t interval_ms, comm::TimeAction action) override
+     {
++        AssertCodecIdle();
+         if (verify_timer_ >= 0)
+         {
+             return;
+@@ -274,10 +281,11 @@ class ShmConnection : public comm::ITcpConnection,
+      * 开启后，解码方向收到心跳包（codec->Decode 返回 -2）时，
+      * 自动调用 codec->SendKeepAlive 生成响应包回发给对端。
+      */
+-    void SetKeepAlive(bool keepalive) override { keepalive_ = keepalive; }
++    void SetKeepAlive(bool keepalive) override { AssertOperationIdle(); keepalive_ = keepalive; }
+ 
+     void ResizeBuffer(size_t size, size_t max) override
+     {
++        AssertOperationIdle();
+         max_buffer_size_ = max;
+         if (encode_buf_.size() < size)
+         {
+@@ -291,14 +299,14 @@ class ShmConnection : public comm::ITcpConnection,
+     // shm 扩展接口（非接口方法）
+     // ------------------------------------------------------------------
+ 
+-    void SetCodec(comm::codec::CodecPtr codec) { codec_ = std::move(codec); }
++    void SetCodec(comm::codec::CodecPtr codec) { AssertOperationIdle(); codec_ = std::move(codec); }
+     void SetConnType(comm::TcpConnType type) { conntype_ = type; }
+     void SetID(uint64_t id) { id_ = id; }
+ 
+-    void SetConnectionCallback(comm::ConnectionCallback cb) { connectioncb_ = std::move(cb); }
+-    void SetMessageCallback(comm::AnyMessageCallback cb) { messagecb_ = std::move(cb); }
+-    void SetCloseCallback(comm::CloseCallback cb) { closecb_ = std::move(cb); }
+-    void SetVerifyCallback(comm::VerifyCallback cb) { verifycb_ = std::move(cb); }
++    void SetConnectionCallback(comm::ConnectionCallback cb) { AssertCodecIdle(); assert(!connectioncb_active_); connectioncb_ = std::move(cb); }
++    void SetMessageCallback(comm::AnyMessageCallback cb) { AssertCodecIdle(); assert(!messagecb_active_); messagecb_ = std::move(cb); }
++    void SetCloseCallback(comm::CloseCallback cb) { AssertCodecIdle(); assert(!closecb_active_); closecb_ = std::move(cb); }
++    void SetVerifyCallback(comm::VerifyCallback cb) { AssertCodecIdle(); assert(!verifycb_active_); verifycb_ = std::move(cb); }
+ 
+     std::any* GetMutableContext() { return &context_; }
+     std::any* GetMutableRpcContext() { return &rpc_context_; }
+@@ -322,10 +330,11 @@ class ShmConnection : public comm::ITcpConnection,
+      */
+     void OnConnection()
+     {
++        AssertCodecIdle();
+         if (verifycb_)
+         {
+             state_ = comm::TcpConnStates::verifing;
+-            verifycb_(shared_from_this());
++            CallCallback(verifycb_active_, [&] { verifycb_(shared_from_this()); });
+         }
+         else
+         {
+@@ -337,7 +346,7 @@ class ShmConnection : public comm::ITcpConnection,
+         }
+         if (connectioncb_)
+         {
+-            connectioncb_(shared_from_this());
++            CallCallback(connectioncb_active_, [&] { connectioncb_(shared_from_this()); });
+         }
+     }
+ 
+@@ -348,7 +357,7 @@ class ShmConnection : public comm::ITcpConnection,
+     {
+         if (messagecb_ && (state_ == comm::TcpConnStates::established || state_ == comm::TcpConnStates::verifing))
+         {
+-            messagecb_(shared_from_this(), pkg);
++            CallCallback(messagecb_active_, [&] { messagecb_(shared_from_this(), pkg); });
+         }
+     }
+ 
+@@ -357,6 +366,7 @@ class ShmConnection : public comm::ITcpConnection,
+      */
+     void OnVerify(bool succ)
+     {
++        AssertCodecIdle();
+         if (state_ != comm::TcpConnStates::verifing)
+         {
+             return;  // 过期或重复验证结果不得改变连接生命周期
+@@ -377,6 +387,7 @@ class ShmConnection : public comm::ITcpConnection,
+      */
+     void OnClose()
+     {
++        AssertCodecIdle();
+         if (state_ != comm::TcpConnStates::closeed)
+         {
+             state_ = comm::TcpConnStates::closeed;
+@@ -386,7 +397,7 @@ class ShmConnection : public comm::ITcpConnection,
+             {
+                 try
+                 {
+-                    closecb_(shared_from_this());
++                    CallCallback(closecb_active_, [&] { closecb_(shared_from_this()); });
+                 }
+                 catch (...)
+                 {
+@@ -416,35 +427,30 @@ class ShmConnection : public comm::ITcpConnection,
+      * 读空后调用 channel_.PrepareWait 声明"即将睡眠"（按需通知）：写方此后
+      * 才会再写 eventfd。PrepareWait 发现新数据到达时继续读，不会丢唤醒。
+      *
++     * 不设置帧数、字节数或时间预算；持续读取到环空、遇到不完整消息或连接关闭。
++     *
+      * @note codec/消息回调异常会关闭连接并继续传播；已投递的消息不重放。
+-     *       回调重入 DrainRing 返回 0，由外层读取继续处理。
++     *       不允许嵌套读取，也不允许codec执行期间调用连接管理或收发接口。
+      *
+      * @return 分发的消息条数；-1 协议错误（codec 要求断开），连接应移除
+      */
+-    int DrainRing(bool drain_all = false)
++    int DrainRing()
+     {
+         if (state_ != comm::TcpConnStates::established && state_ != comm::TcpConnStates::verifing)
+         {
+             return 0;
+         }
+-        // 回调重入时由外层继续消费，不能再次解码尚未提交的视图。
+-        if (draining_) return 0;
+-        auto self = weak_from_this().lock();  // 用户 codec 可重入 owner，移除连接
+-        struct DrainGuard
+-        {
+-            bool& active;
+-            explicit DrainGuard(bool& value) : active(value) { active = true; }
+-            ~DrainGuard() { active = false; }
+-        } guard(draining_);
++        AssertCodecIdle();
++        assert(!sending_);
++        DebugFlagGuard read_scope(draining_);
+         try
+         {
+-            DrainBudget budget(drain_all);
+             int total = 0;
+             for (;;)
+             {
+                 // 基线必须在读取之前取：此后到达的数据由 PrepareWait 复查发现
+                 const uint64_t seen = channel_.WritePos();
+-                const int n         = DrainRingOnce(budget);
++                const int n         = DrainRingOnce();
+                 if (n < 0)
+                 {
+                     return -1;
+@@ -455,11 +461,6 @@ class ShmConnection : public comm::ITcpConnection,
+                 {
+                     break;
+                 }
+-                if (budget.exhausted)
+-                {
+-                    channel_.WakeReader();
+-                    break;  // 返回事件循环；剩余数据已有本地通知，不依赖对端继续写
+-                }
+                 if (channel_.PrepareWait(seen))
+                 {
+                     break;
+@@ -476,33 +477,14 @@ class ShmConnection : public comm::ITcpConnection,
+     }
+ 
+  private:
+-    struct DrainBudget
+-    {
+-        bool unlimited;
+-        bool exhausted = false;
+-        uint32_t frames = 0;
+-        uint64_t bytes = 0;
+-        std::chrono::steady_clock::time_point deadline;
+-        explicit DrainBudget(bool all)
+-            : unlimited(all), deadline(std::chrono::steady_clock::now() + std::chrono::milliseconds(2)) {}
+-        bool Consume(uint32_t length)
+-        {
+-            if (unlimited) return false;
+-            ++frames;
+-            bytes += length;
+-            exhausted = frames >= 64 || bytes >= 256 * 1024 ||
+-                        std::chrono::steady_clock::now() >= deadline;
+-            return exhausted;
+-        }
+-    };
+-
+     /// @brief 单轮消费：读到环空或遇到不完整帧为止
+-    int DrainRingOnce(DrainBudget& budget)
++    int DrainRingOnce()
+     {
+         if (!codec_)
+         {
+             return -1;
+         }
++        auto* codec = codec_.get();  // 配置仅允许在收发操作之外修改
+         int count = 0;
+         // 跨消息复用同一个 std::any：同类型消息解码时原地覆盖，避免
+         // 每条消息重新分配（大对象收益明显）。回调只在本次调用期间有效。
+@@ -548,26 +530,9 @@ class ShmConnection : public comm::ITcpConnection,
+             for (;;)
+             {
+                 size_t out        = 0;
+-                auto codec = codec_;
+-                if (!codec)
+-                {
+-                    if (off) channel_.CommitRead(off);
+-                    Close();
+-                    return -1;
+-                }
+-                const int32_t len = codec->Decode(buf + off, buflen - off, pkg, &out);
+-                // 解码中更换 codec 无法安全解释当前帧，关闭而不重新投递。
+-                if (codec_ != codec)
+-                {
+-                    if (off) channel_.CommitRead(off);
+-                    Close();
+-                    return -1;
+-                }
+-                if (state_ == comm::TcpConnStates::closeing || state_ == comm::TcpConnStates::closeed)
+-                {
+-                    if (off) channel_.CommitRead(off);
+-                    return count;
+-                }
++                const int32_t len = CallCodec([&] {
++                    return codec->Decode(buf + off, buflen - off, pkg, &out);
++                });
+                 if (len == comm::kCodecDisconnect)
+                 {
+                     if (off)
+@@ -602,22 +567,11 @@ class ShmConnection : public comm::ITcpConnection,
+                     {
+                         SendKeepaliveResponse();
+                     }
+-                    if (codec_ != codec)
+-                    {
+-                        channel_.CommitRead(off);
+-                        Close();
+-                        return -1;
+-                    }
+                     if (state_ == comm::TcpConnStates::closeing || state_ == comm::TcpConnStates::closeed)
+                     {
+                         channel_.CommitRead(off);
+                         return count;
+                     }
+-                    if (budget.Consume(static_cast<uint32_t>(out)))
+-                    {
+-                        channel_.CommitRead(off);
+-                        return count;  // 心跳同样消耗预算，防止心跳洪泛饿死 loop
+-                    }
+                     if (off == buflen)
+                     {
+                         break;
+@@ -658,11 +612,6 @@ class ShmConnection : public comm::ITcpConnection,
+                     channel_.CommitRead(off);
+                     return count;
+                 }
+-                if (budget.Consume(static_cast<uint32_t>(len)))
+-                {
+-                    channel_.CommitRead(off);
+-                    return count;
+-                }
+                 if (off == buflen)
+                 {
+                     break;
+@@ -691,21 +640,40 @@ class ShmConnection : public comm::ITcpConnection,
+     /// @brief 启用"直接写 ring"的最小编码长度（小消息留在 encode_buf_）
+     static constexpr uint32_t kDirectEncodeMinBytes = 256;
+ 
+-    // 普通编码与心跳共享借用规则：重入扩容不影响正在使用的缓冲。
+-    struct EncodeGuard
++    // Debug检查调用契约；Release不复制所有权、不写入保护标志。
++    struct DebugFlagGuard
+     {
++#ifndef NDEBUG
+         bool& active;
+-        std::vector<char>& cached;
+-        std::vector<char>& working;
+-        EncodeGuard(bool& value, std::vector<char>& buffer, std::vector<char>& borrowed)
+-            : active(value), cached(buffer), working(borrowed) { active = true; }
+-        ~EncodeGuard()
++        explicit DebugFlagGuard(bool& flag) noexcept : active(flag)
+         {
+-            if (cached.size() < working.size()) cached = std::move(working);
+-            active = false;
++            assert(!active);
++            active = true;
+         }
++        ~DebugFlagGuard() { active = false; }
++#else
++        explicit DebugFlagGuard(bool&) noexcept {}
++#endif
+     };
+ 
++    void AssertCodecIdle() const noexcept { assert(!codec_active_); }
++    void AssertOperationIdle() const noexcept { assert(!sending_ && !draining_ && !codec_active_); }
++
++    template <typename Fn>
++    int32_t CallCodec(Fn&& fn)
++    {
++        DebugFlagGuard scope(codec_active_);
++        return std::forward<Fn>(fn)();
++    }
++
++    template <typename Fn>
++    void CallCallback(bool& active, Fn&& fn)
++    {
++        AssertCodecIdle();
++        DebugFlagGuard scope(active);
++        return std::forward<Fn>(fn)();
++    }
++
+     /// @brief 原始字节写入环（可跨多次 TryWrite），写完统一通知对端
+     bool WriteRaw(const void* data, uint32_t len)
+     {
+@@ -738,44 +706,34 @@ class ShmConnection : public comm::ITcpConnection,
+     /// @brief 收到心跳包后回发心跳响应
+     void SendKeepaliveResponse()
+     {
+-        if (!codec_ || sending_ ||
++        if (!codec_ ||
+             (state_ != comm::TcpConnStates::established && state_ != comm::TcpConnStates::verifing)) return;
+-        auto self = weak_from_this().lock();
+-        auto codec = codec_;
+-        auto working_buffer = std::move(encode_buf_);
+-        EncodeGuard guard(sending_, encode_buf_, working_buffer);
++        AssertCodecIdle();
++        DebugFlagGuard send_scope(sending_);
++        auto* codec = codec_.get();
+         try
+         {
+             for (;;)
+             {
+                 size_t size = 0;
+-                const int32_t len =
+-                    codec->SendKeepAlive(reinterpret_cast<comm::byte*>(working_buffer.data()), working_buffer.size(), &size);
+-                if (codec_ != codec ||
+-                    (state_ != comm::TcpConnStates::established && state_ != comm::TcpConnStates::verifing)) return;
++                const int32_t len = CallCodec([&] {
++                    return codec->SendKeepAlive(reinterpret_cast<comm::byte*>(encode_buf_.data()),
++                                               encode_buf_.size(), &size);
++                });
+                 if (len > 0)
+                 {
+-                    if (static_cast<size_t>(len) > working_buffer.size()) return;
+-                    WriteRaw(working_buffer.data(), static_cast<uint32_t>(len));
+-                    return;
+-                }
+-                if (len != comm::kCodecNeedMoreBuffer)
+-                {
+-                    return;  // -1/-2：无法生成响应，放弃
+-                }
+-                // 缓冲不足：扩容后重试。所需大小为 0（内部错误）或不超过现有
+-                // 缓冲仍要求扩容（codec 违约）时放弃——绝不能把 encode_buf_ 中
+-                // 上一条消息的残留字节当作响应发给对端
+-                if (size == 0 || size <= working_buffer.size() || size > max_buffer_size_)
+-                {
++                    if (static_cast<size_t>(len) > encode_buf_.size()) return;
++                    WriteRaw(encode_buf_.data(), static_cast<uint32_t>(len));
+                     return;
+                 }
+-                working_buffer.resize(size);
++                if (len != comm::kCodecNeedMoreBuffer) return;
++                if (size == 0 || size <= encode_buf_.size() || size > max_buffer_size_) return;
++                encode_buf_.resize(size);
+             }
+         }
+         catch (const std::bad_alloc&)
+         {
+-            // 分配失败：放弃本次心跳响应（不影响连接）
++            // 分配失败：放弃本次心跳响应。
+         }
+     }
+ 
+@@ -794,17 +752,22 @@ class ShmConnection : public comm::ITcpConnection,
+     UniqueFd socket_fd_;                                      ///< 连接 socket（断连检测）
+     DefaultRingChannel channel_;                              ///< 双向共享内存通道
+     comm::codec::CodecPtr codec_;                             ///< 编解码器（每连接一个实例）
+-    detail::StableCallback<comm::ConnectionCallback> connectioncb_;                   ///< 连接建立回调
+-    detail::StableCallback<comm::AnyMessageCallback> messagecb_;                      ///< 消息回调
+-    detail::StableCallback<comm::CloseCallback> closecb_;                             ///< 连接关闭回调
+-    detail::StableCallback<comm::VerifyCallback> verifycb_;                           ///< 验证回调
++    comm::ConnectionCallback connectioncb_;                   ///< 连接建立回调
++    comm::AnyMessageCallback messagecb_;                      ///< 消息回调
++    comm::CloseCallback closecb_;                             ///< 连接关闭回调
++    comm::VerifyCallback verifycb_;                           ///< 验证回调
+     std::any context_;                                        ///< 用户上下文
+     std::any rpc_context_;                                    ///< RPC 上下文
+     comm::TimerID verify_timer_ = -1;                          ///< 验证超时定时器
+     comm::CloseType close_type_{comm::CloseType::Passive};    ///< 关闭类型
+     comm::TcpConnType conntype_{comm::TcpConnType::Unknown};  ///< 连接类型
+-    bool sending_{false};                                    ///< 编码调用作用域重入保护
+-    bool draining_{false};                                    ///< 读取作用域重入保护
++    bool sending_{false};    // 以下标志仅在Debug检查中使用，Release不更新
++    bool draining_{false};
++    bool codec_active_{false};
++    bool connectioncb_active_{false};
++    bool messagecb_active_{false};
++    bool closecb_active_{false};
++    bool verifycb_active_{false};
+     bool keepalive_{false};                                   ///< 是否自动响应心跳包
+     std::vector<char> encode_buf_;                            ///< 编码缓冲区
+     std::vector<char> staging_;                               ///< 跨环尾解码线性化缓冲（惰性分配）

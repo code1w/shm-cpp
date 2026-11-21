@@ -88,7 +88,7 @@ struct ByteCodec : comm::codec::Codec
         return 1;
     }
 };
-void TestReentry()
+void TestReadDelivery()
 {
     Pair p; shm::EventLoop loop;
     auto c = std::make_shared<shm::ShmConnection>(&loop, 1, std::move(p.a), std::move(p.client));
@@ -96,8 +96,6 @@ void TestReentry()
     std::string received;
     c->SetMessageCallback([&](const auto&, const std::any& pkg) {
         received += std::any_cast<char>(pkg);
-        assert(c->DrainRing() == 0);
-        assert(c->DrainRing(true) == 0);
     });
     assert(p.server.TryWrite("abc", 3) == 0);
     assert(c->DrainRing() == 3);
@@ -133,6 +131,6 @@ void TestFullIncomplete()
 }
 int main()
 {
-    TestEof(false); TestEof(true); TestReentry(); TestFullIncomplete();
+    TestEof(false); TestEof(true); TestReadDelivery(); TestFullIncomplete();
     std::puts("=== EOF / REENTRY REGRESSIONS PASSED ===");
 }

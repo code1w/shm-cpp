@@ -1,0 +1,11 @@
+--- current/shm_connection.hpp
++++ no_send_buffer_move/shm_connection.hpp
+@@ -102,7 +102,7 @@
+         auto self = weak_from_this().lock();  // codec 可以重入 owner 并移除当前连接
+         auto codec = codec_;
+         // 当前 Encode 借用的缓冲独立保活；重入 ResizeBuffer 只调整下一次调用的缓冲。
+-        auto working_buffer = std::move(encode_buf_);
++        auto& working_buffer = encode_buf_;
+         EncodeGuard guard(sending_, encode_buf_, working_buffer);
+         const auto still_open = [&] {
+             return codec_ == codec && (state_ == comm::TcpConnStates::established ||

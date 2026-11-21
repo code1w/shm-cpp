@@ -1,0 +1,11 @@
+--- current/shm_connection.hpp
++++ relaxed_caps/shm_connection.hpp
+@@ -490,7 +490,7 @@
+             if (unlimited) return false;
+             ++frames;
+             bytes += length;
+-            exhausted = frames >= 64 || bytes >= 256 * 1024 ||
++            exhausted = frames >= 1024 || bytes >= 8 * 1024 * 1024 ||
+                         std::chrono::steady_clock::now() >= deadline;
+             return exhausted;
+         }

@@ -1,0 +1,14 @@
+# started on Sat Nov 21 18:18:35 2026
+
+
+ Performance counter stats for '/tmp/shm-residual-attribution/current/build/bench_app 256':
+
+        4918204418      cycles:u                                                    
+        9455747068      instructions:u            #    1.92  insn per cycle         
+
+       1.045697207 seconds time elapsed
+
+       1.521880000 seconds user
+       0.420118000 seconds sys
+
+

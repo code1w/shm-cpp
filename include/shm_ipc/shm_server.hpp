@@ -551,7 +551,7 @@ class ShmServer : public comm::ITcpServer
             if (n <= 0)
             {
                 // 对端关闭：先读掉环中可能残留的最后数据，再移除
-                conn->DrainRing(true);
+                conn->DrainRing();
                 RemoveConn(conn);
             }
             // n > 0：握手后 socket 不应再有数据，忽略

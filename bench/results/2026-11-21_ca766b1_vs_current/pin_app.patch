@@ -1,0 +1,27 @@
+--- bench/bench_app.cpp
++++ bench/bench_app.cpp
+@@ -26,6 +26,8 @@
+ #include <memory>
+ #include <string>
+ #include <thread>
++#include <pthread.h>
++#include <sched.h>
+ #include <unistd.h>
+ 
+ /// 大对象 POD（4KB / 1MB），用于验证上层大消息与 any 复用
+@@ -244,8 +246,14 @@
+         server_loop.Stop();
+     });
+ 
+-    std::thread server_thread([&] { (void)server_loop.Run(50); });
++    std::thread server_thread([&] {
++        cpu_set_t cpus; CPU_ZERO(&cpus); CPU_SET(2, &cpus);
++        if (pthread_setaffinity_np(pthread_self(), sizeof(cpus), &cpus)) std::abort();
++        (void)server_loop.Run(50);
++    });
+     std::thread client_thread([&] {
++        cpu_set_t cpus; CPU_ZERO(&cpus); CPU_SET(4, &cpus);
++        if (pthread_setaffinity_np(pthread_self(), sizeof(cpus), &cpus)) std::abort();
+         client.Connect("/tmp/bench-app.socket");
+         (void)client_loop.Run(50);
+     });

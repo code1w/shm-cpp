@@ -1,0 +1,276 @@
+--- current/shm_connection.hpp
++++ legacy_reader/shm_connection.hpp
+@@ -424,50 +424,28 @@
+      */
+     int DrainRing()
+     {
+-        if (state_ != comm::TcpConnStates::established && state_ != comm::TcpConnStates::verifing)
+-        {
+-            return 0;
+-        }
+-        // 回调重入时由外层继续消费，不能再次解码尚未提交的视图。
+-        if (draining_) return 0;
+-        auto self = weak_from_this().lock();  // 用户 codec 可重入 owner，移除连接
+-        struct DrainGuard
+-        {
+-            bool& active;
+-            explicit DrainGuard(bool& value) : active(value) { active = true; }
+-            ~DrainGuard() { active = false; }
+-        } guard(draining_);
+-        try
+-        {
+-            int total = 0;
+-            for (;;)
+-            {
+-                // 基线必须在读取之前取：此后到达的数据由 PrepareWait 复查发现
+-                const uint64_t seen = channel_.WritePos();
+-                const int n         = DrainRingOnce();
+-                if (n < 0)
+-                {
+-                    return -1;
+-                }
+-                total += n;
+-                // 消息回调内关闭了连接：由 owner 收尾，无需再武装等待
+-                if (state_ == comm::TcpConnStates::closeing || state_ == comm::TcpConnStates::closeed)
+-                {
+-                    break;
+-                }
+-                if (channel_.PrepareWait(seen))
+-                {
+-                    break;
+-                }
+-            }
+-            return total;
+-        }
+-        catch (...)
+-        {
+-            // codec/消息回调抛异常后，状态可能已推进，不能继续解码或重放。
+-            Close();
+-            throw;
+-        }
++        int total = 0;
++        for (;;)
++        {
++            // 基线必须在读取之前取：此后到达的数据由 PrepareWait 复查发现
++            const uint64_t seen = channel_.WritePos();
++            const int n         = DrainRingOnce();
++            if (n < 0)
++            {
++                return -1;
++            }
++            total += n;
++            // 消息回调内关闭了连接：由 owner 收尾，无需再武装等待
++            if (state_ == comm::TcpConnStates::closeing || state_ == comm::TcpConnStates::closeed)
++            {
++                break;
++            }
++            if (channel_.PrepareWait(seen))
++            {
++                break;
++            }
++        }
++        return total;
+     }
+ 
+  private:
+@@ -489,33 +467,85 @@
+             const void* seg2  = nullptr;
+             uint32_t seg1_len = 0;
+             uint32_t seg2_len = 0;
+-            const int peek = channel_.Peek(&seg1, &seg1_len, &seg2, &seg2_len);
+-            if (peek == -2) return -1;  // 损坏环：owner 关闭连接
+-            if (peek != 0)
++            if (channel_.Peek(&seg1, &seg1_len, &seg2, &seg2_len) != 0)
+             {
+                 break;  // 环空
+             }
+ 
+             const comm::byte* buf = static_cast<const comm::byte*>(seg1);
+             uint32_t buflen       = seg1_len;
++            bool partial_view     = false;
+ 
+             if (seg2_len > 0)
+             {
+-                // Decode 可以维护序号/解密状态，不能作为长度探测器重复调用。
+-                // 非镜像回绕时先线性化所有可读字节，再正式解码一次。
++                // 数据跨环尾：只线性化"当前帧"而不是全部可读数据。
++                // 先探测首帧大小；codec 未报告时退化为线性化全部。
+                 const uint32_t total = seg1_len + seg2_len;
+-                try
+-                {
+-                    if (staging_.size() < total) staging_.resize(total);
+-                }
+-                catch (const std::bad_alloc&)
++                uint32_t want        = total;
++
++                size_t need      = 0;
++                const int32_t rc = codec_->Decode(static_cast<const comm::byte*>(seg1), seg1_len, pkg, &need);
++                if (rc == comm::kCodecDisconnect)
+                 {
+                     return -1;
+                 }
+-                std::memcpy(staging_.data(), seg1, seg1_len);
+-                std::memcpy(staging_.data() + seg1_len, seg2, seg2_len);
+-                buf = reinterpret_cast<const comm::byte*>(staging_.data());
+-                buflen = total;
++                if (rc > 0)
++                {
++                    want = static_cast<uint32_t>(rc);  // 首帧完全在 seg1
++                }
++                else if (rc == comm::kCodecSkipPackage && need > 0 && need <= seg1_len)
++                {
++                    want = static_cast<uint32_t>(need);  // 心跳消费长度
++                }
++                else if (rc == comm::kCodecNeedMoreBuffer && need > seg1_len && need <= total)
++                {
++                    want = static_cast<uint32_t>(need);  // 首帧跨尾，按需复制
++                }
++                // 其他情况（codec 未报告 need 等）退化为 total
++
++                if (want > total)
++                {
++                    want = total;
++                }
++
++                // 拷贝 want 字节；若 codec 需要更多（例如 seg1 连 tag 都不完整），
++                // 按它报告的 need 再增长，最多 3 次，避免死循环
++                for (int attempt = 0; attempt < 3; ++attempt)
++                {
++                    try
++                    {
++                        if (staging_.size() < want)
++                        {
++                            staging_.resize(want);
++                        }
++                    }
++                    catch (const std::bad_alloc&)
++                    {
++                        return -1;  // 线性化缓冲分配失败
++                    }
++                    // want 可能小于 seg1_len（只复制首帧），必须按
++                    // min(seg1_len, want) 截断，否则会越界写 staging_
++                    const uint32_t first = (seg1_len < want) ? seg1_len : want;
++                    std::memcpy(staging_.data(), seg1, first);
++                    if (want > first)
++                    {
++                        std::memcpy(staging_.data() + first, seg2, want - first);
++                    }
++
++                    size_t more = 0;
++                    const int32_t probe2 =
++                        codec_->Decode(reinterpret_cast<const comm::byte*>(staging_.data()), want, pkg, &more);
++                    if (probe2 == comm::kCodecNeedMoreBuffer && more > want && more <= total)
++                    {
++                        want = static_cast<uint32_t>(more);
++                        continue;
++                    }
++                    break;
++                }
++
++                buf          = reinterpret_cast<const comm::byte*>(staging_.data());
++                buflen       = want;
++                partial_view = (want < total);
+             }
+ 
+             // 在连续视图上批量解码：整个批次只 CommitRead 一次
+@@ -523,42 +553,17 @@
+             for (;;)
+             {
+                 size_t out        = 0;
+-                auto codec = codec_;
+-                if (!codec)
+-                {
+-                    if (off) channel_.CommitRead(off);
+-                    Close();
++                const int32_t len = codec_->Decode(buf + off, buflen - off, pkg, &out);
++                if (len == comm::kCodecDisconnect)
++                {
++                    if (off)
++                    {
++                        channel_.CommitRead(off);
++                    }
+                     return -1;
+                 }
+-                const int32_t len = codec->Decode(buf + off, buflen - off, pkg, &out);
+-                // 解码中更换 codec 无法安全解释当前帧，关闭而不重新投递。
+-                if (codec_ != codec)
+-                {
+-                    if (off) channel_.CommitRead(off);
+-                    Close();
+-                    return -1;
+-                }
+-                if (state_ == comm::TcpConnStates::closeing || state_ == comm::TcpConnStates::closeed)
+-                {
+-                    if (off) channel_.CommitRead(off);
+-                    return count;
+-                }
+-                if (len == comm::kCodecDisconnect)
+-                {
+-                    if (off)
+-                    {
+-                        channel_.CommitRead(off);
+-                    }
+-                    return -1;
+-                }
+                 if (len == comm::kCodecNeedMoreBuffer)
+                 {
+-                    // 环满且当前帧没有进展时，续写永远无法完成。
+-                    // 已解码前缀先提交；下一轮再判断剩余帧，避免误拒绝。
+-                    if (off == 0 && buflen == DefaultRingBuf::kCapacity)
+-                    {
+-                        return -1;
+-                    }
+                     break;  // 数据不完整，等待对端续写
+                 }
+                 if (len == comm::kCodecSkipPackage)
+@@ -577,17 +582,6 @@
+                     {
+                         SendKeepaliveResponse();
+                     }
+-                    if (codec_ != codec)
+-                    {
+-                        channel_.CommitRead(off);
+-                        Close();
+-                        return -1;
+-                    }
+-                    if (state_ == comm::TcpConnStates::closeing || state_ == comm::TcpConnStates::closeed)
+-                    {
+-                        channel_.CommitRead(off);
+-                        return count;
+-                    }
+                     if (off == buflen)
+                     {
+                         break;
+@@ -612,22 +606,8 @@
+                     return -1;  // 防御：codec 消耗长度越界
+                 }
+                 off += static_cast<uint32_t>(len);
+-                try
+-                {
+-                    OnMessage(pkg);
+-                }
+-                catch (...)
+-                {
+-                    // 此帧已交付给应用，提交至当前帧，避免重复投递。
+-                    channel_.CommitRead(off);
+-                    throw;
+-                }
++                OnMessage(pkg);
+                 ++count;
+-                if (state_ == comm::TcpConnStates::closeing || state_ == comm::TcpConnStates::closeed)
+-                {
+-                    channel_.CommitRead(off);
+-                    return count;
+-                }
+                 if (off == buflen)
+                 {
+                     break;
+@@ -644,7 +624,7 @@
+                 break;  // 没有进展：等待更多数据/通知
+             }
+ 
+-            if (off < buflen)
++            if (partial_view || off < buflen)
+             {
+                 continue;  // 还有数据（或未完整帧）跨尾，重新 Peek
+             }

@@ -1,0 +1,81 @@
+[ 12%] Building CXX object CMakeFiles/client.dir/src/client.cpp.o
+[ 25%] Building CXX object CMakeFiles/bench_shm.dir/bench/bench_shm.cpp.o
+[ 37%] Building CXX object CMakeFiles/server.dir/src/server.cpp.o
+[ 50%] Linking CXX executable bench_shm
+/tmp/shm-commit-ab/before/src/client.cpp: In function ‘int main(int, char**)’:
+/tmp/shm-commit-ab/before/src/client.cpp:398:9: error: ‘ec’ was not declared in this scope
+  398 |         ec           = loop.AddTimer(kTimerIntervalMs,
+      |         ^~
+/tmp/shm-commit-ab/before/src/client.cpp:399:94: error: ‘cs’ was not declared in this scope; did you mean ‘cos’?
+  399 |                                      std::bind(OnWriteTimer, std::placeholders::_1, std::ref(cs), std::ref(loop), std::ref(stats),
+      |                                                                                              ^~
+      |                                                                                              cos
+/tmp/shm-commit-ab/before/src/client.cpp:401:50: error: ‘sys_errno’ was not declared in this scope; did you mean ‘sys_nerr’?
+  401 |                                      &timer_fd, &sys_errno);
+      |                                                  ^~~~~~~~~
+      |                                                  sys_nerr
+/tmp/shm-commit-ab/before/src/client.cpp: At global scope:
+/tmp/shm-commit-ab/before/src/client.cpp:431:5: error: expected unqualified-id before ‘return’
+  431 |     return 0;
+      |     ^~~~~~
+/tmp/shm-commit-ab/before/src/client.cpp:432:1: error: expected declaration before ‘}’ token
+  432 | }
+      | ^
+[ 50%] Built target bench_shm
+/tmp/shm-commit-ab/before/src/server.cpp: In function ‘void {anonymous}::OnAccept(int, shm::EventLoop&, {anonymous}::Clients&, int&)’:
+/tmp/shm-commit-ab/before/src/server.cpp:274:40: warning: unused parameter ‘loop’ [-Wunused-parameter]
+  274 | void OnAccept(int lfd, shm::EventLoop& loop, Clients& clients, int& next_client_id)
+      |                        ~~~~~~~~~~~~~~~~^~~~
+/tmp/shm-commit-ab/before/src/server.cpp: At global scope:
+/tmp/shm-commit-ab/before/src/server.cpp:318:27: error: ‘cfd’ was not declared in this scope
+  318 |     const int client_fd = cfd.Get();
+      |                           ^~~
+/tmp/shm-commit-ab/before/src/server.cpp:319:5: error: ‘cs’ does not name a type
+  319 |     cs->socket_fd       = std::move(cfd);
+      |     ^~
+/tmp/shm-commit-ab/before/src/server.cpp:320:5: error: ‘cs’ does not name a type
+  320 |     cs->notify_efd      = cs->channel.NotifyReadFd();
+      |     ^~
+/tmp/shm-commit-ab/before/src/server.cpp:325:5: error: ‘ec’ does not name a type
+  325 |     ec      = loop.AddTimer(kHeartbeatMs,
+      |     ^~
+/tmp/shm-commit-ab/before/src/server.cpp:328:5: error: expected unqualified-id before ‘if’
+  328 |     if (ec != shm::ErrorCode::kOk)
+      |     ^~
+/tmp/shm-commit-ab/before/src/server.cpp:334:5: error: ‘cs’ does not name a type
+  334 |     cs->timer_fd = tfd;
+      |     ^~
+/tmp/shm-commit-ab/before/src/server.cpp:336:5: error: expected unqualified-id before ‘try’
+  336 |     try
+      |     ^~~
+/tmp/shm-commit-ab/before/src/server.cpp:346:5: error: expected unqualified-id before ‘catch’
+  346 |     catch (const std::bad_alloc&)
+      |     ^~~~~
+/tmp/shm-commit-ab/before/src/server.cpp:355:5: error: ‘clients’ does not name a type; did you mean ‘Clients’?
+  355 |     clients[client_fd] = std::move(cs);
+      |     ^~~~~~~
+      |     Clients
+/tmp/shm-commit-ab/before/src/server.cpp:444:1: error: expected declaration before ‘}’ token
+  444 | }  // anonymous namespace
+      | ^
+[ 62%] Building CXX object CMakeFiles/bench_app.dir/bench/bench_app.cpp.o
+gmake[2]: *** [CMakeFiles/client.dir/build.make:76: CMakeFiles/client.dir/src/client.cpp.o] Error 1
+gmake[1]: *** [CMakeFiles/Makefile2:115: CMakeFiles/client.dir/all] Error 2
+gmake[1]: *** Waiting for unfinished jobs....
+/tmp/shm-commit-ab/before/src/server.cpp:324:9: warning: ‘{anonymous}::tfd’ defined but not used [-Wunused-variable]
+  324 |     int tfd = 0;
+      |         ^~~
+/tmp/shm-commit-ab/before/src/server.cpp:230:6: warning: ‘void {anonymous}::OnClientSocket(int, short int, shm::EventLoop&, {anonymous}::Clients&, int)’ defined but not used [-Wunused-function]
+  230 | void OnClientSocket(int fd, short revents, shm::EventLoop& loop, Clients& clients, int client_fd)
+      |      ^~~~~~~~~~~~~~
+/tmp/shm-commit-ab/before/src/server.cpp:205:6: warning: ‘void {anonymous}::OnClientNotify(int, shm::EventLoop&, {anonymous}::Clients&, int)’ defined but not used [-Wunused-function]
+  205 | void OnClientNotify(int efd, shm::EventLoop& loop, Clients& clients, int client_fd)
+      |      ^~~~~~~~~~~~~~
+/tmp/shm-commit-ab/before/src/server.cpp:158:6: warning: ‘void {anonymous}::OnHeartbeatTimer(int, shm::EventLoop&, {anonymous}::Clients&, int)’ defined but not used [-Wunused-function]
+  158 | void OnHeartbeatTimer(int timer_fd, shm::EventLoop& loop, Clients& clients, int client_fd)
+      |      ^~~~~~~~~~~~~~~~
+gmake[2]: *** [CMakeFiles/server.dir/build.make:76: CMakeFiles/server.dir/src/server.cpp.o] Error 1
+gmake[1]: *** [CMakeFiles/Makefile2:89: CMakeFiles/server.dir/all] Error 2
+[ 75%] Linking CXX executable bench_app
+[ 75%] Built target bench_app
+gmake: *** [Makefile:91: all] Error 2

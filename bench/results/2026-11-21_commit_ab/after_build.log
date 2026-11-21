@@ -1,0 +1,18 @@
+[ 10%] Building CXX object CMakeFiles/bench_app.dir/bench/bench_app.cpp.o
+Consolidate compiler generated dependencies of target bench_shm
+[ 20%] Building CXX object CMakeFiles/shm_proto.dir/proto/shm_messages.pb.cc.o
+[ 30%] Building CXX object CMakeFiles/bench_shm.dir/bench/bench_shm.cpp.o
+[ 40%] Linking CXX executable bench_shm
+[ 40%] Built target bench_shm
+[ 50%] Linking CXX static library libshm_proto.a
+[ 50%] Built target shm_proto
+Consolidate compiler generated dependencies of target server
+Consolidate compiler generated dependencies of target client
+[ 60%] Building CXX object CMakeFiles/server.dir/src/server.cpp.o
+[ 70%] Building CXX object CMakeFiles/client.dir/src/client.cpp.o
+[ 80%] Linking CXX executable bench_app
+[ 80%] Built target bench_app
+[ 90%] Linking CXX executable server
+[100%] Linking CXX executable client
+[100%] Built target server
+[100%] Built target client

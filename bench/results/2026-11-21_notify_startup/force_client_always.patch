@@ -1,0 +1,11 @@
+--- current/shm_connection.hpp
++++ force_client_always/shm_connection.hpp
+@@ -461,7 +461,7 @@
+                 {
+                     break;
+                 }
+-                if (channel_.PrepareWait(seen))
++                if (conntype_ == comm::TcpConnType::TcpConn_Client ? channel_.WritePos() == seen : channel_.PrepareWait(seen))
+                 {
+                     break;
+                 }

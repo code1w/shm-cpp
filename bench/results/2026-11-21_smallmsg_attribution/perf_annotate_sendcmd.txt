@@ -1,0 +1,419 @@
+ Percent |	Source code & Disassembly of bench_app for cycles:u (101 samples, percent: local period)
+--------------------------------------------------------------------------------------------------------
+         :
+         :
+         :
+         :            Disassembly of section .text:
+         :
+         :            000000000040d8b0 <shm::ShmConnection::SendCmd(std::any const&)>:
+         :            shm::ShmConnection::SendCmd(std::any const&):
+    0.00 :   40d8b0: push   %r15
+    0.00 :   40d8b2: push   %r14
+    1.34 :   40d8b4: push   %r13
+    0.00 :   40d8b6: push   %r12
+    0.00 :   40d8b8: push   %rbp
+    0.00 :   40d8b9: push   %rbx
+    0.00 :   40d8ba: sub    $0x168,%rsp
+    0.00 :   40d8c1: cmpl   $0x1,0x28(%rdi)
+    0.00 :   40d8c5: ja     40da70 <shm::ShmConnection::SendCmd(std::any const&)+0x1c0>
+    0.00 :   40d8cb: cmpq   $0x0,0x88(%rdi)
+    0.40 :   40d8d3: mov    %rdi,%rbp
+    0.00 :   40d8d6: je     40da70 <shm::ShmConnection::SendCmd(std::any const&)+0x1c0>
+    0.00 :   40d8dc: movzbl 0x108(%rdi),%r12d
+    0.00 :   40d8e4: test   %r12b,%r12b
+    0.00 :   40d8e7: jne    40da70 <shm::ShmConnection::SendCmd(std::any const&)+0x1c0>
+    0.00 :   40d8ed: movq   $0x0,0x8(%rsp)
+    0.00 :   40d8f6: mov    0x10(%rdi),%rdi
+    0.00 :   40d8fa: mov    %rsi,%rbx
+    0.00 :   40d8fd: test   %rdi,%rdi
+    0.00 :   40d900: je     40d958 <shm::ShmConnection::SendCmd(std::any const&)+0xa8>
+    0.00 :   40d902: mov    $0x4034b0,%edx
+    0.00 :   40d907: test   %rdx,%rdx
+    0.00 :   40d90a: jne    40db70 <shm::ShmConnection::SendCmd(std::any const&)+0x2c0>
+    0.00 :   40d910: addl   $0x1,0xc(%rdi)
+    0.00 :   40d914: mov    0x8(%rdi),%eax
+    0.00 :   40d917: lea    0x8(%rdi),%rcx
+    0.00 :   40d91b: test   %eax,%eax
+    0.00 :   40d91d: je     40e05b <shm::ShmConnection::SendCmd(std::any const&)+0x7ab>
+    0.00 :   40d923: lea    0x1(%rax),%esi
+    0.00 :   40d926: lock cmpxchg %esi,(%rcx)
+   13.70 :   40d92a: jne    40d91b <shm::ShmConnection::SendCmd(std::any const&)+0x6b>
+    0.00 :   40d92c: mov    0x8(%rdi),%eax
+    7.47 :   40d92f: mov    %rdi,0x8(%rsp)
+    0.00 :   40d934: test   %rdx,%rdx
+    0.00 :   40d937: jne    40db60 <shm::ShmConnection::SendCmd(std::any const&)+0x2b0>
+    0.00 :   40d93d: mov    0xc(%rdi),%eax
+    0.00 :   40d940: lea    -0x1(%rax),%edx
+    0.00 :   40d943: mov    %edx,0xc(%rdi)
+    0.00 :   40d946: cmp    $0x1,%eax
+    0.00 :   40d949: jne    40d958 <shm::ShmConnection::SendCmd(std::any const&)+0xa8>
+    0.00 :   40d94b: mov    (%rdi),%rax
+    0.00 :   40d94e: callq  *0x18(%rax)
+    0.00 :   40d951: nopl   0x0(%rax)
+    1.22 :   40d958: mov    0x90(%rbp),%r15
+    0.00 :   40d95f: mov    0x88(%rbp),%r14
+    0.00 :   40d966: test   %r15,%r15
+    0.00 :   40d969: je     40d97e <shm::ShmConnection::SendCmd(std::any const&)+0xce>
+    0.00 :   40d96b: mov    $0x4034b0,%eax
+    1.11 :   40d970: test   %rax,%rax
+    0.00 :   40d973: jne    40db50 <shm::ShmConnection::SendCmd(std::any const&)+0x2a0>
+    0.00 :   40d979: addl   $0x1,0x8(%r15)
+    0.00 :   40d97e: mov    0x110(%rbp),%rax
+    0.00 :   40d985: lea    0x110(%rbp),%r13
+    0.54 :   40d98c: mov    %rbx,%rsi
+    0.00 :   40d98f: mov    %r14,%rdi
+    0.00 :   40d992: movq   $0x0,0x110(%rbp)
+    0.00 :   40d99d: mov    %rax,0x30(%rsp)
+    0.54 :   40d9a2: mov    0x118(%rbp),%rax
+    0.00 :   40d9a9: mov    %r13,0x58(%rsp)
+    0.00 :   40d9ae: mov    %rax,0x38(%rsp)
+    0.00 :   40d9b3: mov    0x120(%rbp),%rax
+    2.35 :   40d9ba: movq   $0x0,0x118(%rbp)
+    0.00 :   40d9c5: mov    %rax,0x40(%rsp)
+    0.00 :   40d9ca: lea    0x108(%rbp),%rax
+    0.00 :   40d9d1: mov    %rax,0x10(%rsp)
+    1.24 :   40d9d6: mov    %rax,0x50(%rsp)
+    0.00 :   40d9db: lea    0x30(%rsp),%rax
+    0.00 :   40d9e0: mov    %rax,0x60(%rsp)
+    0.00 :   40d9e5: mov    (%r14),%rax
+    0.00 :   40d9e8: movq   $0x0,0x120(%rbp)
+    0.00 :   40d9f3: movb   $0x1,0x108(%rbp)
+    0.00 :   40d9fa: callq  *0x20(%rax)
+    0.75 :   40d9fd: mov    %eax,0x28(%rsp)
+    2.04 :   40da01: lea    0x30(%rsp),%rax
+    0.00 :   40da06: cmp    0x88(%rbp),%r14
+    0.00 :   40da0d: je     40dad8 <shm::ShmConnection::SendCmd(std::any const&)+0x228>
+    0.00 :   40da13: mov    0x8(%rax),%rcx
+    0.00 :   40da17: mov    0x0(%r13),%rdi
+    0.00 :   40da1b: mov    (%rax),%r8
+    0.00 :   40da1e: mov    0x8(%r13),%rdx
+    0.00 :   40da22: mov    %rcx,%rsi
+    0.00 :   40da25: sub    %rdi,%rdx
+    0.78 :   40da28: sub    %r8,%rsi
+    0.00 :   40da2b: cmp    %rsi,%rdx
+    0.00 :   40da2e: jb     40da90 <shm::ShmConnection::SendCmd(std::any const&)+0x1e0>
+    0.00 :   40da30: mov    0x10(%rsp),%rax
+    0.00 :   40da35: mov    0x30(%rsp),%rdi
+    0.00 :   40da3a: movb   $0x0,(%rax)
+    0.00 :   40da3d: test   %rdi,%rdi
+    0.00 :   40da40: je     40da4f <shm::ShmConnection::SendCmd(std::any const&)+0x19f>
+    0.00 :   40da42: mov    0x40(%rsp),%rsi
+    0.00 :   40da47: sub    %rdi,%rsi
+    0.00 :   40da4a: callq  4032d0 <operator delete(void*, unsigned long)@plt>
+    2.13 :   40da4f: test   %r15,%r15
+    0.00 :   40da52: je     40da5c <shm::ShmConnection::SendCmd(std::any const&)+0x1ac>
+    0.00 :   40da54: mov    %r15,%rdi
+    0.00 :   40da57: callq  40a1f0 <std::_Sp_counted_base<(__gnu_cxx::_Lock_policy)2>::_M_release()>
+    1.27 :   40da5c: mov    0x8(%rsp),%rdi
+    0.00 :   40da61: test   %rdi,%rdi
+    0.00 :   40da64: je     40da73 <shm::ShmConnection::SendCmd(std::any const&)+0x1c3>
+    0.00 :   40da66: callq  40a1f0 <std::_Sp_counted_base<(__gnu_cxx::_Lock_policy)2>::_M_release()>
+    0.95 :   40da6b: jmp    40da73 <shm::ShmConnection::SendCmd(std::any const&)+0x1c3>
+    0.00 :   40da6d: nopl   (%rax)
+    0.00 :   40da70: xor    %r12d,%r12d
+    1.14 :   40da73: add    $0x168,%rsp
+    0.00 :   40da7a: mov    %r12d,%eax
+    0.00 :   40da7d: pop    %rbx
+    0.00 :   40da7e: pop    %rbp
+    0.00 :   40da7f: pop    %r12
+    0.00 :   40da81: pop    %r13
+    0.00 :   40da83: pop    %r14
+    3.90 :   40da85: pop    %r15
+    0.00 :   40da87: retq
+    0.00 :   40da88: nopl   0x0(%rax,%rax,1)
+    0.00 :   40da90: mov    0x10(%rax),%rdx
+    0.00 :   40da94: mov    0x10(%r13),%rsi
+    0.74 :   40da98: mov    %r8,0x0(%r13)
+    0.00 :   40da9c: mov    %rcx,0x8(%r13)
+    0.00 :   40daa0: mov    %rdx,0x10(%r13)
+    0.00 :   40daa4: movq   $0x0,(%rax)
+    0.65 :   40daab: movq   $0x0,0x8(%rax)
+    0.00 :   40dab3: movq   $0x0,0x10(%rax)
+    0.00 :   40dabb: test   %rdi,%rdi
+    0.00 :   40dabe: je     40da30 <shm::ShmConnection::SendCmd(std::any const&)+0x180>
+    0.00 :   40dac4: sub    %rdi,%rsi
+    0.00 :   40dac7: callq  4032d0 <operator delete(void*, unsigned long)@plt>
+    0.00 :   40dacc: jmpq   40da30 <shm::ShmConnection::SendCmd(std::any const&)+0x180>
+    0.00 :   40dad1: nopl   0x0(%rax)
+    0.00 :   40dad8: cmpl   $0x1,0x28(%rbp)
+    1.37 :   40dadc: ja     40da13 <shm::ShmConnection::SendCmd(std::any const&)+0x163>
+    0.00 :   40dae2: mov    0x28(%rsp),%eax
+    0.00 :   40dae6: sub    $0x100,%eax
+    0.00 :   40daeb: cmp    $0x3fff00,%eax
+    0.00 :   40daf0: jbe    40db80 <shm::ShmConnection::SendCmd(std::any const&)+0x2d0>
+    0.00 :   40daf6: mov    0x30(%rsp),%rdx
+    0.00 :   40dafb: mov    0x38(%rsp),%rcx
+    0.00 :   40db00: mov    %rbx,%rsi
+    0.00 :   40db03: mov    %r14,%rdi
+    1.35 :   40db06: mov    (%r14),%rax
+    0.00 :   40db09: lea    0x110(%rsp),%r8
+    0.00 :   40db11: movq   $0x0,0x110(%rsp)
+    0.00 :   40db1d: sub    %rdx,%rcx
+    0.00 :   40db20: callq  *0x10(%rax)
+    2.60 :   40db23: cmp    0x88(%rbp),%r14
+    0.00 :   40db2a: je     40de80 <shm::ShmConnection::SendCmd(std::any const&)+0x5d0>
+    1.16 :   40db30: mov    0x50(%rsp),%rcx
+    0.00 :   40db35: mov    0x58(%rsp),%r13
+    0.00 :   40db3a: mov    0x60(%rsp),%rax
+    3.89 :   40db3f: mov    %rcx,0x10(%rsp)
+    0.00 :   40db44: jmpq   40da13 <shm::ShmConnection::SendCmd(std::any const&)+0x163>
+    0.00 :   40db49: nopl   0x0(%rax)
+    0.00 :   40db50: lock addl $0x1,0x8(%r15)
+   12.03 :   40db56: jmpq   40d97e <shm::ShmConnection::SendCmd(std::any const&)+0xce>
+    0.00 :   40db5b: nopl   0x0(%rax,%rax,1)
+    0.00 :   40db60: mov    $0xffffffff,%eax
+    0.00 :   40db65: lock xadd %eax,0xc(%rdi)
+    5.96 :   40db6a: jmpq   40d946 <shm::ShmConnection::SendCmd(std::any const&)+0x96>
+    0.00 :   40db6f: nop
+    1.16 :   40db70: lock addl $0x1,0xc(%rdi)
+   18.76 :   40db75: jmpq   40d914 <shm::ShmConnection::SendCmd(std::any const&)+0x64>
+    0.00 :   40db7a: nopw   0x0(%rax,%rax,1)
+    0.00 :   40db80: mov    0x38(%rbp),%rax
+    0.00 :   40db84: pxor   %xmm0,%xmm0
+    0.00 :   40db88: lea    0x30(%rbp),%rdi
+    0.00 :   40db8c: movaps %xmm0,0xc0(%rsp)
+    0.00 :   40db94: movaps %xmm0,0xd0(%rsp)
+    0.00 :   40db9c: movaps %xmm0,0xe0(%rsp)
+    0.00 :   40dba4: movaps %xmm0,0xf0(%rsp)
+    0.00 :   40dbac: movaps %xmm0,0x100(%rsp)
+    0.00 :   40dbb4: cmp    $0xffffffffffffffff,%rax
+    0.00 :   40dbb8: je     40def0 <shm::ShmConnection::SendCmd(std::any const&)+0x640>
+    0.00 :   40dbbe: movzbl 0x48(%rbp),%edx
+    0.00 :   40dbc2: lea    0x1000(%rax),%rcx
+    0.00 :   40dbc9: mov    %rax,0x70(%rsp)
+    0.00 :   40dbce: mov    %rcx,0x78(%rsp)
+    0.00 :   40dbd3: mov    %dl,0x80(%rsp)
+    0.00 :   40dbda: mov    (%rax),%rdx
+    0.00 :   40dbdd: mov    %rdx,0x88(%rsp)
+    0.00 :   40dbe5: mov    0x40(%rax),%rsi
+    0.00 :   40dbe9: movl   $0x0,0xa0(%rsp)
+    0.00 :   40dbf4: movq   $0x0,0xa8(%rsp)
+    0.00 :   40dc00: mov    0x70(%rsp),%rcx
+    0.00 :   40dc05: mov    0x78(%rsp),%r8
+    0.00 :   40dc0a: movl   $0x0,0xb0(%rsp)
+    0.00 :   40dc15: movzbl 0x80(%rsp),%edx
+    0.00 :   40dc1d: mov    0x88(%rsp),%r13
+    0.00 :   40dc25: movl   $0x0,0x140(%rsp)
+    0.00 :   40dc30: mov    %rcx,0xc0(%rsp)
+    0.00 :   40dc38: mov    %rcx,0x10(%rsp)
+    0.00 :   40dc3d: mov    %dl,0x120(%rsp)
+    0.00 :   40dc44: mov    %r8,0xc8(%rsp)
+    0.00 :   40dc4c: mov    %r8,0x20(%rsp)
+    0.00 :   40dc51: movq   $0x0,0x148(%rsp)
+    0.00 :   40dc5d: movl   $0x0,0x150(%rsp)
+    0.00 :   40dc68: movq   $0x0,0x70(%rsp)
+    0.00 :   40dc71: movq   $0x0,0x78(%rsp)
+    0.00 :   40dc7a: movq   $0x0,0x98(%rsp)
+    0.00 :   40dc86: movq   $0x0,0x90(%rsp)
+    0.00 :   40dc92: movq   $0x0,0x88(%rsp)
+    0.00 :   40dc9e: movl   $0x0,0xf0(%rsp)
+    0.00 :   40dca9: movq   $0x0,0xf8(%rsp)
+    0.00 :   40dcb5: movl   $0x0,0x100(%rsp)
+    0.00 :   40dcc0: mov    %dl,0xd0(%rsp)
+    0.00 :   40dcc7: mov    %rdi,0x108(%rsp)
+    0.00 :   40dccf: lea    0x110(%rsp),%rdi
+    0.00 :   40dcd7: mov    %dl,0x2f(%rsp)
+    0.00 :   40dcdb: mov    %rsi,0xe0(%rsp)
+    0.00 :   40dce3: mov    %rsi,0x18(%rsp)
+    0.00 :   40dce8: mov    %r13,0xd8(%rsp)
+    0.00 :   40dcf0: mov    %r13,0xe8(%rsp)
+    0.00 :   40dcf8: movq   $0x0,0x110(%rsp)
+    0.00 :   40dd04: movq   $0x0,0x118(%rsp)
+    0.00 :   40dd10: movq   $0x0,0x138(%rsp)
+    0.00 :   40dd1c: movq   $0x0,0x130(%rsp)
+    0.00 :   40dd28: movq   $0x0,0x128(%rsp)
+    0.00 :   40dd34: movq   $0x0,0x158(%rsp)
+    0.00 :   40dd40: callq  409150 <shm::detail::ChannelBatchWriter<8388608ul>::Flush()>
+    0.00 :   40dd45: lea    0x110(%rsp),%rdi
+    0.00 :   40dd4d: callq  40d670 <shm::detail::BatchWriter<8388608ul>::Flush()>
+    0.00 :   40dd52: lea    0x70(%rsp),%rdi
+    0.00 :   40dd57: callq  40d670 <shm::detail::BatchWriter<8388608ul>::Flush()>
+    0.00 :   40dd5c: mov    0x10(%rsp),%rcx
+    0.00 :   40dd61: test   %rcx,%rcx
+    0.00 :   40dd64: je     40def0 <shm::ShmConnection::SendCmd(std::any const&)+0x640>
+    0.00 :   40dd6a: mov    0x20(%rsp),%r8
+    0.00 :   40dd6f: test   %r8,%r8
+    0.00 :   40dd72: je     40def0 <shm::ShmConnection::SendCmd(std::any const&)+0x640>
+    0.00 :   40dd78: mov    0x18(%rsp),%rsi
+    0.00 :   40dd7d: mov    %r13,%rax
+    0.00 :   40dd80: sub    %rsi,%rax
+    0.00 :   40dd83: cmp    $0x800000,%rax
+    0.00 :   40dd89: ja     40def0 <shm::ShmConnection::SendCmd(std::any const&)+0x640>
+    0.00 :   40dd8f: mov    $0x800000,%eax
+    0.00 :   40dd94: mov    0x28(%rsp),%edx
+    0.00 :   40dd98: mov    %rax,%rcx
+    0.00 :   40dd9b: sub    %r13,%rcx
+    0.00 :   40dd9e: mov    %rdx,0x18(%rsp)
+    0.00 :   40dda3: add    %rsi,%rcx
+    0.00 :   40dda6: cmp    %rcx,%rdx
+    0.00 :   40dda9: ja     40def0 <shm::ShmConnection::SendCmd(std::any const&)+0x640>
+    0.00 :   40ddaf: mov    %r13,%rcx
+    0.00 :   40ddb2: and    $0x7fffff,%ecx
+    0.00 :   40ddb8: sub    %rcx,%rax
+    0.00 :   40ddbb: cmp    %rax,%rdx
+    0.00 :   40ddbe: movzbl 0x2f(%rsp),%edx
+    0.00 :   40ddc3: seta   %al
+    0.00 :   40ddc6: xor    $0x1,%edx
+    0.00 :   40ddc9: test   %dl,%al
+    0.00 :   40ddcb: jne    40def0 <shm::ShmConnection::SendCmd(std::any const&)+0x640>
+    0.00 :   40ddd1: lea    (%r8,%rcx,1),%rdx
+    0.00 :   40ddd5: mov    (%r14),%rax
+    0.00 :   40ddd8: movslq 0x28(%rsp),%rcx
+    0.00 :   40dddd: lea    0xc0(%rsp),%rsi
+    0.00 :   40dde5: mov    %rsi,0x10(%rsp)
+    0.00 :   40ddea: mov    %r14,%rdi
+    0.00 :   40dded: mov    %rbx,%rsi
+    0.00 :   40ddf0: lea    0x110(%rsp),%r8
+    0.00 :   40ddf8: mov    %rdx,0xf8(%rsp)
+    0.00 :   40de00: mov    %ecx,0x100(%rsp)
+    0.00 :   40de07: movq   $0x0,0x110(%rsp)
+    0.00 :   40de13: callq  *0x10(%rax)
+    0.00 :   40de16: cmp    0x88(%rbp),%r14
+    0.00 :   40de1d: je     40df0f <shm::ShmConnection::SendCmd(std::any const&)+0x65f>
+    0.00 :   40de23: lea    0xc0(%rsp),%rax
+    0.00 :   40de2b: xor    %r12d,%r12d
+    0.00 :   40de2e: movq   $0x0,0xf8(%rsp)
+    0.00 :   40de3a: movl   $0x0,0x100(%rsp)
+    0.00 :   40de45: mov    %rax,0x10(%rsp)
+    0.00 :   40de4a: mov    0x10(%rsp),%rbx
+    0.00 :   40de4f: mov    %rbx,%rdi
+    0.00 :   40de52: callq  409150 <shm::detail::ChannelBatchWriter<8388608ul>::Flush()>
+    0.00 :   40de57: mov    %rbx,%rdi
+    0.00 :   40de5a: callq  40d670 <shm::detail::BatchWriter<8388608ul>::Flush()>
+    0.00 :   40de5f: mov    0x50(%rsp),%rcx
+    0.00 :   40de64: mov    0x58(%rsp),%r13
+    0.00 :   40de69: mov    0x60(%rsp),%rax
+    0.00 :   40de6e: mov    %rcx,0x10(%rsp)
+    0.00 :   40de73: jmpq   40da13 <shm::ShmConnection::SendCmd(std::any const&)+0x163>
+    0.00 :   40de78: nopl   0x0(%rax,%rax,1)
+    1.13 :   40de80: cmpl   $0x1,0x28(%rbp)
+    0.00 :   40de84: ja     40db30 <shm::ShmConnection::SendCmd(std::any const&)+0x280>
+    0.00 :   40de8a: cmp    $0xfffffffe,%eax
+    0.00 :   40de8d: je     40dfef <shm::ShmConnection::SendCmd(std::any const&)+0x73f>
+    0.00 :   40de93: cmp    $0xffffffff,%eax
+    0.00 :   40de96: je     40dfe0 <shm::ShmConnection::SendCmd(std::any const&)+0x730>
+    0.00 :   40de9c: test   %eax,%eax
+    0.00 :   40de9e: jne    40df74 <shm::ShmConnection::SendCmd(std::any const&)+0x6c4>
+    0.00 :   40dea4: mov    0x110(%rsp),%rax
+    0.00 :   40deac: test   %rax,%rax
+    0.00 :   40deaf: je     40db30 <shm::ShmConnection::SendCmd(std::any const&)+0x280>
+    0.00 :   40deb5: mov    0x38(%rsp),%rdx
+    0.00 :   40deba: sub    0x30(%rsp),%rdx
+    0.00 :   40debf: cmp    %rdx,%rax
+    0.00 :   40dec2: jbe    40db30 <shm::ShmConnection::SendCmd(std::any const&)+0x280>
+    0.00 :   40dec8: cmp    0x140(%rbp),%rax
+    0.00 :   40decf: ja     40db30 <shm::ShmConnection::SendCmd(std::any const&)+0x280>
+    0.00 :   40ded5: sub    %rdx,%rax
+    0.00 :   40ded8: lea    0x30(%rsp),%rdi
+    0.00 :   40dedd: mov    %rax,%rsi
+    0.00 :   40dee0: callq  40d6c0 <std::vector<char, std::allocator<char> >::_M_default_append(unsigned long)>
+    0.00 :   40dee5: jmpq   40daf6 <shm::ShmConnection::SendCmd(std::any const&)+0x246>
+    0.00 :   40deea: nopw   0x0(%rax,%rax,1)
+    0.00 :   40def0: lea    0xc0(%rsp),%rdi
+    0.00 :   40def8: callq  409150 <shm::detail::ChannelBatchWriter<8388608ul>::Flush()>
+    0.00 :   40defd: lea    0xc0(%rsp),%rdi
+    0.00 :   40df05: callq  40d670 <shm::detail::BatchWriter<8388608ul>::Flush()>
+    0.00 :   40df0a: jmpq   40daf6 <shm::ShmConnection::SendCmd(std::any const&)+0x246>
+    0.00 :   40df0f: cmpl   $0x1,0x28(%rbp)
+    0.00 :   40df13: ja     40de23 <shm::ShmConnection::SendCmd(std::any const&)+0x573>
+    0.00 :   40df19: cmp    %eax,0x28(%rsp)
+    0.00 :   40df1d: je     40e012 <shm::ShmConnection::SendCmd(std::any const&)+0x762>
+    0.00 :   40df23: movq   $0x0,0xf8(%rsp)
+    0.00 :   40df2f: movl   $0x0,0x100(%rsp)
+    0.00 :   40df3a: cmp    $0xfffffffe,%eax
+    0.00 :   40df3d: je     40dffa <shm::ShmConnection::SendCmd(std::any const&)+0x74a>
+    0.00 :   40df43: add    $0x1,%eax
+    0.00 :   40df46: jne    40def0 <shm::ShmConnection::SendCmd(std::any const&)+0x640>
+    0.00 :   40df48: mov    0x0(%rbp),%rax
+    0.00 :   40df4c: lea    0xc0(%rsp),%rcx
+    0.00 :   40df54: mov    %rbp,%rdi
+    0.00 :   40df57: mov    %rcx,0x10(%rsp)
+    0.00 :   40df5c: callq  *0x18(%rax)
+    0.00 :   40df5f: lea    0xc0(%rsp),%rax
+    0.00 :   40df67: xor    %r12d,%r12d
+    0.00 :   40df6a: mov    %rax,0x10(%rsp)
+    0.00 :   40df6f: jmpq   40de4a <shm::ShmConnection::SendCmd(std::any const&)+0x59a>
+    0.00 :   40df74: jle    40db30 <shm::ShmConnection::SendCmd(std::any const&)+0x280>
+    0.00 :   40df7a: mov    0x30(%rsp),%rsi
+    0.00 :   40df7f: mov    0x38(%rsp),%rdx
+    0.00 :   40df84: movslq %eax,%rcx
+    0.00 :   40df87: sub    %rsi,%rdx
+    0.00 :   40df8a: cmp    %rdx,%rcx
+    0.00 :   40df8d: ja     40db30 <shm::ShmConnection::SendCmd(std::any const&)+0x280>
+    1.22 :   40df93: mov    0x38(%rbp),%rdx
+    0.00 :   40df97: cmp    $0xffffffffffffffff,%rdx
+    0.00 :   40df9b: je     40db30 <shm::ShmConnection::SendCmd(std::any const&)+0x280>
+    0.00 :   40dfa1: mov    (%rdx),%rdi
+    1.36 :   40dfa4: mov    0x40(%rdx),%rdx
+    3.00 :   40dfa8: mov    %rdi,%r8
+    0.00 :   40dfab: sub    %rdx,%r8
+    0.00 :   40dfae: cmp    $0x800000,%r8
+    0.00 :   40dfb5: ja     40db30 <shm::ShmConnection::SendCmd(std::any const&)+0x280>
+    0.00 :   40dfbb: add    $0x800000,%rdx
+    0.00 :   40dfc2: sub    %rdi,%rdx
+    0.00 :   40dfc5: cmp    %rdx,%rcx
+    0.00 :   40dfc8: ja     40db30 <shm::ShmConnection::SendCmd(std::any const&)+0x280>
+    0.00 :   40dfce: mov    %eax,%edx
+    0.00 :   40dfd0: mov    %rbp,%rdi
+    0.74 :   40dfd3: callq  4044c0 <shm::ShmConnection::WriteRaw(void const*, unsigned int) [clone .part.0]>
+    0.00 :   40dfd8: mov    %eax,%r12d
+    0.00 :   40dfdb: jmpq   40db30 <shm::ShmConnection::SendCmd(std::any const&)+0x280>
+    0.00 :   40dfe0: mov    0x0(%rbp),%rax
+    0.00 :   40dfe4: mov    %rbp,%rdi
+    0.00 :   40dfe7: callq  *0x18(%rax)
+    0.00 :   40dfea: jmpq   40db30 <shm::ShmConnection::SendCmd(std::any const&)+0x280>
+    0.00 :   40dfef: mov    $0x1,%r12d
+    0.00 :   40dff5: jmpq   40db30 <shm::ShmConnection::SendCmd(std::any const&)+0x280>
+    0.00 :   40dffa: lea    0xc0(%rsp),%rax
+    0.00 :   40e002: mov    %rax,0x10(%rsp)
+    0.00 :   40e007: mov    $0x1,%r12d
+    0.00 :   40e00d: jmpq   40de4a <shm::ShmConnection::SendCmd(std::any const&)+0x59a>
+    0.00 :   40e012: movl   $0x1,0xf0(%rsp)
+    0.00 :   40e01d: mov    0x18(%rsp),%rax
+    0.00 :   40e022: movq   $0x0,0xf8(%rsp)
+    0.00 :   40e02e: movl   $0x0,0x100(%rsp)
+    0.00 :   40e039: add    %r13,%rax
+    0.00 :   40e03c: mov    %rax,0xd8(%rsp)
+    0.00 :   40e044: lea    0xc0(%rsp),%rax
+    0.00 :   40e04c: mov    %rax,%rdi
+    0.00 :   40e04f: mov    %rax,0x10(%rsp)
+    0.00 :   40e054: callq  409150 <shm::detail::ChannelBatchWriter<8388608ul>::Flush()>
+    0.00 :   40e059: jmp    40e007 <shm::ShmConnection::SendCmd(std::any const&)+0x757>
+    0.00 :   40e05b: movq   $0x0,0x8(%rsp)
+    0.00 :   40e064: jmpq   40d934 <shm::ShmConnection::SendCmd(std::any const&)+0x84>
+    0.00 :   40e069: mov    %rax,%rbp
+    0.00 :   40e06c: mov    %rdx,%rbx
+    0.00 :   40e06f: jmp    40e079 <shm::ShmConnection::SendCmd(std::any const&)+0x7c9>
+    0.00 :   40e071: mov    %rax,%rbp
+    0.00 :   40e074: mov    %rdx,%rax
+    0.00 :   40e077: jmp    40e091 <shm::ShmConnection::SendCmd(std::any const&)+0x7e1>
+    0.00 :   40e079: mov    0x10(%rsp),%r14
+    0.00 :   40e07e: mov    %r14,%rdi
+    0.00 :   40e081: callq  409150 <shm::detail::ChannelBatchWriter<8388608ul>::Flush()>
+    0.00 :   40e086: mov    %r14,%rdi
+    0.00 :   40e089: callq  40d670 <shm::detail::BatchWriter<8388608ul>::Flush()>
+    0.00 :   40e08e: mov    %rbx,%rax
+    0.00 :   40e091: sub    $0x1,%rax
+    0.00 :   40e095: jne    40e0bd <shm::ShmConnection::SendCmd(std::any const&)+0x80d>
+    0.00 :   40e097: mov    %rbp,%rdi
+    0.00 :   40e09a: callq  403110 <__cxa_begin_catch@plt>
+    0.00 :   40e09f: callq  403490 <__cxa_end_catch@plt>
+    0.00 :   40e0a4: mov    0x50(%rsp),%rcx
+    0.00 :   40e0a9: mov    0x58(%rsp),%r13
+    0.00 :   40e0ae: mov    0x60(%rsp),%rax
+    0.00 :   40e0b3: mov    %rcx,0x10(%rsp)
+    0.00 :   40e0b8: jmpq   40da13 <shm::ShmConnection::SendCmd(std::any const&)+0x163>
+    0.00 :   40e0bd: lea    0x50(%rsp),%rdi
+    0.00 :   40e0c2: callq  408c40 <shm::ShmConnection::EncodeGuard::~EncodeGuard()>
+    0.00 :   40e0c7: lea    0x30(%rsp),%rdi
+    0.00 :   40e0cc: callq  409120 <std::_Vector_base<char, std::allocator<char> >::~_Vector_base()>
+    0.00 :   40e0d1: test   %r15,%r15
+    0.00 :   40e0d4: je     40e0de <shm::ShmConnection::SendCmd(std::any const&)+0x82e>
+    0.00 :   40e0d6: mov    %r15,%rdi
+    0.00 :   40e0d9: callq  40a1f0 <std::_Sp_counted_base<(__gnu_cxx::_Lock_policy)2>::_M_release()>
+    0.00 :   40e0de: cmpq   $0x0,0x8(%rsp)
+    0.00 :   40e0e4: je     40e0f0 <shm::ShmConnection::SendCmd(std::any const&)+0x840>
+    0.00 :   40e0e6: mov    0x8(%rsp),%rdi
+    0.00 :   40e0eb: callq  40a1f0 <std::_Sp_counted_base<(__gnu_cxx::_Lock_policy)2>::_M_release()>
+    0.00 :   40e0f0: mov    %rbp,%rdi
+    0.00 :   40e0f3: callq  4034f0 <_Unwind_Resume@plt>

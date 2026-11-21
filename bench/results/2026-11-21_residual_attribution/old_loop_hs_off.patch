@@ -1,0 +1,10 @@
+--- current/shm_server.hpp
++++ old_loop_hs_off/shm_server.hpp
+@@ -462,6 +462,7 @@
+             }
+             FinishAccept(std::move(done.sockfd), std::move(done.channel));
+         }
++        loop_->RemoveFd(hs_wake_fd_.Get());  // single-client diagnostic only
+     }
+ 
+     /// @brief 握手成功后的连接建立（原 OnAccept 后半段，事件循环线程）

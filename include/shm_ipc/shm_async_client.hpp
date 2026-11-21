@@ -335,7 +335,7 @@ class ShmAsyncClient : public comm::ITcpAsyncClient
             if (n <= 0)
             {
                 // 对端关闭：先读掉环中可能残留的最后数据，再收尾
-                conn->DrainRing(true);
+                conn->DrainRing();
                 // 消息/关闭回调可能已重连；旧连接的 EOF 不得清理新连接。
                 if (conn_ == conn)
                 {

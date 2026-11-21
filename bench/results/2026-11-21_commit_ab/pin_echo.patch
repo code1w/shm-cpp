@@ -1,0 +1,37 @@
+--- bench/bench_shm.cpp
++++ bench/bench_shm.cpp
+@@ -16,11 +16,18 @@
+ #include <memory>
+ 
+ #include <sys/socket.h>
++#include <sched.h>
+ #include <sys/wait.h>
+ #include <time.h>
+ #include <unistd.h>
+ 
+ namespace {
++
++void PinCpu(int cpu)
++{
++    cpu_set_t cpus; CPU_ZERO(&cpus); CPU_SET(cpu, &cpus);
++    if (::sched_setaffinity(0, sizeof(cpus), &cpus) != 0) std::abort();
++}
+ 
+ using Channel = shm::DefaultRingChannel;
+ 
+@@ -74,6 +81,7 @@
+  */
+ void RunServer(int socket_fd)
+ {
++    PinCpu(2);
+     auto channel = CreateChannelOrExit(socket_fd, shm::ChannelRole::kServer);
+     auto buf     = std::make_unique<char[]>(Channel::kMaxWriteSize);
+ 
+@@ -109,6 +117,7 @@
+  */
+ void RunClient(int socket_fd)
+ {
++    PinCpu(4);
+     auto channel  = CreateChannelOrExit(socket_fd, shm::ChannelRole::kClient);
+     auto send_buf = std::make_unique<char[]>(Channel::kMaxWriteSize);
+     auto recv_buf = std::make_unique<char[]>(Channel::kMaxWriteSize);

@@ -372,39 +372,59 @@ void TestReaderOwnership()
     assert(moved.TryRecv(p.client, &payload, &len) == 0 && moved.LastSeq() == 1);
     moved.Commit(p.client); assert(p.client.Readable() == 0);
 }
-void TestDrainScheduling()
+struct LargeChunkCodec : comm::codec::Codec
+{
+    static constexpr size_t kChunk = 1024 * 1024;
+    int32_t Decode(const comm::byte*, size_t length, std::any& pkg, size_t*) override
+    {
+        if (length < kChunk) return comm::kCodecNeedMoreBuffer;
+        pkg = 1;
+        return static_cast<int32_t>(kChunk);
+    }
+};
+void TestDrainToEmpty()
 {
     Pair p; shm::EventLoop loop;
     auto c = std::make_shared<shm::ShmConnection>(&loop, 1, std::move(p.a), std::move(p.client));
     c->SetCodec(std::make_shared<ByteAnyCodec>()); c->OnConnection();
-    int count = 0, seen_at_timer = 0; char byte = 1;
+    int count = 0; char byte = 1;
     c->SetMessageCallback([&](const auto&, const auto&) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        if (++count < 100) assert(p.server.TryWrite(&byte, 1) == 0);
-        else loop.Stop();
+        if (++count == 1) std::this_thread::sleep_for(std::chrono::milliseconds(3));
+        if (count < 300) assert(p.server.TryWrite(&byte, 1) == 0);
     });
-    loop.AddFd(c->NotifyFd(), [&](int fd, short) { shm::DefaultRingChannel::DrainNotify(fd); c->DrainRing(); });
-    int timer;
-    assert(loop.AddOneShotTimer(1, [&](int, short) { seen_at_timer = count; loop.Stop(); }, &timer) == shm::ErrorCode::kOk);
-    assert(p.server.TryWrite(&byte, 1) == 0); p.server.NotifyPeer();
-    assert(loop.Run(-1) == shm::ErrorCode::kOk && seen_at_timer > 0 && seen_at_timer < 100);
-    assert(loop.Run(-1) == shm::ErrorCode::kOk && count == 100 && c->Channel().Readable() == 0);
-    // 对端不再写，预加载数据也必须靠本地唤醒持续消费。
-    count = 0; c->SetMessageCallback([&](const auto&, const auto&) { if (++count == 300) loop.Stop(); });
-    std::vector<char> bytes(300, 1); assert(p.server.TryWrite(bytes.data(), bytes.size()) == 0);
-    p.server.NotifyPeer(); assert(loop.Run(-1) == shm::ErrorCode::kOk && count == 300);
-    count = 0; assert(p.server.TryWrite(bytes.data(), bytes.size()) == 0);
-    assert(c->DrainRing(true) == 300 && count == 300 && c->Channel().Readable() == 0); // EOF 不截断尾部
+    assert(p.server.TryWrite(&byte, 1) == 0);
+    // 同一调用超过64帧和2ms，且继续消费回调期间到达的新消息。
+    assert(c->DrainRing() == 300 && count == 300 && c->Channel().Readable() == 0);
+    pollfd notify{c->NotifyFd(), POLLIN, 0};
+    assert(::poll(&notify, 1, 0) == 0);  // 不再产生预算耗尽后的本地自唤醒
+    count = 0;
+    c->SetMessageCallback([&](const auto&, const auto&) { ++count; });
+    loop.AddFd(c->NotifyFd(), [&](int fd, short) {
+        shm::DefaultRingChannel::DrainNotify(fd);
+        assert(c->DrainRing() == 300 && count == 300);
+        loop.Stop();
+    });
+    std::vector<char> bytes(300, 1);
+    assert(p.server.TryWrite(bytes.data(), bytes.size()) == 0);
+    p.server.NotifyPeer();
+    assert(loop.Run(-1) == shm::ErrorCode::kOk && c->Channel().Readable() == 0);
+    assert(::poll(&notify, 1, 0) == 0);
+    // 单帧大于256KiB，也要在同一调用读完多个完整帧。
+    c->SetCodec(std::make_shared<LargeChunkCodec>()); count = 0;
+    bytes.resize(2 * LargeChunkCodec::kChunk);
+    assert(p.server.TryWrite(bytes.data(), bytes.size()) == 0);
+    assert(c->DrainRing() == 2 && count == 2 && c->Channel().Readable() == 0);
+    assert(::poll(&notify, 1, 0) == 0);
 }
-void TestHeartbeatBudget()
+void TestHeartbeatDrain()
 {
     Pair p; shm::EventLoop loop;
     auto c = std::make_shared<shm::ShmConnection>(&loop, 1, std::move(p.a), std::move(p.client));
     c->SetCodec(std::make_shared<LengthCodec>()); c->OnConnection();
     std::vector<char> bytes(300, 1); assert(p.server.TryWrite(bytes.data(), bytes.size()) == 0);
-    assert(c->DrainRing() == 0 && c->Channel().Readable() >= 236);
-    pollfd fd{c->NotifyFd(), POLLIN, 0}; assert(::poll(&fd, 1, 0) == 1 && (fd.revents & POLLIN));
-    assert(c->DrainRing(true) == 0 && c->Channel().Readable() == 0);
+    assert(c->DrainRing() == 0 && c->Channel().Readable() == 0);
+    pollfd fd{c->NotifyFd(), POLLIN, 0}; assert(::poll(&fd, 1, 0) == 0);
+    assert(c->DrainRing() == 0);
 }
 void TestReadArguments()
 {
@@ -431,10 +451,11 @@ void TestCallbackReplacement()
     c->OnConnection(); int next_calls = 0;
     auto token = std::make_shared<int>(1); std::weak_ptr<int> weak = token;
     c->SetMessageCallback([&, token, payload = std::string(1000, 'x')](const auto&, const auto&) {
-        c->SetMessageCallback([&](const auto&, const auto&) { ++next_calls; });
         assert(!weak.expired() && *token == 1 && payload[0] == 'x');
     });
     token.reset(); c->OnMessage(1);
+    assert(!weak.expired());
+    c->SetMessageCallback([&](const auto&, const auto&) { ++next_calls; });
     assert(weak.expired() && next_calls == 0);
     c->OnMessage(1); assert(next_calls == 1);
     std::vector<int> observed;
@@ -443,16 +464,17 @@ void TestCallbackReplacement()
 
     auto verified = std::make_shared<shm::ShmConnection>(&loop, 2, shm::UniqueFd{}, shm::DefaultRingChannel{});
     verified->SetVerifyCallback([&, payload = std::string(1000, 'v')](const auto&) {
-        verified->SetVerifyCallback({}); assert(payload[0] == 'v'); verified->OnVerify(true);
+        assert(payload[0] == 'v'); verified->OnVerify(true);
     });
     verified->SetConnectionCallback([&, payload = std::string(1000, 'c')](const auto&) {
-        verified->SetConnectionCallback({}); assert(payload[0] == 'c');
+        assert(payload[0] == 'c');
     });
     verified->OnConnection(); assert(verified->State() == comm::TcpConnStates::established);
+    verified->SetVerifyCallback({}); verified->SetConnectionCallback({});
     verified->SetCloseCallback([&, payload = std::string(1000, 'q')](const auto&) {
-        verified->SetCloseCallback({}); assert(payload[0] == 'q');
+        assert(payload[0] == 'q');
     });
-    verified->OnClose();
+    verified->OnClose(); verified->SetCloseCallback({});
 }
 void TestVerifyLifecycle()
 {
@@ -542,7 +564,7 @@ int main()
     TestStatefulWrap(false); TestStatefulWrap(true);
     TestDirectFallback(); TestMessageException(); TestCloseException();
     TestLongVerifyTimeout(); TestFactoryRecovery(); TestHandshakeDeadline();
-    TestReentrantRollback(); TestReaderOwnership(); TestDrainScheduling(); TestHeartbeatBudget(); TestReadArguments();
+    TestReentrantRollback(); TestReaderOwnership(); TestDrainToEmpty(); TestHeartbeatDrain(); TestReadArguments();
     TestCallbackReplacement(); TestVerifyLifecycle(); TestOwnerCallbackReplacement(); TestNulPaths();
     std::puts("=== AUDIT HARDENING PASSED ===");
 }

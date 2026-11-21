@@ -1,0 +1,57 @@
+--- pinned/bench_app.cpp
++++ warm/bench_app.cpp
+@@ -29,6 +29,7 @@
+ #include <pthread.h>
+ #include <sched.h>
+ #include <unistd.h>
++#include "poll_probe.hpp"
+ 
+ /// 大对象 POD（4KB / 1MB），用于验证上层大消息与 any 复用
+ struct BenchBigPod
+@@ -58,7 +59,9 @@
+ 
+ int g_batch      = 64;
+ BenchKind g_kind = BenchKind::kSmall;
+-int g_total      = 1000000;
++constexpr int kWarmup = 1 << 20;
++constexpr int kMeasured = 8 * kWarmup;
++int g_total = kWarmup + kMeasured;
+ 
+ // 客户端发送复用 any（只在客户端事件循环线程使用）
+ std::any g_client_any;
+@@ -211,14 +214,19 @@
+ 
+     client.SetMessageCallback([&](const comm::TcpConnPtr& conn, const std::any&) {
+         const int n = g_replies.fetch_add(1, std::memory_order_relaxed) + 1;
++        if (n == kWarmup)
++        {
++            g_t0 = NowNs();
++            poll_probe::StartMeasure();
++        }
+         if (n >= g_total)
+         {
+             const uint64_t elapsed = NowNs() - g_t0;
+             const double secs      = static_cast<double>(elapsed) / 1e9;
+-            const double mbps      = static_cast<double>(g_total) * KindPayloadSize() / secs / (1024.0 * 1024.0);
++            const double mbps      = static_cast<double>(kMeasured) * KindPayloadSize() / secs / (1024.0 * 1024.0);
+             std::printf("type=%-6s batch=%4d total=%d time=%7.3fs "
+                         "rate=%9.0f msg/s  %8.1f MB/s\n",
+-                        KindName(), g_batch, g_total, secs, g_total / secs, mbps);
++                        KindName(), g_batch, kMeasured, secs, kMeasured / secs, mbps);
+             g_done.store(true, std::memory_order_release);
+             client_loop.Stop();
+             server_loop.Stop();
+@@ -247,11 +255,13 @@
+     });
+ 
+     std::thread server_thread([&] {
++        poll_probe::SetRole("server");
+         cpu_set_t cpus; CPU_ZERO(&cpus); CPU_SET(2, &cpus);
+         if (pthread_setaffinity_np(pthread_self(), sizeof(cpus), &cpus)) std::abort();
+         (void)server_loop.Run(50);
+     });
+     std::thread client_thread([&] {
++        poll_probe::SetRole("client");
+         cpu_set_t cpus; CPU_ZERO(&cpus); CPU_SET(4, &cpus);
+         if (pthread_setaffinity_np(pthread_self(), sizeof(cpus), &cpus)) std::abort();
+         client.Connect("/tmp/bench-app.socket");

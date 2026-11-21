@@ -1,6 +1,6 @@
 # RingChannel 技术文档
 
-当前通知后端为非阻塞 eventfd，已放弃 socketpair 通知方案。fd 通过 SCM_RIGHTS 共享，双方必须保持 O_NONBLOCK，不得修改共享阻塞属性；握手时验证类型与非阻塞属性。DrainNotify 一次读取合并计数，该计数不等于消息数量。读取预算与本地 WakeReader 使用原有机制。
+当前通知后端为非阻塞 eventfd，已放弃 socketpair 通知方案。fd 通过 SCM_RIGHTS 共享，双方必须保持 O_NONBLOCK，不得修改共享阻塞属性；握手时验证类型与非阻塞属性。DrainNotify 一次读取合并计数，该计数不等于消息数量。ShmConnection 已删除读取预算，持续读取到环空、不完整消息或连接关闭；WakeReader 作为显式本地唤醒接口保留。
 
 
 ## 1. 架构总览

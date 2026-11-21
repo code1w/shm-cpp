@@ -1,0 +1,14 @@
+# started on Sat Nov 21 18:18:25 2026
+
+
+ Performance counter stats for '/tmp/shm-ca766b1-vs-current/before/build/bench_app 64':
+
+         567293215      cycles:u                                                    
+         987987974      instructions:u            #    1.74  insn per cycle         
+
+       0.347294511 seconds time elapsed
+
+       0.220808000 seconds user
+       0.253646000 seconds sys
+
+

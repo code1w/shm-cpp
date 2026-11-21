@@ -1,0 +1,4 @@
+probe reader_mode=0
+probe role=client poll_calls=111 notify_writes=4226
+probe role=server poll_calls=4204 notify_writes=125
+type=small  batch= 256 total=1000000 time=  0.099s rate= 10116457 msg/s     154.4 MB/s

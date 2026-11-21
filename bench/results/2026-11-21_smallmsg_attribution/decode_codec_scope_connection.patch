@@ -1,0 +1,15 @@
+--- current/shm_connection.hpp
++++ decode_codec_scope/shm_connection.hpp
+@@ -520,10 +520,11 @@
+ 
+             // 在连续视图上批量解码：整个批次只 CommitRead 一次
+             uint32_t off = 0;
++            auto codec = codec_;
+             for (;;)
+             {
+                 size_t out        = 0;
+-                auto codec = codec_;
++                if (codec_ != codec) codec = codec_;
+                 if (!codec)
+                 {
+                     if (off) channel_.CommitRead(off);

@@ -1,0 +1,280 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+BFD: Dwarf Error: Can't find .debug_ranges section.
+#
+# Total Lost Samples: 0
+#
+# Samples: 581  of event 'cycles:u'
+# Event count (approx.): 1288977697
+#
+# Overhead  Symbol                                                                                                                                                                                        IPC   [IPC Coverage]
+# ........  ............................................................................................................................................................................................  ....................
+#
+    22.76%  [.] shm::ShmConnection::DrainRingOnce                                                                                                                                                         -      -            
+            |
+            ---shm::ShmConnection::DrainRing
+               |          
+               |--14.29%--std::_Function_handler<void (int, short), shm::ShmAsyncClient::InstallConnection(shm::UniqueFd, shm::RingChannel<8388608ul>, std::shared_ptr<comm::codec::Codec>)::{lambda(int, short)#1}>::_M_invoke
+               |          shm::EventLoop::Run
+               |          std::thread::_State_impl<std::thread::_Invoker<std::tuple<main::{lambda()#11}> > >::_M_run
+               |          execute_native_thread_routine
+               |          start_thread
+               |          __GI___clone (inlined)
+               |          
+                --8.47%--std::_Function_handler<void (int, short), shm::ShmServer::FinishAccept(shm::UniqueFd, shm::RingChannel<8388608ul>)::{lambda(int, short)#1}>::_M_invoke
+                          shm::EventLoop::Run
+                          std::thread::_State_impl<std::thread::_Invoker<std::tuple<main::{lambda()#10}> > >::_M_run
+                          execute_native_thread_routine
+                          start_thread
+                          __GI___clone (inlined)
+
+    19.71%  [.] shm::ShmConnection::SendCmd                                                                                                                                                               -      -            
+            |          
+            |--10.79%--shm::ShmConnection::DrainRingOnce
+            |          shm::ShmConnection::DrainRing
+            |          std::_Function_handler<void (int, short), shm::ShmServer::FinishAccept(shm::UniqueFd, shm::RingChannel<8388608ul>)::{lambda(int, short)#1}>::_M_invoke
+            |          shm::EventLoop::Run
+            |          std::thread::_State_impl<std::thread::_Invoker<std::tuple<main::{lambda()#10}> > >::_M_run
+            |          execute_native_thread_routine
+            |          start_thread
+            |          __GI___clone (inlined)
+            |          
+             --8.92%--std::_Function_handler<void (std::shared_ptr<comm::ITcpConnection> const&, std::any const&), main::{lambda(std::shared_ptr<comm::ITcpConnection> const&, std::any const&)#7}>::_M_invoke
+                       shm::ShmConnection::DrainRingOnce
+                       shm::ShmConnection::DrainRing
+                       std::_Function_handler<void (int, short), shm::ShmAsyncClient::InstallConnection(shm::UniqueFd, shm::RingChannel<8388608ul>, std::shared_ptr<comm::codec::Codec>)::{lambda(int, short)#1}>::_M_invoke
+                       shm::EventLoop::Run
+                       std::thread::_State_impl<std::thread::_Invoker<std::tuple<main::{lambda()#11}> > >::_M_run
+                       execute_native_thread_routine
+                       start_thread
+                       __GI___clone (inlined)
+
+    16.36%  [.] std::_Sp_counted_base<(__gnu_cxx::_Lock_policy)2>::_M_release                                                                                                                             -      -            
+            |          
+            |--9.74%--shm::ShmConnection::DrainRingOnce
+            |          shm::ShmConnection::DrainRing
+            |          |          
+            |          |--5.28%--std::_Function_handler<void (int, short), shm::ShmAsyncClient::InstallConnection(shm::UniqueFd, shm::RingChannel<8388608ul>, std::shared_ptr<comm::codec::Codec>)::{lambda(int, short)#1}>::_M_invoke
+            |          |          shm::EventLoop::Run
+            |          |          std::thread::_State_impl<std::thread::_Invoker<std::tuple<main::{lambda()#11}> > >::_M_run
+            |          |          execute_native_thread_routine
+            |          |          start_thread
+            |          |          __GI___clone (inlined)
+            |          |          
+            |           --4.46%--std::_Function_handler<void (int, short), shm::ShmServer::FinishAccept(shm::UniqueFd, shm::RingChannel<8388608ul>)::{lambda(int, short)#1}>::_M_invoke
+            |                     shm::EventLoop::Run
+            |                     std::thread::_State_impl<std::thread::_Invoker<std::tuple<main::{lambda()#10}> > >::_M_run
+            |                     execute_native_thread_routine
+            |                     start_thread
+            |                     __GI___clone (inlined)
+            |          
+             --6.62%--shm::ShmConnection::SendCmd
+                       |          
+                       |--3.47%--std::_Function_handler<void (std::shared_ptr<comm::ITcpConnection> const&, std::any const&), main::{lambda(std::shared_ptr<comm::ITcpConnection> const&, std::any const&)#7}>::_M_invoke
+                       |          shm::ShmConnection::DrainRingOnce
+                       |          shm::ShmConnection::DrainRing
+                       |          std::_Function_handler<void (int, short), shm::ShmAsyncClient::InstallConnection(shm::UniqueFd, shm::RingChannel<8388608ul>, std::shared_ptr<comm::codec::Codec>)::{lambda(int, short)#1}>::_M_invoke
+                       |          shm::EventLoop::Run
+                       |          std::thread::_State_impl<std::thread::_Invoker<std::tuple<main::{lambda()#11}> > >::_M_run
+                       |          execute_native_thread_routine
+                       |          start_thread
+                       |          __GI___clone (inlined)
+                       |          
+                        --3.15%--shm::ShmConnection::DrainRingOnce
+                                  shm::ShmConnection::DrainRing
+                                  std::_Function_handler<void (int, short), shm::ShmServer::FinishAccept(shm::UniqueFd, shm::RingChannel<8388608ul>)::{lambda(int, short)#1}>::_M_invoke
+                                  shm::EventLoop::Run
+                                  std::thread::_State_impl<std::thread::_Invoker<std::tuple<main::{lambda()#10}> > >::_M_run
+                                  execute_native_thread_routine
+                                  start_thread
+                                  __GI___clone (inlined)
+
+    11.56%  [.] std::_Function_handler<void (std::shared_ptr<comm::ITcpConnection> const&, std::any const&), main::{lambda(std::shared_ptr<comm::ITcpConnection> const&, std::any const&)#7}>::_M_invoke  -      -            
+            |
+            ---shm::ShmConnection::DrainRingOnce
+               shm::ShmConnection::DrainRing
+               std::_Function_handler<void (int, short), shm::ShmAsyncClient::InstallConnection(shm::UniqueFd, shm::RingChannel<8388608ul>, std::shared_ptr<comm::codec::Codec>)::{lambda(int, short)#1}>::_M_invoke
+               shm::EventLoop::Run
+               std::thread::_State_impl<std::thread::_Invoker<std::tuple<main::{lambda()#11}> > >::_M_run
+               execute_native_thread_routine
+               start_thread
+               __GI___clone (inlined)
+
+     6.33%  [.] shm::ShmConnection::WriteRaw                                                                                                                                                              -      -            
+            |
+            ---shm::ShmConnection::SendCmd
+               |          
+               |--3.99%--std::_Function_handler<void (std::shared_ptr<comm::ITcpConnection> const&, std::any const&), main::{lambda(std::shared_ptr<comm::ITcpConnection> const&, std::any const&)#7}>::_M_invoke
+               |          shm::ShmConnection::DrainRingOnce
+               |          shm::ShmConnection::DrainRing
+               |          std::_Function_handler<void (int, short), shm::ShmAsyncClient::InstallConnection(shm::UniqueFd, shm::RingChannel<8388608ul>, std::shared_ptr<comm::codec::Codec>)::{lambda(int, short)#1}>::_M_invoke
+               |          shm::EventLoop::Run
+               |          std::thread::_State_impl<std::thread::_Invoker<std::tuple<main::{lambda()#11}> > >::_M_run
+               |          execute_native_thread_routine
+               |          start_thread
+               |          __GI___clone (inlined)
+               |          
+                --2.35%--shm::ShmConnection::DrainRingOnce
+                          shm::ShmConnection::DrainRing
+                          std::_Function_handler<void (int, short), shm::ShmServer::FinishAccept(shm::UniqueFd, shm::RingChannel<8388608ul>)::{lambda(int, short)#1}>::_M_invoke
+                          shm::EventLoop::Run
+                          std::thread::_State_impl<std::thread::_Invoker<std::tuple<main::{lambda()#10}> > >::_M_run
+                          execute_native_thread_routine
+                          start_thread
+                          __GI___clone (inlined)
+
+     5.11%  [.] shm::codec::SimplePodCodec::EncodedSize                                                                                                                                                   -      -            
+            |
+            ---shm::ShmConnection::SendCmd
+               |          
+                --4.81%--shm::ShmConnection::DrainRingOnce
+                          shm::ShmConnection::DrainRing
+                          std::_Function_handler<void (int, short), shm::ShmServer::FinishAccept(shm::UniqueFd, shm::RingChannel<8388608ul>)::{lambda(int, short)#1}>::_M_invoke
+                          shm::EventLoop::Run
+                          std::thread::_State_impl<std::thread::_Invoker<std::tuple<main::{lambda()#10}> > >::_M_run
+                          execute_native_thread_routine
+                          start_thread
+                          __GI___clone (inlined)
+
+     4.00%  [.] shm::codec::SimplePodCodec::Encode                                                                                                                                                        -      -            
+            |
+            ---shm::ShmConnection::SendCmd
+               |          
+               |--3.40%--shm::ShmConnection::DrainRingOnce
+               |          shm::ShmConnection::DrainRing
+               |          std::_Function_handler<void (int, short), shm::ShmServer::FinishAccept(shm::UniqueFd, shm::RingChannel<8388608ul>)::{lambda(int, short)#1}>::_M_invoke
+               |          shm::EventLoop::Run
+               |          std::thread::_State_impl<std::thread::_Invoker<std::tuple<main::{lambda()#10}> > >::_M_run
+               |          execute_native_thread_routine
+               |          start_thread
+               |          __GI___clone (inlined)
+               |          
+                --0.60%--std::_Function_handler<void (std::shared_ptr<comm::ITcpConnection> const&, std::any const&), main::{lambda(std::shared_ptr<comm::ITcpConnection> const&, std::any const&)#7}>::_M_invoke
+                          shm::ShmConnection::DrainRingOnce
+                          shm::ShmConnection::DrainRing
+                          std::_Function_handler<void (int, short), shm::ShmAsyncClient::InstallConnection(shm::UniqueFd, shm::RingChannel<8388608ul>, std::shared_ptr<comm::codec::Codec>)::{lambda(int, short)#1}>::_M_invoke
+                          shm::EventLoop::Run
+                          std::thread::_State_impl<std::thread::_Invoker<std::tuple<main::{lambda()#11}> > >::_M_run
+                          execute_native_thread_routine
+                          start_thread
+                          __GI___clone (inlined)
+
+     3.94%  [.] shm::codec::SimplePodCodec::Decode                                                                                                                                                        -      -            
+            |
+            ---shm::ShmConnection::DrainRingOnce
+               shm::ShmConnection::DrainRing
+               |          
+               |--3.00%--std::_Function_handler<void (int, short), shm::ShmServer::FinishAccept(shm::UniqueFd, shm::RingChannel<8388608ul>)::{lambda(int, short)#1}>::_M_invoke
+               |          shm::EventLoop::Run
+               |          std::thread::_State_impl<std::thread::_Invoker<std::tuple<main::{lambda()#10}> > >::_M_run
+               |          execute_native_thread_routine
+               |          start_thread
+               |          __GI___clone (inlined)
+               |          
+                --0.94%--std::_Function_handler<void (int, short), shm::ShmAsyncClient::InstallConnection(shm::UniqueFd, shm::RingChannel<8388608ul>, std::shared_ptr<comm::codec::Codec>)::{lambda(int, short)#1}>::_M_invoke
+                          shm::EventLoop::Run
+                          std::thread::_State_impl<std::thread::_Invoker<std::tuple<main::{lambda()#11}> > >::_M_run
+                          execute_native_thread_routine
+                          start_thread
+                          __GI___clone (inlined)
+
+     2.44%  [.] std::__any_caster<Heartbeat>                                                                                                                                                              -      -            
+            |          
+            |--0.99%--shm::codec::SimplePodCodec::RegisterPod<Heartbeat>()::{lambda(void const*, std::any&)#2}::_FUN
+            |          shm::codec::SimplePodCodec::Decode
+            |          shm::ShmConnection::DrainRingOnce
+            |          shm::ShmConnection::DrainRing
+            |          |          
+            |           --0.53%--std::_Function_handler<void (int, short), shm::ShmAsyncClient::InstallConnection(shm::UniqueFd, shm::RingChannel<8388608ul>, std::shared_ptr<comm::codec::Codec>)::{lambda(int, short)#1}>::_M_invoke
+            |                     shm::EventLoop::Run
+            |                     std::thread::_State_impl<std::thread::_Invoker<std::tuple<main::{lambda()#11}> > >::_M_run
+            |                     execute_native_thread_routine
+            |                     start_thread
+            |                     __GI___clone (inlined)
+            |          
+            |--0.91%--shm::codec::SimplePodCodec::RegisterPod<Heartbeat>()::{lambda(std::any const&, void*)#1}::_FUN
+            |          shm::codec::SimplePodCodec::Encode
+            |          shm::ShmConnection::SendCmd
+            |          |          
+            |           --0.54%--shm::ShmConnection::DrainRingOnce
+            |                     shm::ShmConnection::DrainRing
+            |                     std::_Function_handler<void (int, short), shm::ShmServer::FinishAccept(shm::UniqueFd, shm::RingChannel<8388608ul>)::{lambda(int, short)#1}>::_M_invoke
+            |                     shm::EventLoop::Run
+            |                     std::thread::_State_impl<std::thread::_Invoker<std::tuple<main::{lambda()#10}> > >::_M_run
+            |                     execute_native_thread_routine
+            |                     start_thread
+            |                     __GI___clone (inlined)
+            |          
+             --0.54%--(anonymous namespace)::SendRequest
+
+     1.62%  [.] (anonymous namespace)::SendRequest                                                                                                                                                        -      -            
+            |          
+             --0.53%--std::_Function_handler<void (std::shared_ptr<comm::ITcpConnection> const&, std::any const&), main::{lambda(std::shared_ptr<comm::ITcpConnection> const&, std::any const&)#7}>::_M_invoke
+                       shm::ShmConnection::DrainRingOnce
+                       shm::ShmConnection::DrainRing
+                       std::_Function_handler<void (int, short), shm::ShmAsyncClient::InstallConnection(shm::UniqueFd, shm::RingChannel<8388608ul>, std::shared_ptr<comm::codec::Codec>)::{lambda(int, short)#1}>::_M_invoke
+                       shm::EventLoop::Run
+                       std::thread::_State_impl<std::thread::_Invoker<std::tuple<main::{lambda()#11}> > >::_M_run
+                       execute_native_thread_routine
+                       start_thread
+                       __GI___clone (inlined)
+
+     1.53%  [.] __memmove_avx_unaligned_erms                                                                                                                                                              -      -            
+            |
+            ---shm::ShmConnection::WriteRaw
+               shm::ShmConnection::SendCmd
+               |          
+                --1.06%--std::_Function_handler<void (std::shared_ptr<comm::ITcpConnection> const&, std::any const&), main::{lambda(std::shared_ptr<comm::ITcpConnection> const&, std::any const&)#7}>::_M_invoke
+                          shm::ShmConnection::DrainRingOnce
+                          shm::ShmConnection::DrainRing
+                          std::_Function_handler<void (int, short), shm::ShmAsyncClient::InstallConnection(shm::UniqueFd, shm::RingChannel<8388608ul>, std::shared_ptr<comm::codec::Codec>)::{lambda(int, short)#1}>::_M_invoke
+                          shm::EventLoop::Run
+                          std::thread::_State_impl<std::thread::_Invoker<std::tuple<main::{lambda()#11}> > >::_M_run
+                          execute_native_thread_routine
+                          start_thread
+                          __GI___clone (inlined)
+
+     1.19%  [.] std::any::_Manager_external<Heartbeat>::_S_manage                                                                                                                                         -      -            
+            |          
+             --0.92%--std::__any_caster<Heartbeat>
+                       |          
+                        --0.51%--(anonymous namespace)::SendRequest
+
+     0.89%  [.] shm::codec::SimplePodCodec::RegisterPod<Heartbeat>()::{lambda(void const*, std::any&)#2}::_FUN                                                                                            -      -            
+            |
+            ---shm::codec::SimplePodCodec::Decode
+               shm::ShmConnection::DrainRingOnce
+               shm::ShmConnection::DrainRing
+               |          
+                --0.54%--std::_Function_handler<void (int, short), shm::ShmAsyncClient::InstallConnection(shm::UniqueFd, shm::RingChannel<8388608ul>, std::shared_ptr<comm::codec::Codec>)::{lambda(int, short)#1}>::_M_invoke
+                          shm::EventLoop::Run
+                          std::thread::_State_impl<std::thread::_Invoker<std::tuple<main::{lambda()#11}> > >::_M_run
+                          execute_native_thread_routine
+                          start_thread
+                          __GI___clone (inlined)
+
+     0.51%  [.] shm::ShmConnection::DrainRing                                                                                                                                                             -      -            
+     0.49%  [.] shm::RingBuf<8388608ul>::CommitRead                                                                                                                                                       -      -            
+     0.36%  [.] std::_Function_handler<void (std::shared_ptr<comm::ITcpConnection> const&, std::any const&), main::{lambda(std::shared_ptr<comm::ITcpConnection> const&, std::any const&)#4}>::_M_invoke  -      -            
+     0.33%  [.] __memset_avx2_erms                                                                                                                                                                        -      -            
+     0.22%  [k] 0xffffffffbd98a750                                                                                                                                                                        -      -            
+     0.13%  [.] shm::EventLoop::Run                                                                                                                                                                       -      -            
+     0.13%  [.] __libc_disable_asynccancel                                                                                                                                                                -      -            
+     0.10%  [.] __libc_write                                                                                                                                                                              -      -            
+     0.07%  [.] strcmp                                                                                                                                                                                    -      -            
+     0.07%  [.] do_lookup_x                                                                                                                                                                               -      -            
+     0.07%  [.] strchr                                                                                                                                                                                    -      -            
+     0.02%  [.] _dl_fixup                                                                                                                                                                                 -      -            
+     0.01%  [.] __rpc_thread_destroy                                                                                                                                                                      -      -            
+     0.01%  [.] _dl_start                                                                                                                                                                                 -      -            
+     0.01%  [.] __sigsetjmp                                                                                                                                                                               -      -            
+     0.01%  [.] operator new                                                                                                                                                                              -      -            
+     0.00%  [.] pthread_setaffinity_np@@GLIBC_2.3.4                                                                                                                                                       -      -            
+     0.00%  [.] start_thread                                                                                                                                                                              -      -            
+     0.00%  [.] __clone                                                                                                                                                                                   -      -            
+     0.00%  [.] _start                                                                                                                                                                                    -      -            
+
+
+#
+# (Tip: Save output of perf stat using: perf stat record <target workload>)
+#

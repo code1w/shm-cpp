@@ -1,0 +1,17 @@
+--- current/shm_connection.hpp
++++ legacy_callback_storage/shm_connection.hpp
+@@ -759,10 +759,10 @@
+     UniqueFd socket_fd_;                                      ///< 连接 socket（断连检测）
+     DefaultRingChannel channel_;                              ///< 双向共享内存通道
+     comm::codec::CodecPtr codec_;                             ///< 编解码器（每连接一个实例）
+-    detail::StableCallback<comm::ConnectionCallback> connectioncb_;                   ///< 连接建立回调
+-    detail::StableCallback<comm::AnyMessageCallback> messagecb_;                      ///< 消息回调
+-    detail::StableCallback<comm::CloseCallback> closecb_;                             ///< 连接关闭回调
+-    detail::StableCallback<comm::VerifyCallback> verifycb_;                           ///< 验证回调
++    comm::ConnectionCallback connectioncb_;                   ///< 连接建立回调
++    comm::AnyMessageCallback messagecb_;                      ///< 消息回调
++    comm::CloseCallback closecb_;                             ///< 连接关闭回调
++    comm::VerifyCallback verifycb_;                           ///< 验证回调
+     std::any context_;                                        ///< 用户上下文
+     std::any rpc_context_;                                    ///< RPC 上下文
+     comm::TimerID verify_timer_ = -1;                          ///< 验证超时定时器

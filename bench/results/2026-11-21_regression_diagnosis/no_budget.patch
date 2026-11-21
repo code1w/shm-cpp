@@ -1,0 +1,11 @@
+--- current/shm_connection.hpp
++++ no_budget/shm_connection.hpp
+@@ -438,7 +438,7 @@
+         } guard(draining_);
+         try
+         {
+-            DrainBudget budget(drain_all);
++            DrainBudget budget(true);
+             int total = 0;
+             for (;;)
+             {

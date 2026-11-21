@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <stdexcept>
 #include <thread>
+#include "contract_test.hpp"
 
 struct Pair
 {
@@ -19,81 +20,123 @@ struct Pair
         t.join();
     }
 };
-struct ReentrantCodec : comm::codec::Codec
+struct ContractCodec : comm::codec::Codec
 {
     shm::ShmConnection* conn;
     int mode;
-    bool* destroyed;
-    int value = 42;
-    ReentrantCodec(shm::ShmConnection* c, int m, bool* d) : conn(c), mode(m), destroyed(d) {}
-    ~ReentrantCodec() override { *destroyed = true; }
-    int32_t Decode(const comm::byte*, size_t, std::any& pkg, size_t* size) override
+    ContractCodec(shm::ShmConnection* c, int m) : conn(c), mode(m) {}
+    void Mutate(int action)
     {
-        if (mode <= 2)
-        {
-            if (mode == 0) conn->SetCodec(std::make_shared<comm::codec::Codec>());
-            if (mode == 1) conn->SetCodec(nullptr);
-            if (mode == 2) conn->Close();
-            assert(!*destroyed);
-            pkg = value;
-            return 1;
-        }
-        *size = 1;
-        return comm::kCodecSkipPackage;
+        if (action == 1) conn->ResizeBuffer(1024 * 1024, 1024 * 1024);
+        if (action == 2) conn->SetCodec(nullptr);
+        if (action == 3) conn->Close();
+        if (action == 4) (void)conn->SendCmd(1);
+        if (action == 5) (void)conn->DrainRing();
+        if (action == 6) conn->SetMessageCallback({});
     }
-    int32_t Encode(const std::any&, comm::byte* buf, size_t, size_t*) override
+    int32_t EncodedSize(const std::any&) const override
     {
-        buf[0] = 99;
+        if (mode == 7) conn->SetCodec(nullptr);
+        return mode == 8 ? 256 : -1;
+    }
+    int32_t Encode(const std::any&, comm::byte* buf, size_t capacity, size_t* size) override
+    {
+        if (mode >= 1 && mode <= 6) Mutate(mode);
+        if (mode == 8) Mutate(1);  // 直写ring路径也禁止重入扩容
+        if (mode == 30 && capacity < 256 * 1024) { *size = 256 * 1024; return 0; }
+        buf[0] = 42;
         return 1;
     }
-    int32_t SendKeepAlive(comm::byte* buf, size_t, size_t*) override
+    int32_t Decode(const comm::byte*, size_t, std::any& pkg, size_t* size) override
     {
-        conn->ResizeBuffer(1024 * 1024, 1024 * 1024);
-        assert(!conn->SendCmd(std::any{}));  // 同一借用作用域禁止发送重入
-        if (mode == 4) conn->Close();
-        if (mode == 5) conn->SetCodec(nullptr);
-        if (mode == 6) conn->SetCodec(std::make_shared<comm::codec::Codec>());
-        assert(!*destroyed);
-        buf[0] = static_cast<comm::byte>(value);
-        if (mode == 7) throw std::runtime_error("heartbeat");
+        if (mode >= 11 && mode <= 16) Mutate(mode - 10);
+        if ((mode >= 21 && mode <= 26) || mode == 31) { *size = 1; return comm::kCodecSkipPackage; }
+        pkg = 42;
+        return 1;
+    }
+    int32_t SendKeepAlive(comm::byte* buf, size_t capacity, size_t* size) override
+    {
+        if (mode >= 21 && mode <= 26) Mutate(mode - 20);
+        if (mode == 31 && capacity < 768 * 1024) { *size = 768 * 1024; return 0; }
+        buf[0] = 7;
         return 1;
     }
 };
-void CodecReentry(int mode)
+void ContractViolation(int mode)
 {
-    Pair pair;
-    shm::EventLoop loop;
-    bool destroyed = false;
+    Pair pair; shm::EventLoop loop;
     auto conn = std::make_shared<shm::ShmConnection>(&loop, 1, std::move(pair.a), std::move(pair.client));
-    conn->SetCodec(std::make_shared<ReentrantCodec>(conn.get(), mode, &destroyed));
-    conn->SetKeepAlive(true);
-    int delivered = 0;
-    conn->SetMessageCallback([&](const auto&, const auto&) { ++delivered; });
-    conn->OnConnection();
-    char bytes[2] = {};
-    assert(pair.server.TryWrite(bytes, sizeof(bytes)) == 0);
-    bool threw = false;
-    int result = 0;
-    try { result = conn->DrainRing(); }
-    catch (const std::runtime_error&) { threw = true; }
-    assert(delivered == 0);
-    assert(threw == (mode == 7));
-    if (mode == 0 || mode == 1 || mode == 5 || mode == 6) assert(result == -1 && destroyed);
-    if (mode == 3)
-    {
-        assert(pair.server.Readable() == 2);
-        char response[2]; assert(pair.server.ReadExact(response, 2) == 0);
-        assert(response[0] == 42 && response[1] == 42);
-        assert(conn->SendCmd(std::any{}));  // 重入保护已解除，正常消息仍能发送
-        assert(pair.server.ReadExact(response, 1) == 0 && response[0] == 99);
-    }
+    conn->SetCodec(std::make_shared<ContractCodec>(conn.get(), mode));
+    conn->SetKeepAlive(true); conn->OnConnection();
+    if (mode <= 8) (void)conn->SendCmd(1);
     else
     {
-        assert(pair.server.Readable() == 0);
-        assert(conn->State() == comm::TcpConnStates::closeing);
+        char byte = 1; assert(pair.server.TryWrite(&byte, 1) == 0);
+        (void)conn->DrainRing();
     }
-    conn.reset();
-    assert(destroyed);
+}
+void CallbackViolation(int mode)
+{
+    shm::EventLoop loop;
+    auto conn = std::make_shared<shm::ShmConnection>(&loop, 1, shm::UniqueFd{}, shm::DefaultRingChannel{});
+    if (mode == 0)
+    {
+        conn->OnConnection();
+        conn->SetMessageCallback([&](const auto&, const auto&) { conn->SetMessageCallback({}); });
+        conn->OnMessage(1);
+    }
+    if (mode == 1)
+    {
+        conn->SetConnectionCallback([&](const auto&) { conn->SetConnectionCallback({}); });
+        conn->OnConnection();
+    }
+    if (mode == 2)
+    {
+        conn->SetVerifyCallback([&](const auto&) { conn->SetVerifyCallback({}); });
+        conn->OnConnection();
+    }
+    if (mode == 3)
+    {
+        conn->OnConnection();
+        conn->SetCloseCallback([&](const auto&) { conn->SetCloseCallback({}); });
+        conn->OnClose();
+    }
+    if (mode == 4)
+    {
+        conn->OnConnection();
+        conn->SetMessageCallback([&](const auto&, const auto&) { (void)conn->DrainRing(); });
+        Pair pair;
+        auto reader = std::make_shared<shm::ShmConnection>(&loop, 2, std::move(pair.a), std::move(pair.client));
+        reader->SetCodec(std::make_shared<ContractCodec>(reader.get(), 0)); reader->OnConnection();
+        reader->SetMessageCallback([&](const auto&, const auto&) { (void)reader->DrainRing(); });
+        char byte = 1; assert(pair.server.TryWrite(&byte, 1) == 0); (void)reader->DrainRing();
+    }
+}
+void PureCodecAndOuterManagement()
+{
+    Pair pair; shm::EventLoop loop;
+    auto conn = std::make_shared<shm::ShmConnection>(&loop, 1, std::move(pair.a), std::move(pair.client));
+    conn->SetCodec(std::make_shared<ContractCodec>(conn.get(), 30)); conn->OnConnection();
+    assert(conn->SendCmd(1));  // codec返回所需容量，传输层在虚函数返回后扩容
+    conn->ResizeBuffer(512 * 1024, 1024 * 1024);
+    assert(conn->SendCmd(2));
+    char response[2]; assert(pair.server.ReadExact(response, 2) == 0);
+    assert(response[0] == 42 && response[1] == 42);
+    conn->SetCodec(std::make_shared<ContractCodec>(conn.get(), 31)); conn->SetKeepAlive(true);
+    char bytes[2] = {1, 1}; assert(pair.server.TryWrite(bytes, 2) == 0);
+    assert(conn->DrainRing() == 0); assert(pair.server.ReadExact(response, 2) == 0);
+    assert(response[0] == 7 && response[1] == 7);
+    conn->SetCodec(std::make_shared<ContractCodec>(conn.get(), 0));
+    int delivered = 0;
+    conn->SetMessageCallback([&](const auto& active, const auto&) {
+        assert(active->SendCmd(1));  // 消息回调中的正常回复
+        ++delivered;
+    });
+    assert(pair.server.TryWrite(bytes, 2) == 0); assert(conn->DrainRing() == 2 && delivered == 2);
+    assert(pair.server.ReadExact(response, 2) == 0);
+    conn->SetMessageCallback([&](const auto& active, const auto&) { active->Close(); });
+    assert(pair.server.TryWrite(bytes, 2) == 0); assert(conn->DrainRing() == 1);
+    assert(conn->State() == comm::TcpConnStates::closeing);
 }
 
 static int listen_failure = 0;
@@ -145,7 +188,10 @@ void ListenRollback()
 }
 int main()
 {
-    for (int mode = 0; mode < 8; ++mode) CodecReentry(mode);
+    for (int mode : {1, 2, 3, 4, 5, 6, 7, 8, 11, 12, 13, 14, 15, 16, 21, 22, 23, 24, 25, 26})
+        ExpectContractAbort([=] { ContractViolation(mode); });
+    for (int mode = 0; mode < 5; ++mode) ExpectContractAbort([=] { CallbackViolation(mode); });
+    PureCodecAndOuterManagement();
     ListenRollback();
     puts("round3 fixes passed");
 }
