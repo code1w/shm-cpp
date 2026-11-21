@@ -25,6 +25,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <memory>
@@ -63,7 +64,7 @@ class ShmConnection : public comm::ITcpConnection,
         : loop_(loop), id_(id), socket_fd_(std::move(socket_fd)), channel_(std::move(channel)), encode_buf_(128 * 1024)
     {}
 
-    ~ShmConnection() override = default;
+    ~ShmConnection() override { RemoveVerifyTimer(); }
 
     // 禁止复制和移动（事件回调通过 shared_ptr 引用本对象）
     ShmConnection(const ShmConnection&)            = delete;
@@ -97,12 +98,23 @@ class ShmConnection : public comm::ITcpConnection,
             return false;
         }
 
+        if (sending_) return false;
+        auto self = weak_from_this().lock();  // codec 可以重入 owner 并移除当前连接
+        auto codec = codec_;
+        // 当前 Encode 借用的缓冲独立保活；重入 ResizeBuffer 只调整下一次调用的缓冲。
+        auto working_buffer = std::move(encode_buf_);
+        EncodeGuard guard(sending_, encode_buf_, working_buffer);
+        const auto still_open = [&] {
+            return codec_ == codec && (state_ == comm::TcpConnStates::established ||
+                                      state_ == comm::TcpConnStates::verifing);
+        };
         try
         {
             // 快速路径：codec 能报告精确编码长度时，直接在 ring 中预留
             // 空间并编码，把 "any → encode_buf_ → ring" 两次拷贝降为一次。
             // 小消息继续走 encode_buf_（缓存命中，避免 Reserve/Commit 开销）。
-            const int32_t need = codec_->EncodedSize(pkg);
+            const int32_t need = codec->EncodedSize(pkg);
+            if (!still_open()) return false;
             if (need >= static_cast<int32_t>(kDirectEncodeMinBytes) &&
                 static_cast<uint32_t>(need) <= DefaultRingChannel::kMaxWriteSize)
             {
@@ -110,31 +122,31 @@ class ShmConnection : public comm::ITcpConnection,
                 if (channel_.StartBatch(&batch) == ErrorCode::kOk)
                 {
                     char* dst = batch.Reserve(static_cast<uint32_t>(need));
-                    if (!dst)
+                    // Reserve 失败也可能是普通映射跨尾，回退到缓冲编码路径。
+                    if (dst)
                     {
-                        return false;  // 环空间不足（与 WriteRaw 预检一致）
-                    }
+                        size_t out = 0;
+                        const int32_t len =
+                            codec->Encode(pkg, reinterpret_cast<comm::byte*>(dst), static_cast<size_t>(need), &out);
+                        if (!still_open()) { batch.Cancel(); return false; }
+                        if (len == need)
+                        {
+                            batch.CommitReserve(static_cast<uint32_t>(len));
+                            batch.Flush();  // 发布 write_pos 并按需通知对端
+                            return true;
+                        }
 
-                    size_t out = 0;
-                    const int32_t len =
-                        codec_->Encode(pkg, reinterpret_cast<comm::byte*>(dst), static_cast<size_t>(need), &out);
-                    if (len == need)
-                    {
-                        batch.CommitReserve(static_cast<uint32_t>(len));
-                        batch.Flush();  // 发布 write_pos 并按需通知对端
-                        return true;
-                    }
-
-                    // 预留不足/长度不符：回滚后走原有 encode_buf_ 路径
-                    batch.Cancel();
-                    if (len == comm::kCodecSkipPackage)
-                    {
-                        return true;
-                    }
-                    if (len == comm::kCodecDisconnect)
-                    {
-                        Close();
-                        return false;
+                        // 预留不足/长度不符：回滚后走原有 encode_buf_ 路径
+                        batch.Cancel();
+                        if (len == comm::kCodecSkipPackage)
+                        {
+                            return true;
+                        }
+                        if (len == comm::kCodecDisconnect)
+                        {
+                            Close();
+                            return false;
+                        }
                     }
                 }
             }
@@ -143,7 +155,8 @@ class ShmConnection : public comm::ITcpConnection,
             {
                 size_t out = 0;
                 const int32_t len =
-                    codec_->Encode(pkg, reinterpret_cast<comm::byte*>(encode_buf_.data()), encode_buf_.size(), &out);
+                    codec->Encode(pkg, reinterpret_cast<comm::byte*>(working_buffer.data()), working_buffer.size(), &out);
+                if (!still_open()) return false;
                 if (len == comm::kCodecSkipPackage)
                 {
                     return true;  // 丢包（同框架）
@@ -157,13 +170,18 @@ class ShmConnection : public comm::ITcpConnection,
                 {
                     // out 为所需大小：为 0（内部错误）或不超过现有缓冲仍要求
                     // 扩容（codec 违约）时放弃，避免无限重试
-                    if (out == 0 || out <= encode_buf_.size() || !GrowEncodeBuffer(out))
+                    if (out == 0 || out <= working_buffer.size() || out > max_buffer_size_)
                     {
                         return false;
                     }
+                    working_buffer.resize(out);
                     continue;
                 }
-                return WriteRaw(encode_buf_.data(), static_cast<uint32_t>(len));
+                if (len <= 0 || static_cast<size_t>(len) > working_buffer.size())
+                {
+                    return false;  // codec 返回值违约，禁止越界读取编码缓冲
+                }
+                return WriteRaw(working_buffer.data(), static_cast<uint32_t>(len));
             }
         }
         catch (const std::bad_alloc&)
@@ -223,7 +241,7 @@ class ShmConnection : public comm::ITcpConnection,
      */
     void StartVerifyTimer(int64_t expired_ms, int64_t interval_ms, comm::TimeAction action) override
     {
-        if (verify_timer_)
+        if (verify_timer_ >= 0)
         {
             return;
         }
@@ -231,10 +249,13 @@ class ShmConnection : public comm::ITcpConnection,
 
         int tfd            = 0;
         const ErrorCode ec = loop_->AddOneShotTimer(
-            static_cast<int>(expired_ms),
-            [this, action = std::move(action)](int, short) mutable {
-                verify_timer_ = 0;  // 定时器已自行移除
-                action(0);
+            expired_ms,
+            [weak = weak_from_this(), action = std::move(action)](int, short) mutable {
+                if (auto conn = weak.lock())
+                {
+                    conn->verify_timer_ = -1;  // 定时器已自行移除
+                    action(0);
+                }
             },
             &tfd);
         if (ec == ErrorCode::kOk)
@@ -310,6 +331,10 @@ class ShmConnection : public comm::ITcpConnection,
         {
             state_ = comm::TcpConnStates::established;
         }
+        if (state_ != comm::TcpConnStates::established && state_ != comm::TcpConnStates::verifing)
+        {
+            return;  // 验证回调已拒绝或移除连接，不再产生建连事件
+        }
         if (connectioncb_)
         {
             connectioncb_(shared_from_this());
@@ -332,6 +357,10 @@ class ShmConnection : public comm::ITcpConnection,
      */
     void OnVerify(bool succ)
     {
+        if (state_ != comm::TcpConnStates::verifing)
+        {
+            return;  // 过期或重复验证结果不得改变连接生命周期
+        }
         RemoveVerifyTimer();
         if (succ)
         {
@@ -351,9 +380,20 @@ class ShmConnection : public comm::ITcpConnection,
         if (state_ != comm::TcpConnStates::closeed)
         {
             state_ = comm::TcpConnStates::closeed;
+            ::shutdown(socket_fd_.Get(), SHUT_RDWR);
+            RemoveVerifyTimer();
             if (closecb_)
             {
-                closecb_(shared_from_this());
+                try
+                {
+                    closecb_(shared_from_this());
+                }
+                catch (...)
+                {
+                    context_.reset();
+                    rpc_context_.reset();
+                    throw;
+                }
             }
         }
         if (context_.has_value())
@@ -376,37 +416,88 @@ class ShmConnection : public comm::ITcpConnection,
      * 读空后调用 channel_.PrepareWait 声明"即将睡眠"（按需通知）：写方此后
      * 才会再写 eventfd。PrepareWait 发现新数据到达时继续读，不会丢唤醒。
      *
+     * @note codec/消息回调异常会关闭连接并继续传播；已投递的消息不重放。
+     *       回调重入 DrainRing 返回 0，由外层读取继续处理。
+     *
      * @return 分发的消息条数；-1 协议错误（codec 要求断开），连接应移除
      */
-    int DrainRing()
+    int DrainRing(bool drain_all = false)
     {
-        int total = 0;
-        for (;;)
+        if (state_ != comm::TcpConnStates::established && state_ != comm::TcpConnStates::verifing)
         {
-            // 基线必须在读取之前取：此后到达的数据由 PrepareWait 复查发现
-            const uint64_t seen = channel_.WritePos();
-            const int n         = DrainRingOnce();
-            if (n < 0)
-            {
-                return -1;
-            }
-            total += n;
-            // 消息回调内关闭了连接：由 owner 收尾，无需再武装等待
-            if (state_ == comm::TcpConnStates::closeing || state_ == comm::TcpConnStates::closeed)
-            {
-                break;
-            }
-            if (channel_.PrepareWait(seen))
-            {
-                break;
-            }
+            return 0;
         }
-        return total;
+        // 回调重入时由外层继续消费，不能再次解码尚未提交的视图。
+        if (draining_) return 0;
+        auto self = weak_from_this().lock();  // 用户 codec 可重入 owner，移除连接
+        struct DrainGuard
+        {
+            bool& active;
+            explicit DrainGuard(bool& value) : active(value) { active = true; }
+            ~DrainGuard() { active = false; }
+        } guard(draining_);
+        try
+        {
+            DrainBudget budget(drain_all);
+            int total = 0;
+            for (;;)
+            {
+                // 基线必须在读取之前取：此后到达的数据由 PrepareWait 复查发现
+                const uint64_t seen = channel_.WritePos();
+                const int n         = DrainRingOnce(budget);
+                if (n < 0)
+                {
+                    return -1;
+                }
+                total += n;
+                // 消息回调内关闭了连接：由 owner 收尾，无需再武装等待
+                if (state_ == comm::TcpConnStates::closeing || state_ == comm::TcpConnStates::closeed)
+                {
+                    break;
+                }
+                if (budget.exhausted)
+                {
+                    channel_.WakeReader();
+                    break;  // 返回事件循环；剩余数据已有本地通知，不依赖对端继续写
+                }
+                if (channel_.PrepareWait(seen))
+                {
+                    break;
+                }
+            }
+            return total;
+        }
+        catch (...)
+        {
+            // codec/消息回调抛异常后，状态可能已推进，不能继续解码或重放。
+            Close();
+            throw;
+        }
     }
 
  private:
+    struct DrainBudget
+    {
+        bool unlimited;
+        bool exhausted = false;
+        uint32_t frames = 0;
+        uint64_t bytes = 0;
+        std::chrono::steady_clock::time_point deadline;
+        explicit DrainBudget(bool all)
+            : unlimited(all), deadline(std::chrono::steady_clock::now() + std::chrono::milliseconds(2)) {}
+        bool Consume(uint32_t length)
+        {
+            if (unlimited) return false;
+            ++frames;
+            bytes += length;
+            exhausted = frames >= 64 || bytes >= 256 * 1024 ||
+                        std::chrono::steady_clock::now() >= deadline;
+            return exhausted;
+        }
+    };
+
     /// @brief 单轮消费：读到环空或遇到不完整帧为止
-    int DrainRingOnce()
+    int DrainRingOnce(DrainBudget& budget)
     {
         if (!codec_)
         {
@@ -423,85 +514,33 @@ class ShmConnection : public comm::ITcpConnection,
             const void* seg2  = nullptr;
             uint32_t seg1_len = 0;
             uint32_t seg2_len = 0;
-            if (channel_.Peek(&seg1, &seg1_len, &seg2, &seg2_len) != 0)
+            const int peek = channel_.Peek(&seg1, &seg1_len, &seg2, &seg2_len);
+            if (peek == -2) return -1;  // 损坏环：owner 关闭连接
+            if (peek != 0)
             {
                 break;  // 环空
             }
 
             const comm::byte* buf = static_cast<const comm::byte*>(seg1);
             uint32_t buflen       = seg1_len;
-            bool partial_view     = false;
 
             if (seg2_len > 0)
             {
-                // 数据跨环尾：只线性化"当前帧"而不是全部可读数据。
-                // 先探测首帧大小；codec 未报告时退化为线性化全部。
+                // Decode 可以维护序号/解密状态，不能作为长度探测器重复调用。
+                // 非镜像回绕时先线性化所有可读字节，再正式解码一次。
                 const uint32_t total = seg1_len + seg2_len;
-                uint32_t want        = total;
-
-                size_t need      = 0;
-                const int32_t rc = codec_->Decode(static_cast<const comm::byte*>(seg1), seg1_len, pkg, &need);
-                if (rc == comm::kCodecDisconnect)
+                try
+                {
+                    if (staging_.size() < total) staging_.resize(total);
+                }
+                catch (const std::bad_alloc&)
                 {
                     return -1;
                 }
-                if (rc > 0)
-                {
-                    want = static_cast<uint32_t>(rc);  // 首帧完全在 seg1
-                }
-                else if (rc == comm::kCodecSkipPackage && need > 0 && need <= seg1_len)
-                {
-                    want = static_cast<uint32_t>(need);  // 心跳消费长度
-                }
-                else if (rc == comm::kCodecNeedMoreBuffer && need > seg1_len && need <= total)
-                {
-                    want = static_cast<uint32_t>(need);  // 首帧跨尾，按需复制
-                }
-                // 其他情况（codec 未报告 need 等）退化为 total
-
-                if (want > total)
-                {
-                    want = total;
-                }
-
-                // 拷贝 want 字节；若 codec 需要更多（例如 seg1 连 tag 都不完整），
-                // 按它报告的 need 再增长，最多 3 次，避免死循环
-                for (int attempt = 0; attempt < 3; ++attempt)
-                {
-                    try
-                    {
-                        if (staging_.size() < want)
-                        {
-                            staging_.resize(want);
-                        }
-                    }
-                    catch (const std::bad_alloc&)
-                    {
-                        return -1;  // 线性化缓冲分配失败
-                    }
-                    // want 可能小于 seg1_len（只复制首帧），必须按
-                    // min(seg1_len, want) 截断，否则会越界写 staging_
-                    const uint32_t first = (seg1_len < want) ? seg1_len : want;
-                    std::memcpy(staging_.data(), seg1, first);
-                    if (want > first)
-                    {
-                        std::memcpy(staging_.data() + first, seg2, want - first);
-                    }
-
-                    size_t more = 0;
-                    const int32_t probe2 =
-                        codec_->Decode(reinterpret_cast<const comm::byte*>(staging_.data()), want, pkg, &more);
-                    if (probe2 == comm::kCodecNeedMoreBuffer && more > want && more <= total)
-                    {
-                        want = static_cast<uint32_t>(more);
-                        continue;
-                    }
-                    break;
-                }
-
-                buf          = reinterpret_cast<const comm::byte*>(staging_.data());
-                buflen       = want;
-                partial_view = (want < total);
+                std::memcpy(staging_.data(), seg1, seg1_len);
+                std::memcpy(staging_.data() + seg1_len, seg2, seg2_len);
+                buf = reinterpret_cast<const comm::byte*>(staging_.data());
+                buflen = total;
             }
 
             // 在连续视图上批量解码：整个批次只 CommitRead 一次
@@ -509,7 +548,26 @@ class ShmConnection : public comm::ITcpConnection,
             for (;;)
             {
                 size_t out        = 0;
-                const int32_t len = codec_->Decode(buf + off, buflen - off, pkg, &out);
+                auto codec = codec_;
+                if (!codec)
+                {
+                    if (off) channel_.CommitRead(off);
+                    Close();
+                    return -1;
+                }
+                const int32_t len = codec->Decode(buf + off, buflen - off, pkg, &out);
+                // 解码中更换 codec 无法安全解释当前帧，关闭而不重新投递。
+                if (codec_ != codec)
+                {
+                    if (off) channel_.CommitRead(off);
+                    Close();
+                    return -1;
+                }
+                if (state_ == comm::TcpConnStates::closeing || state_ == comm::TcpConnStates::closeed)
+                {
+                    if (off) channel_.CommitRead(off);
+                    return count;
+                }
                 if (len == comm::kCodecDisconnect)
                 {
                     if (off)
@@ -520,6 +578,12 @@ class ShmConnection : public comm::ITcpConnection,
                 }
                 if (len == comm::kCodecNeedMoreBuffer)
                 {
+                    // 环满且当前帧没有进展时，续写永远无法完成。
+                    // 已解码前缀先提交；下一轮再判断剩余帧，避免误拒绝。
+                    if (off == 0 && buflen == DefaultRingBuf::kCapacity)
+                    {
+                        return -1;
+                    }
                     break;  // 数据不完整，等待对端续写
                 }
                 if (len == comm::kCodecSkipPackage)
@@ -537,6 +601,22 @@ class ShmConnection : public comm::ITcpConnection,
                     if (keepalive_)
                     {
                         SendKeepaliveResponse();
+                    }
+                    if (codec_ != codec)
+                    {
+                        channel_.CommitRead(off);
+                        Close();
+                        return -1;
+                    }
+                    if (state_ == comm::TcpConnStates::closeing || state_ == comm::TcpConnStates::closeed)
+                    {
+                        channel_.CommitRead(off);
+                        return count;
+                    }
+                    if (budget.Consume(static_cast<uint32_t>(out)))
+                    {
+                        channel_.CommitRead(off);
+                        return count;  // 心跳同样消耗预算，防止心跳洪泛饿死 loop
                     }
                     if (off == buflen)
                     {
@@ -562,8 +642,27 @@ class ShmConnection : public comm::ITcpConnection,
                     return -1;  // 防御：codec 消耗长度越界
                 }
                 off += static_cast<uint32_t>(len);
-                OnMessage(pkg);
+                try
+                {
+                    OnMessage(pkg);
+                }
+                catch (...)
+                {
+                    // 此帧已交付给应用，提交至当前帧，避免重复投递。
+                    channel_.CommitRead(off);
+                    throw;
+                }
                 ++count;
+                if (state_ == comm::TcpConnStates::closeing || state_ == comm::TcpConnStates::closeed)
+                {
+                    channel_.CommitRead(off);
+                    return count;
+                }
+                if (budget.Consume(static_cast<uint32_t>(len)))
+                {
+                    channel_.CommitRead(off);
+                    return count;
+                }
                 if (off == buflen)
                 {
                     break;
@@ -580,7 +679,7 @@ class ShmConnection : public comm::ITcpConnection,
                 break;  // 没有进展：等待更多数据/通知
             }
 
-            if (partial_view || off < buflen)
+            if (off < buflen)
             {
                 continue;  // 还有数据（或未完整帧）跨尾，重新 Peek
             }
@@ -592,19 +691,20 @@ class ShmConnection : public comm::ITcpConnection,
     /// @brief 启用"直接写 ring"的最小编码长度（小消息留在 encode_buf_）
     static constexpr uint32_t kDirectEncodeMinBytes = 256;
 
-    /// @brief 编码缓冲按需扩容，超过上限返回 false
-    bool GrowEncodeBuffer(size_t need)
+    // 普通编码与心跳共享借用规则：重入扩容不影响正在使用的缓冲。
+    struct EncodeGuard
     {
-        if (need > max_buffer_size_)
+        bool& active;
+        std::vector<char>& cached;
+        std::vector<char>& working;
+        EncodeGuard(bool& value, std::vector<char>& buffer, std::vector<char>& borrowed)
+            : active(value), cached(buffer), working(borrowed) { active = true; }
+        ~EncodeGuard()
         {
-            return false;
+            if (cached.size() < working.size()) cached = std::move(working);
+            active = false;
         }
-        if (need > encode_buf_.size())
-        {
-            encode_buf_.resize(need);
-        }
-        return true;
-    }
+    };
 
     /// @brief 原始字节写入环（可跨多次 TryWrite），写完统一通知对端
     bool WriteRaw(const void* data, uint32_t len)
@@ -638,20 +738,25 @@ class ShmConnection : public comm::ITcpConnection,
     /// @brief 收到心跳包后回发心跳响应
     void SendKeepaliveResponse()
     {
-        if (!codec_)
-        {
-            return;
-        }
+        if (!codec_ || sending_ ||
+            (state_ != comm::TcpConnStates::established && state_ != comm::TcpConnStates::verifing)) return;
+        auto self = weak_from_this().lock();
+        auto codec = codec_;
+        auto working_buffer = std::move(encode_buf_);
+        EncodeGuard guard(sending_, encode_buf_, working_buffer);
         try
         {
             for (;;)
             {
                 size_t size = 0;
                 const int32_t len =
-                    codec_->SendKeepAlive(reinterpret_cast<comm::byte*>(encode_buf_.data()), encode_buf_.size(), &size);
+                    codec->SendKeepAlive(reinterpret_cast<comm::byte*>(working_buffer.data()), working_buffer.size(), &size);
+                if (codec_ != codec ||
+                    (state_ != comm::TcpConnStates::established && state_ != comm::TcpConnStates::verifing)) return;
                 if (len > 0)
                 {
-                    WriteRaw(encode_buf_.data(), static_cast<uint32_t>(len));
+                    if (static_cast<size_t>(len) > working_buffer.size()) return;
+                    WriteRaw(working_buffer.data(), static_cast<uint32_t>(len));
                     return;
                 }
                 if (len != comm::kCodecNeedMoreBuffer)
@@ -661,10 +766,11 @@ class ShmConnection : public comm::ITcpConnection,
                 // 缓冲不足：扩容后重试。所需大小为 0（内部错误）或不超过现有
                 // 缓冲仍要求扩容（codec 违约）时放弃——绝不能把 encode_buf_ 中
                 // 上一条消息的残留字节当作响应发给对端
-                if (size == 0 || size <= encode_buf_.size() || !GrowEncodeBuffer(size))
+                if (size == 0 || size <= working_buffer.size() || size > max_buffer_size_)
                 {
                     return;
                 }
+                working_buffer.resize(size);
             }
         }
         catch (const std::bad_alloc&)
@@ -675,10 +781,10 @@ class ShmConnection : public comm::ITcpConnection,
 
     void RemoveVerifyTimer()
     {
-        if (verify_timer_)
+        if (verify_timer_ >= 0)
         {
             loop_->RemoveTimer(static_cast<int>(verify_timer_));
-            verify_timer_ = 0;
+            verify_timer_ = -1;
         }
     }
 
@@ -688,15 +794,17 @@ class ShmConnection : public comm::ITcpConnection,
     UniqueFd socket_fd_;                                      ///< 连接 socket（断连检测）
     DefaultRingChannel channel_;                              ///< 双向共享内存通道
     comm::codec::CodecPtr codec_;                             ///< 编解码器（每连接一个实例）
-    comm::ConnectionCallback connectioncb_;                   ///< 连接建立回调
-    comm::AnyMessageCallback messagecb_;                      ///< 消息回调
-    comm::CloseCallback closecb_;                             ///< 连接关闭回调
-    comm::VerifyCallback verifycb_;                           ///< 验证回调
+    detail::StableCallback<comm::ConnectionCallback> connectioncb_;                   ///< 连接建立回调
+    detail::StableCallback<comm::AnyMessageCallback> messagecb_;                      ///< 消息回调
+    detail::StableCallback<comm::CloseCallback> closecb_;                             ///< 连接关闭回调
+    detail::StableCallback<comm::VerifyCallback> verifycb_;                           ///< 验证回调
     std::any context_;                                        ///< 用户上下文
     std::any rpc_context_;                                    ///< RPC 上下文
-    comm::TimerID verify_timer_ = 0;                          ///< 验证超时定时器
+    comm::TimerID verify_timer_ = -1;                          ///< 验证超时定时器
     comm::CloseType close_type_{comm::CloseType::Passive};    ///< 关闭类型
     comm::TcpConnType conntype_{comm::TcpConnType::Unknown};  ///< 连接类型
+    bool sending_{false};                                    ///< 编码调用作用域重入保护
+    bool draining_{false};                                    ///< 读取作用域重入保护
     bool keepalive_{false};                                   ///< 是否自动响应心跳包
     std::vector<char> encode_buf_;                            ///< 编码缓冲区
     std::vector<char> staging_;                               ///< 跨环尾解码线性化缓冲（惰性分配）

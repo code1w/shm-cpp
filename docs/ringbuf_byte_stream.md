@@ -382,7 +382,7 @@ dst = [A B C D E F G H]   ✓ 与写入顺序完全一致
 0                                          Capacity
 |--已写--|------空闲------|--未读数据--|------已写----|
          ^phys_w         ^phys_r
-     
+   
 空闲区域 = [phys_w, phys_r) = phys_r - phys_w
 ```
 

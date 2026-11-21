@@ -241,7 +241,7 @@ class BatchWriter
             return -1;
         }
 
-        if ((w_ + len) - r_ > Capacity)
+        if (w_ - r_ > Capacity || len > Capacity - (w_ - r_))
         {
             return -1;
         }
@@ -352,7 +352,8 @@ class BatchWriter
     [[nodiscard]]
     uint64_t FreeBytes() const noexcept
     {
-        return Capacity - (w_ - r_);
+        const uint64_t used = w_ - r_;
+        return used <= Capacity ? Capacity - used : 0;
     }
 
     /**
@@ -375,7 +376,7 @@ class BatchWriter
         {
             return nullptr;
         }
-        if ((w_ + len) - r_ > Capacity)
+        if (w_ - r_ > Capacity || len > Capacity - (w_ - r_))
         {
             return nullptr;
         }
@@ -522,7 +523,7 @@ class RingBuf
         const uint64_t w = hdr->write_pos.load(std::memory_order_relaxed);
         const uint64_t r = hdr->read_pos.load(std::memory_order_acquire);
 
-        if ((w + len) - r > Capacity)
+        if (w - r > Capacity || len > Capacity - (w - r))
         {
             return -1;
         }
@@ -573,7 +574,7 @@ class RingBuf
         const uint64_t w     = hdr->write_pos.load(std::memory_order_acquire);
         const uint64_t avail = w - r;
 
-        if (avail == 0)
+        if (avail == 0 || avail > Capacity)
         {
             return 0;
         }
@@ -617,7 +618,7 @@ class RingBuf
         const uint64_t w     = hdr->write_pos.load(std::memory_order_acquire);
         const uint64_t avail = w - r;
 
-        if (avail < len)
+        if (avail > Capacity || avail < len)
         {
             return -1;
         }
@@ -645,7 +646,7 @@ class RingBuf
         // relaxed：write_pos 仅本端（单生产者）修改，读自己的值无需同步
         const uint64_t w = hdr->write_pos.load(std::memory_order_relaxed);
         const uint64_t r = hdr->read_pos.load(std::memory_order_acquire);
-        if ((w + len) - r > Capacity)
+        if (w - r > Capacity || len > Capacity - (w - r))
         {
             return -1;
         }
@@ -669,7 +670,7 @@ class RingBuf
         const uint64_t r     = hdr->read_pos.load(std::memory_order_relaxed);
         const uint64_t w     = hdr->write_pos.load(std::memory_order_acquire);
         const uint64_t avail = w - r;
-        if (avail == 0)
+        if (avail == 0 || avail > Capacity)
         {
             return 0;
         }
@@ -702,7 +703,7 @@ class RingBuf
         // relaxed：read_pos 仅本端（单消费者）修改，读自己的值无需同步
         const uint64_t r = hdr->read_pos.load(std::memory_order_relaxed);
         const uint64_t w = hdr->write_pos.load(std::memory_order_acquire);
-        if (w - r < len)
+        if (w - r > Capacity || w - r < len)
         {
             return -1;
         }
@@ -726,6 +727,10 @@ class RingBuf
         const uint64_t r     = hdr->read_pos.load(std::memory_order_relaxed);
         const uint64_t w     = hdr->write_pos.load(std::memory_order_acquire);
         const uint64_t avail = w - r;
+        if (avail > Capacity)
+        {
+            return -2;  // 控制头损坏，不能暴露越界数据段
+        }
         if (avail == 0)
         {
             return -1;
@@ -747,7 +752,7 @@ class RingBuf
      * @param seg1_len 输出：第一段长度
      * @param seg2     输出：第二段数据指针（回绕部分，可能为 nullptr）
      * @param seg2_len 输出：第二段长度（可能为 0）
-     * @return 0 有数据，-1 缓冲区为空
+     * @return 0 有数据，-1 缓冲区为空，-2 控制头位置损坏
      */
     static int Peek(const void* shm, const void** seg1, uint32_t* seg1_len, const void** seg2, uint32_t* seg2_len)
     {
@@ -765,6 +770,10 @@ class RingBuf
         const uint64_t w     = hdr->write_pos.load(std::memory_order_acquire);
         const uint64_t avail = w - r;
 
+        if (avail > Capacity)
+        {
+            return -2;  // 控制头损坏，不能暴露越界数据段
+        }
         if (avail == 0)
         {
             return -1;
@@ -804,6 +813,10 @@ class RingBuf
         // relaxed：read_pos 仅本端（单消费者）修改，读自己的值无需同步
         const uint64_t r     = hdr->read_pos.load(std::memory_order_relaxed);
         const uint64_t avail = hdr->write_pos.load(std::memory_order_acquire) - r;
+        if (avail > Capacity)
+        {
+            return;  // 损坏的位置不得用于推进读游标
+        }
         assert(static_cast<uint64_t>(len) <= avail);
         if (static_cast<uint64_t>(len) > avail)
         {
@@ -822,7 +835,8 @@ class RingBuf
         auto* hdr        = detail::RingHdr(shm);
         const uint64_t w = hdr->write_pos.load(std::memory_order_acquire);
         const uint64_t r = hdr->read_pos.load(std::memory_order_acquire);
-        return w - r;
+        const uint64_t avail = w - r;
+        return avail <= Capacity ? avail : 0;
     }
 
     /** @brief 读取 write_pos（acquire） */
@@ -897,7 +911,14 @@ class RingBuf
      * @param shm 共享内存指针（const）
      * @return 可写字节数
      */
-    static uint64_t FreeSpace(const void* shm) { return Capacity - Available(shm); }
+    static uint64_t FreeSpace(const void* shm)
+    {
+        auto* hdr = detail::RingHdr(shm);
+        const uint64_t w = hdr->write_pos.load(std::memory_order_relaxed);
+        const uint64_t r = hdr->read_pos.load(std::memory_order_acquire);
+        const uint64_t used = w - r;
+        return used <= Capacity ? Capacity - used : 0;
+    }
 };
 
 /// @brief 默认配置别名（8MB 环）

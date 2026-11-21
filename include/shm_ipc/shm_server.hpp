@@ -16,8 +16,8 @@
  *
  * shm 实现的特点：
  * - uri 支持 "shm:///path"、"uds:///path" 或裸路径（本地 Unix socket）
- * - accept 后的 fd 交换握手由内部后台线程完成（每连接阻塞超时 5 秒），
- *   恶意/僵死连接只占用握手线程，不会拖慢事件循环上的其他连接；
+ * - accept 后的 fd 交换握手由有界后台任务独立完成（每连接总超时 5 秒），
+ *   慢握手不会串行阻塞其他握手，任务数量受 max_clients 限制；
  *   握手完成后经 eventfd 通知事件循环收编（回调仍在 loop 线程触发）
  * - SetRateLimit / SetKeepAlive 仅记录（本地通信无需限流，断连由 EOF 即时感知）
  * - 所有方法必须在 EventLoop 所在线程调用；进程需自行忽略 SIGPIPE
@@ -29,9 +29,10 @@
 #include <assert.h>
 #include <unistd.h>
 
-#include <condition_variable>
+#include <atomic>
 #include <cstdint>
 #include <deque>
+#include <exception>
 #include <memory>
 #include <mutex>
 #include <new>
@@ -65,6 +66,7 @@ namespace shm {
  */
 class ShmServer : public comm::ITcpServer
 {
+    struct HandshakeTask;
  public:
     /**
      * @param loop 外部事件循环（必须比 ShmServer 存活更久）
@@ -75,7 +77,10 @@ class ShmServer : public comm::ITcpServer
         : loop_(loop), uri_(std::string(uri)), name_(std::string(name))
     {}
 
-    ~ShmServer() override { Stop(); }
+    ~ShmServer() override
+    {
+        try { Stop(); } catch (...) {}  // 清理完成后，析构不得传播用户回调异常
+    }
 
     // 禁止复制和移动（EventLoop 回调持有 this）
     ShmServer(const ShmServer&)            = delete;
@@ -125,7 +130,22 @@ class ShmServer : public comm::ITcpServer
         assert(messagecb_);
         assert(closecb_);
         assert(codec_factory_);
-        return Listen();
+        last_error_ = ErrorCode::kOk;
+        last_sys_errno_ = 0;
+        try
+        {
+            return Listen();
+        }
+        catch (const std::bad_alloc&)
+        {
+            try { Stop(); } catch (...) {}
+            return FailStart(ErrorCode::kNoMemory);
+        }
+        catch (...)
+        {
+            try { Stop(); } catch (...) {}
+            return FailStart(ErrorCode::kSystem);
+        }
     }
 
     /**
@@ -139,29 +159,18 @@ class ShmServer : public comm::ITcpServer
             return;
         }
         started_ = false;
+        ++run_generation_;
 
-        // 1) 通知握手线程退出，并 shutdown 未完成握手的 socket
-        //    （打断其阻塞中的 recvmsg，使其立即失败返回）
+        // 停止所有在途任务；各 fd 的移动/关闭与 shutdown 由同一互斥量保护。
         {
             const std::lock_guard<std::mutex> lk(hs_mtx_);
             hs_stopping_ = true;
-            for (auto& fd : hs_pending_)
-            {
-                if (fd.Get() >= 0)
-                {
-                    ::shutdown(fd.Get(), SHUT_RDWR);
-                }
-            }
-            if (hs_current_.Get() >= 0)
-            {
-                ::shutdown(hs_current_.Get(), SHUT_RDWR);
-            }
+            for (auto& job : hs_jobs_)
+                if (job.task->socket) ::shutdown(job.task->socket.Get(), SHUT_RDWR);
         }
-        hs_cv_.notify_all();
-        if (hs_thread_.joinable())
-        {
-            hs_thread_.join();
-        }
+        for (auto& job : hs_jobs_)
+            if (job.worker.joinable()) job.worker.join();
+        hs_jobs_.clear();
 
         // 2) 注销监听与握手完成通知 fd
         if (listen_fd_)
@@ -179,23 +188,19 @@ class ShmServer : public comm::ITcpServer
         // 3) 丢弃握手完成但未及收编的连接（未触发过 OnConnection，静默销毁）
         {
             const std::lock_guard<std::mutex> lk(hs_mtx_);
-            hs_pending_.clear();
             hs_done_.clear();
-            hs_current_.Reset();
         }
 
-        // RemoveConn 会修改 conns_，先拷贝一份再逐个移除
-        std::vector<ShmConnPtr> conns;
-        conns.reserve(conns_.size());
-        for (auto& [id, conn] : conns_)
+        // 无分配清理；单个关闭回调异常不得阻止其他连接与路径回收。
+        std::exception_ptr callback_error;
+        while (!conns_.empty())
         {
-            conns.push_back(conn);
+            auto conn = conns_.begin()->second;
+            try { RemoveConn(conn); }
+            catch (...) { if (!callback_error) callback_error = std::current_exception(); }
         }
-        for (auto& conn : conns)
-        {
-            RemoveConn(conn);
-        }
-        UnlinkUnixSocket(UriToPath(uri_));
+        CleanupSocketPath();
+        if (callback_error) std::rethrow_exception(callback_error);
     }
 
     // ------------------------------------------------------------------
@@ -226,10 +231,10 @@ class ShmServer : public comm::ITcpServer
      */
     void Broadcast(const std::any& pkg)
     {
-        for (auto& [id, conn] : conns_)
-        {
-            conn->SendCmd(pkg);
-        }
+        std::vector<ShmConnPtr> snapshot;
+        snapshot.reserve(conns_.size());
+        for (const auto& entry : conns_) snapshot.push_back(entry.second);
+        for (const auto& conn : snapshot) conn->SendCmd(pkg);
     }
 
     /** @brief 主动关闭指定连接（立即移除并触发 close 回调） */
@@ -262,12 +267,23 @@ class ShmServer : public comm::ITcpServer
     int LastSysErrno() const noexcept { return last_sys_errno_; }
 
  private:
+    void CleanupSocketPath() noexcept
+    {
+        if (!owns_socket_path_) return;
+        owns_socket_path_ = false;
+        char path[sizeof(sockaddr_un::sun_path)];
+        struct stat st{};
+        if (CopyUnixPath(UriToPath(uri_), path, sizeof(path)) && ::lstat(path, &st) == 0 &&
+            S_ISSOCK(st.st_mode) && st.st_dev == socket_device_ && st.st_ino == socket_inode_)
+        {
+            ::unlink(path);
+        }
+    }
+
     /// @brief 创建监听、握手线程与完成通知 fd，并注册 accept 回调
     bool Listen()
     {
-        // 已在监听：直接成功。不做此守卫时，二次 Start 会对仍 joinable 的
-        // hs_thread_ move 赋值（std::terminate），且 hs_wake_fd_ 赋值会
-        // 关闭旧 eventfd（旧线程仍在使用）
+        // Start 幂等：不能重置仍被握手任务使用的完成通知 fd。
         if (started_)
         {
             return true;
@@ -279,6 +295,19 @@ class ShmServer : public comm::ITcpServer
             return FailStart(ec);
         }
 
+        char path[sizeof(sockaddr_un::sun_path)];
+        struct stat st{};
+        if (!CopyUnixPath(UriToPath(uri_), path, sizeof(path)) || ::lstat(path, &st) != 0)
+        {
+            const int err = errno;
+            listen_fd_.Reset();
+            last_sys_errno_ = err;
+            return FailStart(ErrorCode::kSystem);
+        }
+        socket_device_ = st.st_dev;
+        socket_inode_ = st.st_ino;
+        owns_socket_path_ = true;
+
         {
             // 支持 Stop 后再次 Start：复位握手线程状态
             const std::lock_guard<std::mutex> lk(hs_mtx_);
@@ -289,28 +318,12 @@ class ShmServer : public comm::ITcpServer
         if (ec != ErrorCode::kOk)
         {
             listen_fd_.Reset();
+            CleanupSocketPath();
             return FailStart(ec);
         }
 
-        try
-        {
-            hs_thread_ = std::thread([this] { HandshakeWorker(); });
-        }
-        catch (const std::system_error& e)
-        {
-            listen_fd_.Reset();
-            hs_wake_fd_.Reset();
-            last_sys_errno_ = e.code().value();
-            return FailStart(ErrorCode::kSystem);
-        }
-        catch (const std::bad_alloc&)
-        {
-            listen_fd_.Reset();
-            hs_wake_fd_.Reset();
-            return FailStart(ErrorCode::kNoMemory);
-        }
-
         started_ = true;
+        ++run_generation_;
         try
         {
             loop_->AddFd(listen_fd_.Get(), [this](int fd, short revents) { OnAccept(fd, revents); });
@@ -347,88 +360,94 @@ class ShmServer : public comm::ITcpServer
         return false;
     }
 
-    /// @brief accept 回调：接受新连接，fd 交给握手线程（不阻塞事件循环）
-    void OnAccept(int lfd, short /*revents*/)
+    /// @brief 回收已退出的握手任务（仅 loop 线程访问任务容器）。
+    void ReapHandshakes()
     {
+        for (auto it = hs_jobs_.begin(); it != hs_jobs_.end();)
         {
-            // 上限计数含握手中的连接，防止握手期间超额
-            const std::lock_guard<std::mutex> lk(hs_mtx_);
-            const std::size_t inflight = hs_pending_.size() + hs_done_.size() + (hs_current_.Get() >= 0 ? 1 : 0);
-            if (max_clients_ <= 0 || conns_.size() + inflight >= static_cast<std::size_t>(max_clients_))
-            {
-                const UniqueFd rejected{::accept(lfd, nullptr, nullptr)};
-                return;  // accept 后立即关闭，对端握手时收到 EOF
-            }
+            if (!it->task->finished.load(std::memory_order_acquire)) { ++it; continue; }
+            if (it->worker.joinable()) it->worker.join();
+            it = hs_jobs_.erase(it);
         }
-
-        UniqueFd cfd{::accept(lfd, nullptr, nullptr)};
-        if (!cfd)
-        {
-            return;
-        }
-
-        {
-            const std::lock_guard<std::mutex> lk(hs_mtx_);
-            hs_pending_.push_back(std::move(cfd));
-        }
-        hs_cv_.notify_one();
     }
 
-    /// @brief 握手线程主体：逐个完成 fd 交换（阻塞，每连接 5 秒超时）
-    void HandshakeWorker()
+    /// @brief 每个已接受连接独立握手；任务数量受 max_clients_ 限制，无串行等待队列。
+    void OnAccept(int lfd, short /*revents*/)
     {
-        for (;;)
+        ReapHandshakes();
         {
+            const std::lock_guard<std::mutex> lk(hs_mtx_);
+            std::size_t inflight = hs_done_.size();
+            for (const auto& job : hs_jobs_) if (job.task->socket) ++inflight;
+            if (max_clients_ <= 0 || conns_.size() + inflight >= static_cast<std::size_t>(max_clients_))
             {
-                std::unique_lock<std::mutex> lk(hs_mtx_);
-                hs_cv_.wait(lk, [this] { return hs_stopping_ || !hs_pending_.empty(); });
-                if (hs_pending_.empty())
-                {
-                    return;  // stopping 且无待握手连接
-                }
-                hs_current_ = std::move(hs_pending_.front());
-                hs_pending_.pop_front();
-            }
-
-            DefaultRingChannel channel;
-            // 握手失败（对端超时、乱发数据、尺寸不符或 Stop 的 shutdown
-            // 打断）：fd 与半成品通道由 RAII 释放
-            const bool ok = DefaultRingChannel::CreateRingChannel(hs_current_.Get(), ChannelRole::kServer, &channel) ==
-                            ErrorCode::kOk;
-
-            bool notify = false;
-            {
-                const std::lock_guard<std::mutex> lk(hs_mtx_);
-                if (ok && !hs_stopping_)
-                {
-                    try
-                    {
-                        hs_done_.push_back(HandshakeDone{std::move(hs_current_), std::move(channel)});
-                        notify = true;
-                    }
-                    catch (const std::bad_alloc&)
-                    {
-                        // 工作线程内分配失败：丢弃该连接，继续服务其他连接
-                        notify = false;
-                    }
-                }
-                hs_current_.Reset();
-            }
-            if (notify)
-            {
-                uint64_t v = 1;
-                // hs_wake_fd_ 与 server 同生命周期（Stop 不关闭），写不会命中复用 fd
-                (void)::write(hs_wake_fd_.Get(), &v, sizeof(v));
+                const UniqueFd rejected{::accept4(lfd, nullptr, nullptr, SOCK_CLOEXEC)};
+                return;
             }
         }
+        UniqueFd socket{::accept4(lfd, nullptr, nullptr, SOCK_CLOEXEC)};
+        if (!socket) return;
+        try
+        {
+            auto task = std::make_shared<HandshakeTask>(std::move(socket), run_generation_);
+            // 先完成容器分配，再创建线程：失败时不留下无人 join 的 joinable thread。
+            hs_jobs_.push_back(HandshakeJob{task, std::thread{}});
+            try
+            {
+                hs_jobs_.back().worker = std::thread([this, task] { HandshakeWorker(task); });
+            }
+            catch (...)
+            {
+                hs_jobs_.pop_back();
+                throw;
+            }
+        }
+        catch (const std::bad_alloc&) {}  // 资源耗尽：仅拒绝该连接，保持 loop 可用
+        catch (const std::system_error&) {}
+    }
+
+    void HandshakeWorker(const std::shared_ptr<HandshakeTask>& task)
+    {
+        DefaultRingChannel channel;
+        const bool ok = DefaultRingChannel::CreateRingChannel(task->socket.Get(), ChannelRole::kServer,
+                                                              &channel, nullptr, &task->deadline) == ErrorCode::kOk;
+        bool notify = false;
+        {
+            const std::lock_guard<std::mutex> lk(hs_mtx_);
+            if (ok && !hs_stopping_)
+            {
+                try
+                {
+                    hs_done_.push_back(HandshakeDone{std::move(task->socket), std::move(channel), task->generation});
+                    notify = true;
+                }
+                catch (const std::bad_alloc&) {}
+            }
+            task->socket.Reset();
+        }
+        if (notify)
+        {
+            const uint64_t one = 1;
+            ssize_t written;
+            do { written = ::write(hs_wake_fd_.Get(), &one, sizeof(one)); } while (written < 0 && errno == EINTR);
+            if (written < 0 && errno != EAGAIN && errno != EWOULDBLOCK)
+            {
+                const std::lock_guard<std::mutex> lk(hs_mtx_);
+                hs_done_.clear();
+            }
+        }
+        task->finished.store(true, std::memory_order_release);
     }
 
     /// @brief 握手完成回调（事件循环线程）：收编新连接并触发 OnConnection
     void OnHandshakeComplete(int efd, short /*revents*/)
     {
-        DefaultRingChannel::DrainNotify(efd);
-
+        ReapHandshakes();
+        const uint64_t generation = run_generation_;
+        // deque 构造可能分配失败：必须在清除通知前完成。
+        // 否则 hs_done_ 仍非空却失去唤醒，恢复 Run 后连接会无限等待。
         std::deque<HandshakeDone> ready;
+        DefaultRingChannel::DrainNotify(efd);
         {
             const std::lock_guard<std::mutex> lk(hs_mtx_);
             ready.swap(hs_done_);
@@ -437,7 +456,7 @@ class ShmServer : public comm::ITcpServer
         {
             HandshakeDone done = std::move(ready.front());
             ready.pop_front();
-            if (!started_)
+            if (!started_ || run_generation_ != generation || done.generation != generation)
             {
                 break;  // 回调内已调用 Stop()：剩余连接静默丢弃
             }
@@ -453,22 +472,24 @@ class ShmServer : public comm::ITcpServer
             return;  // 握手期间已达上限：静默丢弃（RAII 关闭）
         }
 
+        const uint64_t generation = run_generation_;
         auto codec = codec_factory_ ? codec_factory_() : nullptr;
-        if (!codec)
+        if (!codec || !started_ || generation != run_generation_)
         {
             return;  // codec 工厂返回空（同框架：拒绝该连接）
         }
 
+        const uint64_t id = next_id_++;
+        ShmConnPtr conn;
         try
         {
-            const uint64_t id = next_id_++;
-            auto conn         = std::make_shared<ShmConnection>(loop_, id, std::move(cfd), std::move(channel));
+            conn = std::make_shared<ShmConnection>(loop_, id, std::move(cfd), std::move(channel));
             codec->keepalive  = keepalive_;
             codec->conn_id    = id;
-            conn->SetMessageCallback(messagecb_);
-            conn->SetCloseCallback(closecb_);
-            conn->SetConnectionCallback(connectioncb_);
-            conn->SetVerifyCallback(verifycb_);
+            conn->SetMessageCallback(messagecb_.Copy());
+            conn->SetCloseCallback(closecb_.Copy());
+            conn->SetConnectionCallback(connectioncb_.Copy());
+            conn->SetVerifyCallback(verifycb_.Copy());
             conn->SetCodec(codec);
             conn->SetKeepAlive(keepalive_);
             conn->SetConnType(comm::TcpConnType::TcpConn_Task);
@@ -480,13 +501,21 @@ class ShmServer : public comm::ITcpServer
             loop_->AddFd(conn->NotifyFd(), [this, id](int fd, short revents) { OnConnNotify(fd, revents, id); });
             // socket：仅用于断连检测
             loop_->AddFd(conn->SocketFd(), [this, id](int fd, short revents) { OnConnSocket(fd, revents, id); });
-
-            conn->OnConnection();
         }
         catch (const std::bad_alloc&)
         {
-            // 分配失败：丢弃该连接（RAII 关闭 fd/通道）
+            // 注册是事务：连接表与两个 fd 监听必须一起回滚。
+            if (conn)
+            {
+                loop_->RemoveFd(conn->NotifyFd());
+                loop_->RemoveFd(conn->SocketFd());
+                conns_.erase(id);
+                conn->Close();
+            }
+            return;
         }
+        // 应用回调在注册完成后触发，其异常由 EventLoop 按原有语义处理。
+        conn->OnConnection();
     }
 
     /// @brief eventfd 回调：对端写入新数据，立即消费并解码分发
@@ -522,7 +551,7 @@ class ShmServer : public comm::ITcpServer
             if (n <= 0)
             {
                 // 对端关闭：先读掉环中可能残留的最后数据，再移除
-                conn->DrainRing();
+                conn->DrainRing(true);
                 RemoveConn(conn);
             }
             // n > 0：握手后 socket 不应再有数据，忽略
@@ -543,28 +572,43 @@ class ShmServer : public comm::ITcpServer
     {
         UniqueFd sockfd;             ///< 握手完成的连接 socket
         DefaultRingChannel channel;  ///< 握手完成的双向通道
+        uint64_t generation;         ///< 接受连接时的服务代次
     };
 
     EventLoop* loop_;                                 ///< 外部事件循环
     std::string uri_;                                 ///< 监听 uri
     std::string name_;                                ///< 服务端名称
+    dev_t socket_device_ = 0;
+    ino_t socket_inode_ = 0;
+    bool owns_socket_path_ = false;
     UniqueFd listen_fd_;                              ///< 监听 socket
     std::unordered_map<uint64_t, ShmConnPtr> conns_;  ///< 连接表（id -> conn）
     uint64_t next_id_     = 1;                        ///< 下一个连接 ID
     int max_clients_      = 16;                       ///< 最大并发客户端数
+    uint64_t run_generation_ = 0;                    ///< 防止回调停止/重启后安装旧连接
     bool started_         = false;                    ///< 是否已 Start
     ErrorCode last_error_ = ErrorCode::kOk;           ///< 最近一次 Start 错误码
     int last_sys_errno_   = 0;                        ///< 最近一次 Start 的 errno
 
-    // ---- 异步握手（后台线程 ↔ 事件循环线程）----
-    std::mutex hs_mtx_;                  ///< 保护下方队列与标志
-    std::condition_variable hs_cv_;      ///< 唤醒握手线程
-    std::deque<UniqueFd> hs_pending_;    ///< 待握手 socket（loop → worker）
-    std::deque<HandshakeDone> hs_done_;  ///< 握手完成待收编（worker → loop）
-    UniqueFd hs_current_;                ///< worker 正在握手的 socket（Stop 时 shutdown 用）
-    UniqueFd hs_wake_fd_;                ///< 握手完成通知 eventfd（worker → loop）
-    std::thread hs_thread_;              ///< 握手线程
-    bool hs_stopping_ = false;           ///< 握手线程停止标志
+    struct HandshakeTask
+    {
+        UniqueFd socket;
+        detail::IoDeadline deadline{5000};
+        uint64_t generation;
+        std::atomic<bool> finished{false};
+        HandshakeTask(UniqueFd fd, uint64_t run) noexcept : socket(std::move(fd)), generation(run) {}
+    };
+    struct HandshakeJob
+    {
+        std::shared_ptr<HandshakeTask> task;
+        std::thread worker;
+    };
+    // 任务容器只由 loop 线程增删；socket 的移动与 hs_done_ 由 hs_mtx_ 保护。
+    std::mutex hs_mtx_;
+    std::vector<HandshakeJob> hs_jobs_;
+    std::deque<HandshakeDone> hs_done_;
+    UniqueFd hs_wake_fd_;
+    bool hs_stopping_ = false;
 
     bool keepalive_{false};                  ///< 心跳开关（同框架字段）
     uint32_t io_keepalive_timeout_{0};       ///< 心跳超时（仅记录）
@@ -572,13 +616,13 @@ class ShmServer : public comm::ITcpServer
     uint32_t max_buffer_size_{1024 * 1024};  ///< 编码缓冲上限（同框架默认）
     uint32_t rate_limit_{0};                 ///< 限流（仅记录）
 
-    comm::ConnectionCallback connectioncb_;            ///< 连接建立回调
-    comm::CloseCallback closecb_;                      ///< 连接关闭回调
-    comm::AnyMessageCallback messagecb_;               ///< 消息回调
-    comm::VerifyCallback verifycb_;                    ///< 验证回调
-    comm::codec::CodecFactoryCallback codec_factory_;  ///< codec 工厂
-    comm::StartFailedCallback failedcb_;               ///< 启动失败回调
-    comm::StartSuccessCallback successcb_;             ///< 启动成功回调
+    detail::StableCallback<comm::ConnectionCallback> connectioncb_;            ///< 连接建立回调
+    detail::StableCallback<comm::CloseCallback> closecb_;                      ///< 连接关闭回调
+    detail::StableCallback<comm::AnyMessageCallback> messagecb_;               ///< 消息回调
+    detail::StableCallback<comm::VerifyCallback> verifycb_;                    ///< 验证回调
+    detail::StableCallback<comm::codec::CodecFactoryCallback> codec_factory_;  ///< codec 工厂
+    detail::StableCallback<comm::StartFailedCallback> failedcb_;               ///< 启动失败回调
+    detail::StableCallback<comm::StartSuccessCallback> successcb_;             ///< 启动成功回调
 };
 
 }  // namespace shm

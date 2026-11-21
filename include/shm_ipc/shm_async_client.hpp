@@ -136,12 +136,14 @@ class ShmAsyncClient : public comm::ITcpAsyncClient
             return;
         }
 
+        const uint64_t attempt = ++connect_generation_;
         state_          = comm::TcpClientStates::connecting;
         last_error_     = ErrorCode::kOk;
         last_sys_errno_ = 0;
 
+        const detail::IoDeadline deadline{5000};
         UniqueFd sock;
-        ErrorCode ec = ConnectUnixSocket(UriToPath(uri), &sock, &last_sys_errno_);
+        ErrorCode ec = ConnectUnixSocket(UriToPath(uri), &sock, &last_sys_errno_, &deadline);
         if (ec != ErrorCode::kOk)
         {
             FailConnect(uri, ec);
@@ -149,35 +151,49 @@ class ShmAsyncClient : public comm::ITcpAsyncClient
         }
 
         DefaultRingChannel channel;
-        ec = DefaultRingChannel::CreateRingChannel(sock.Get(), ChannelRole::kClient, &channel, &last_sys_errno_);
+        ec = DefaultRingChannel::CreateRingChannel(sock.Get(), ChannelRole::kClient, &channel, &last_sys_errno_, &deadline);
         if (ec != ErrorCode::kOk)
         {
             FailConnect(uri, ec);
             return;
         }
 
-        auto codec = codec_factory_ ? codec_factory_() : nullptr;
-        if (!codec)
-        {
-            FailConnect(uri, ErrorCode::kInvalidArgument);
-            return;
-        }
-
         try
         {
+            auto codec = codec_factory_ ? codec_factory_() : nullptr;
+            if (!codec)
+            {
+                FailConnect(uri, ErrorCode::kInvalidArgument);
+                return;
+            }
             InstallConnection(std::move(sock), std::move(channel), std::move(codec));
         }
         catch (const std::bad_alloc&)
         {
+            if (attempt != connect_generation_) return;  // 旧尝试不得清理重入建立的新连接
             // 分配失败：清理已注册的 fd/连接，按连接失败处理
             if (conn_)
             {
                 loop_->RemoveFd(conn_->NotifyFd());
                 loop_->RemoveFd(conn_->SocketFd());
+                conn_->Close();
                 conn_.reset();
             }
             FailConnect(uri, ErrorCode::kNoMemory);
             // TODO 自动重连（与框架一致，暂未实现）
+        }
+        catch (...)
+        {
+            if (attempt != connect_generation_) throw;
+            if (conn_)
+            {
+                loop_->RemoveFd(conn_->NotifyFd());
+                loop_->RemoveFd(conn_->SocketFd());
+                conn_->Close();
+                conn_.reset();
+            }
+            state_ = comm::TcpClientStates::close;
+            throw;  // 用户工厂/建连回调异常保持传播，状态已回滚
         }
     }
 
@@ -246,10 +262,10 @@ class ShmAsyncClient : public comm::ITcpAsyncClient
         const uint64_t id = 1;
         auto conn         = std::make_shared<ShmConnection>(loop_, id, std::move(sock), std::move(channel));
         codec->conn_id    = id;
-        conn->SetMessageCallback(messagecb_);
-        conn->SetCloseCallback(closecb_);
-        conn->SetConnectionCallback(connectioncb_);
-        conn->SetVerifyCallback(verifycb_);
+        conn->SetMessageCallback(messagecb_.Copy());
+        conn->SetCloseCallback(closecb_.Copy());
+        conn->SetConnectionCallback(connectioncb_.Copy());
+        conn->SetVerifyCallback(verifycb_.Copy());
         conn->SetCodec(codec);
         conn->SetConnType(comm::TcpConnType::TcpConn_Client);
         conn->ResizeBuffer(init_buffer_size_, max_buffer_size_);
@@ -298,7 +314,7 @@ class ShmAsyncClient : public comm::ITcpAsyncClient
         }
         const int n = conn->DrainRing();
         // 协议错误，或消息回调内调用了 Close()（连接进入 closeing）
-        if (n < 0 || conn->State() == comm::TcpConnStates::closeing)
+        if (conn_ == conn && (n < 0 || conn->State() == comm::TcpConnStates::closeing))
         {
             Teardown();
         }
@@ -319,8 +335,12 @@ class ShmAsyncClient : public comm::ITcpAsyncClient
             if (n <= 0)
             {
                 // 对端关闭：先读掉环中可能残留的最后数据，再收尾
-                conn->DrainRing();
-                Teardown();
+                conn->DrainRing(true);
+                // 消息/关闭回调可能已重连；旧连接的 EOF 不得清理新连接。
+                if (conn_ == conn)
+                {
+                    Teardown();
+                }
             }
         }
     }
@@ -344,14 +364,15 @@ class ShmAsyncClient : public comm::ITcpAsyncClient
     }
 
     EventLoop* loop_ = nullptr;                        ///< 外部事件循环
+    uint64_t connect_generation_ = 0;  ///< 每次 Connect 的事务身份，含回调内重连
     ShmConnPtr conn_;                                  ///< 当前连接（client 托管其生命周期）
     int state_ = comm::TcpClientStates::close;         ///< 连接状态（初值同框架：close）
-    comm::ConnectionCallback connectioncb_;            ///< 连接建立回调
-    comm::AnyMessageCallback messagecb_;               ///< 消息回调
-    comm::CloseCallback closecb_;                      ///< 连接关闭回调
-    comm::VerifyCallback verifycb_;                    ///< 验证回调
-    comm::ConnectErrorCallback errorcb_;               ///< 连接失败回调
-    comm::codec::CodecFactoryCallback codec_factory_;  ///< codec 工厂
+    detail::StableCallback<comm::ConnectionCallback> connectioncb_;            ///< 连接建立回调
+    detail::StableCallback<comm::AnyMessageCallback> messagecb_;               ///< 消息回调
+    detail::StableCallback<comm::CloseCallback> closecb_;                      ///< 连接关闭回调
+    detail::StableCallback<comm::VerifyCallback> verifycb_;                    ///< 验证回调
+    detail::StableCallback<comm::ConnectErrorCallback> errorcb_;               ///< 连接失败回调
+    detail::StableCallback<comm::codec::CodecFactoryCallback> codec_factory_;  ///< codec 工厂
     std::any context_;                                 ///< 用户上下文（建连时同步到连接）
     bool autoreconnect_{false};                        ///< 自动重连标志（透传给 error 回调）
     ErrorCode last_error_ = ErrorCode::kOk;            ///< 最近一次 Connect 错误码

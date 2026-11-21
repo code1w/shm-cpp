@@ -1,0 +1,32 @@
+[ 25%] Building CXX object CMakeFiles/shm_proto.dir/proto/shm_messages.pb.cc.o
+[ 50%] Linking CXX static library libshm_proto.a
+[ 50%] Built target shm_proto
+[ 75%] Building CXX object CMakeFiles/server.dir/src/server.cpp.o
+[100%] Linking CXX executable server
+[100%] Built target server
+Consolidate compiler generated dependencies of target shm_proto
+[ 50%] Built target shm_proto
+[ 75%] Building CXX object CMakeFiles/client.dir/src/client.cpp.o
+[100%] Linking CXX executable client
+[100%] Built target client
+[ 50%] Building CXX object CMakeFiles/socket_server.dir/src/socket_server.cpp.o
+[100%] Linking CXX executable socket_server
+[100%] Built target socket_server
+[ 50%] Building CXX object CMakeFiles/socket_client.dir/src/socket_client.cpp.o
+[100%] Linking CXX executable socket_client
+[100%] Built target socket_client
+[ 50%] Building CXX object CMakeFiles/bench_shm.dir/bench/bench_shm.cpp.o
+[100%] Linking CXX executable bench_shm
+[100%] Built target bench_shm
+[ 50%] Building CXX object CMakeFiles/bench_socket.dir/bench/bench_socket.cpp.o
+[100%] Linking CXX executable bench_socket
+[100%] Built target bench_socket
+[ 50%] Building CXX object CMakeFiles/bench_codec.dir/bench/bench_codec.cpp.o
+[100%] Linking CXX executable bench_codec
+[100%] Built target bench_codec
+[ 50%] Building CXX object CMakeFiles/bench_batch.dir/bench/bench_batch.cpp.o
+[100%] Linking CXX executable bench_batch
+[100%] Built target bench_batch
+[ 50%] Building CXX object CMakeFiles/bench_app.dir/bench/bench_app.cpp.o
+[100%] Linking CXX executable bench_app
+[100%] Built target bench_app

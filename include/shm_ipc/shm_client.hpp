@@ -33,6 +33,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cerrno>
 #include <cstdint>
@@ -80,8 +81,9 @@ class ShmClient : public comm::ITcpClient
         last_error_     = ErrorCode::kOk;
         last_sys_errno_ = 0;
 
+        const detail::IoDeadline deadline{5000};
         UniqueFd sock;
-        ErrorCode ec = ConnectUnixSocket(UriToPath(uri), &sock, &last_sys_errno_);
+        ErrorCode ec = ConnectUnixSocket(UriToPath(uri), &sock, &last_sys_errno_, &deadline);
         if (ec != ErrorCode::kOk)
         {
             last_error_ = ec;
@@ -89,7 +91,7 @@ class ShmClient : public comm::ITcpClient
         }
 
         DefaultRingChannel channel;
-        ec = DefaultRingChannel::CreateRingChannel(sock.Get(), ChannelRole::kClient, &channel, &last_sys_errno_);
+        ec = DefaultRingChannel::CreateRingChannel(sock.Get(), ChannelRole::kClient, &channel, &last_sys_errno_, &deadline);
         if (ec != ErrorCode::kOk)
         {
             last_error_ = ec;
@@ -98,6 +100,7 @@ class ShmClient : public comm::ITcpClient
 
         socket_fd_ = std::move(sock);
         channel_   = std::move(channel);
+        peer_eof_.store(false, std::memory_order_relaxed);
         closed_.store(false, std::memory_order_release);
         return true;
     }
@@ -110,7 +113,8 @@ class ShmClient : public comm::ITcpClient
     [[nodiscard]]
     bool Connected() const noexcept override
     {
-        return socket_fd_.Get() >= 0 && !closed_.load(std::memory_order_acquire);
+        return socket_fd_.Get() >= 0 && !closed_.load(std::memory_order_acquire) &&
+               !peer_eof_.load(std::memory_order_acquire);
     }
 
     /**
@@ -165,6 +169,7 @@ class ShmClient : public comm::ITcpClient
 
     /**
      * @brief 阻塞读取：直到读到数据或对端关闭
+     * 对端 EOF 后可继续读完残留数据，读空后重复读取均返回 0。
      * @return 实际读取的字节数（>0）；对端关闭返回 0；本端 Close() 或
      *         未连接返回 -1
      */
@@ -182,10 +187,19 @@ class ShmClient : public comm::ITcpClient
      */
     int ReadMessage(char* buf, size_t bsize, int timeout_ms)
     {
-        if (!Connected())
+        if (socket_fd_.Get() < 0 || closed_.load(std::memory_order_acquire))
         {
             return -1;
         }
+
+        if (bsize == 0) return 0;  // 零长度请求立即成功，不武装等待
+        if (!buf)
+        {
+            last_error_ = ErrorCode::kInvalidArgument;
+            return -1;
+        }
+        const uint32_t max_len = static_cast<uint32_t>(
+            std::min(bsize, DefaultRingBuf::kCapacity));
 
         timespec deadline{};
         timespec* dl = InitDeadline(timeout_ms, &deadline);
@@ -199,11 +213,19 @@ class ShmClient : public comm::ITcpClient
 
             // 先试读：数据可能已在环中（基线须在读之前取，供 PrepareWait 复查）
             const uint64_t seen = channel_.WritePos();
-            uint32_t n          = channel_.TryRead(buf, static_cast<uint32_t>(bsize));
+            if (seen - channel_.ReadPos() > DefaultRingBuf::kCapacity)
+            {
+                last_error_ = ErrorCode::kProtocol;
+                Close();
+                return -1;
+            }
+            uint32_t n          = channel_.TryRead(buf, max_len);
             if (n > 0)
             {
                 return static_cast<int>(n);
             }
+
+            if (peer_eof_.load(std::memory_order_acquire)) return 0;
 
             const int wr = WaitForReadable(dl, seen);
             if (wr < 0)
@@ -212,9 +234,8 @@ class ShmClient : public comm::ITcpClient
             }
             if (wr == 0)
             {
-                // 对端关闭：最后再读一次环中残留数据
-                n = channel_.TryRead(buf, static_cast<uint32_t>(bsize));
-                return n > 0 ? static_cast<int>(n) : 0;
+                // 重新检查环：EOF 与最后一次数据发布可能同时到达。
+                continue;
             }
         }
     }
@@ -241,7 +262,7 @@ class ShmClient : public comm::ITcpClient
         {
             return -1;
         }
-        if (!Connected())
+        if (socket_fd_.Get() < 0 || closed_.load(std::memory_order_acquire))
         {
             return -1;
         }
@@ -256,10 +277,19 @@ class ShmClient : public comm::ITcpClient
             }
 
             const uint64_t seen = channel_.WritePos();
-            if (channel_.Peek(seg1, seg1_len, seg2, seg2_len) == 0)
+            const int peek = channel_.Peek(seg1, seg1_len, seg2, seg2_len);
+            if (peek == -2)
+            {
+                last_error_ = ErrorCode::kProtocol;
+                Close();
+                return -1;
+            }
+            if (peek == 0)
             {
                 return static_cast<int>(*seg1_len + *seg2_len);
             }
+
+            if (peer_eof_.load(std::memory_order_acquire)) return 0;
 
             const int wr = WaitForReadable(dl, seen);
             if (wr < 0)
@@ -268,12 +298,8 @@ class ShmClient : public comm::ITcpClient
             }
             if (wr == 0)
             {
-                // 对端关闭：返回环中残留数据（若有）
-                if (channel_.Peek(seg1, seg1_len, seg2, seg2_len) == 0)
-                {
-                    return static_cast<int>(*seg1_len + *seg2_len);
-                }
-                return 0;
+                // 与 ReadMessage 一致，EOF 后仍可分多次消费尾部数据。
+                continue;
             }
         }
     }
@@ -372,8 +398,9 @@ class ShmClient : public comm::ITcpClient
             char b{};
             if (::read(socket_fd_.Get(), &b, 1) <= 0)
             {
-                socket_fd_.Reset();
-                return 0;  // 对端关闭
+                // 与跨线程 Close 一致：fd 保持稳定，至 Connect/析构才回收。
+                peer_eof_.store(true, std::memory_order_release);
+                return 0;  // 对端关闭；尾部数据由读接口继续消费
             }
         }
         if (pfds[0].revents & POLLIN)
@@ -385,6 +412,7 @@ class ShmClient : public comm::ITcpClient
 
     UniqueFd socket_fd_;                     ///< 连接 socket（断连检测）
     DefaultRingChannel channel_;             ///< 双向共享内存通道
+    std::atomic<bool> peer_eof_{false};      ///< 对端 EOF，与本端 Close 分开
     std::atomic<bool> closed_{true};         ///< 本端已关闭标志（Close/读线程跨线程通信）
     ErrorCode last_error_ = ErrorCode::kOk;  ///< 最近一次 Connect 错误码
     int last_sys_errno_   = 0;               ///< 最近一次 Connect 的 errno

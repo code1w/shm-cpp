@@ -1,0 +1,86 @@
+--- socketpair/include/shm_ipc/ring_channel.hpp
++++ eventfd/include/shm_ipc/ring_channel.hpp
+@@ -437,7 +437,7 @@
+         ssize_t r  = 0;
+         do
+         {
+-            r = ::send(notify_write_fd_.Get(), &v, sizeof(v), MSG_DONTWAIT | MSG_NOSIGNAL);
++            r = ::write(notify_write_fd_.Get(), &v, sizeof(v));
+         } while (r < 0 && errno == EINTR);
+     }
+ 
+@@ -446,7 +446,7 @@
+     {
+         if (!notify_read_fd_) return;
+         const uint64_t one = 1;
+-        while (::send(notify_local_write_fd_.Get(), &one, sizeof(one), MSG_DONTWAIT | MSG_NOSIGNAL) < 0 && errno == EINTR) {}
++        while (::write(notify_local_write_fd_.Get(), &one, sizeof(one)) < 0 && errno == EINTR) {}
+         // EAGAIN 表示通知队列已满，本地 fd 已可读，无需再次写入。
+     }
+ 
+@@ -491,23 +491,10 @@
+      */
+     static uint64_t DrainNotify(int fd)
+     {
+-        uint64_t count = 0;
+-        // 通道通知为 datagram；内部握手完成通知仍为本地 eventfd。
+-        // 限制单次排空量，避免恶意持续通知占住事件循环。
+-        for (int i = 0; i < 64; ++i)
+-        {
+-            uint64_t value = 0;
+-            ssize_t n;
+-            do { n = ::recv(fd, &value, sizeof(value), MSG_DONTWAIT); } while (n < 0 && errno == EINTR);
+-            if (n < 0 && errno == ENOTSOCK)
+-            {
+-                do { n = ::read(fd, &value, sizeof(value)); } while (n < 0 && errno == EINTR);
+-                return n == sizeof(value) ? value : 0;
+-            }
+-            if (n < 0) break;
+-            ++count;  // 只统计已取出的通知，不相信对端提供的计数值
+-        }
+-        return count;
++        uint64_t value = 0;
++        ssize_t n;
++        do { n = ::read(fd, &value, sizeof(value)); } while (n < 0 && errno == EINTR);
++        return n == sizeof(value) ? value : 0;
+     }
+ 
+     /// @brief 单次写入最大字节数
+@@ -530,11 +517,11 @@
+  private:
+     ErrorCode CreateNotifyPair(int* sys_errno) noexcept
+     {
+-        int fds[2];
+-        if (::socketpair(AF_UNIX, SOCK_DGRAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0, fds) != 0)
+-            return ErrnoFailure(errno, sys_errno);
+-        notify_read_fd_ = UniqueFd{fds[0]};
+-        notify_local_write_fd_ = UniqueFd{fds[1]};
++        ErrorCode ec = CreateEventfd(&notify_read_fd_, sys_errno);
++        if (ec != ErrorCode::kOk) return ec;
++        const int fd = ::fcntl(notify_read_fd_.Get(), F_DUPFD_CLOEXEC, 0);
++        if (fd < 0) return ErrnoFailure(errno, sys_errno);
++        notify_local_write_fd_ = UniqueFd{fd};
+         return ErrorCode::kOk;
+     }
+ 
+@@ -571,7 +558,7 @@
+         {
+             return ec;
+         }
+-        return SendFd(socket_fd, notify_local_write_fd_.Get(), FdTag::kNotifySocket, sys_errno, deadline);
++        return SendFd(socket_fd, notify_local_write_fd_.Get(), FdTag::kEventfd, sys_errno, deadline);
+     }
+ 
+     /// @brief 接收对端 fd：读环 memfd（mmap 挂载）+ "唤醒对端"的通知 socket
+@@ -619,9 +606,9 @@
+                 return ec;
+             }
+         }
+-        ec = RecvFdExpect(socket_fd, FdTag::kNotifySocket, &notify_write_fd_, sys_errno, deadline);
++        ec = RecvFdExpect(socket_fd, FdTag::kEventfd, &notify_write_fd_, sys_errno, deadline);
+         if (ec != ErrorCode::kOk) return ec;
+-        return ValidateNotifySocket(notify_write_fd_.Get(), sys_errno);
++        return ValidateNotifyEventfd(notify_write_fd_.Get(), sys_errno);
+     }
+ 
+     UniqueFd write_memfd_;     ///< 写环对应的 memfd

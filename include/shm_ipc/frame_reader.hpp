@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <cstring>
 #include <vector>
+#include <utility>
 
 #include "codec.hpp"
 #include "ring_channel.hpp"
@@ -37,6 +38,14 @@ class FrameReader
 
     virtual ~FrameReader() = default;
 
+    FrameReader(const FrameReader&) = delete;
+    FrameReader& operator=(const FrameReader&) = delete;
+    // 仅移动构造转移待提交帧；移动赋值会丢失目标待提交帧，故禁用。
+    FrameReader(FrameReader&& other) noexcept
+        : hdr_(other.hdr_), pending_commit_(std::exchange(other.pending_commit_, 0)),
+          buf_(std::move(other.buf_)) {}
+    FrameReader& operator=(FrameReader&&) = delete;
+
     /**
      * @brief 尝试从 RingChannel 中零拷贝读取一个完整帧
      *
@@ -48,7 +57,7 @@ class FrameReader
      * @param[out] payload     payload 指针（指向 ring 内部或内部缓冲区）
      * @param[out] payload_len payload 字节数
      * @return 0 成功，-1 数据不足，-2 帧跨环尾且超过回退缓冲区上限
-     *         MaxBufSize（默认不设上限），-3 帧头长度非法（协议错误，
+     *         MaxBufSize（默认不设上限），-3 帧头长度或环控制头非法（协议错误，
      *         连接应视为损坏并断开）
      *
      * @note -2 时帧被标记为待丢弃：下次 TryRecv/Commit 会自动跳过该帧，
@@ -70,7 +79,9 @@ class FrameReader
         const void* seg2  = nullptr;
         uint32_t seg2_len = 0;
 
-        if (ch.Peek(&seg1, &seg1_len, &seg2, &seg2_len) != 0)
+        const int peek = ch.Peek(&seg1, &seg1_len, &seg2, &seg2_len);
+        if (peek == -2) return -3;  // 控制头损坏，同协议错误处理
+        if (peek != 0)
         {
             return -1;
         }

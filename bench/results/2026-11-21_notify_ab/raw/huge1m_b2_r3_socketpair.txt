@@ -1,0 +1,1 @@
+type=huge1m batch=   2 total=2000 time=  1.173s rate=     1706 msg/s    1705.6 MB/s

@@ -28,6 +28,7 @@
 #include <deque>
 #include <functional>
 #include <new>
+#include <limits>
 #include <utility>
 #include <vector>
 
@@ -44,7 +45,7 @@ class EventLoop
     using Hook     = std::function<void()>;
     using HookId   = uint64_t;
 
-    EventLoop()  = default;
+    EventLoop() { wake_error_ = CreateEventfd(&wake_fd_, &wake_errno_); }
     ~EventLoop() = default;
 
     // 禁止复制和移动（回调可能引用外部局部状态）
@@ -155,7 +156,7 @@ class EventLoop
 
         try
         {
-            owned_timerfds_.emplace_back(tfd);
+            owned_timerfds_.emplace_back(tfd, next_timer_id_++);
         }
         catch (const std::bad_alloc&)
         {
@@ -186,7 +187,7 @@ class EventLoop
      * @param sys_errno 可选：失败时的 errno
      */
     [[nodiscard]]
-    ErrorCode AddOneShotTimer(int delay_ms, Callback cb, int* out_tfd, int* sys_errno = nullptr)
+    ErrorCode AddOneShotTimer(int64_t delay_ms, Callback cb, int* out_tfd, int* sys_errno = nullptr)
     {
         if (!out_tfd)
         {
@@ -202,7 +203,7 @@ class EventLoop
 
         try
         {
-            owned_timerfds_.emplace_back(tfd);
+            owned_timerfds_.emplace_back(tfd, next_timer_id_++);
         }
         catch (const std::bad_alloc&)
         {
@@ -212,7 +213,8 @@ class EventLoop
 
         try
         {
-            AddFd(tfd, [this, tfd, cb = std::move(cb)](int fd, short revents) {
+            const uint64_t timer_id = owned_timerfds_.back().id;
+            AddFd(tfd, [this, tfd, timer_id, cb = std::move(cb)](int fd, short revents) {
                 DrainTimerfd(fd);
                 // 先打墓碑（本轮不再补触发），但延迟 close：回调拿到的 fd
                 // 仍有效（旧实现先 RemoveTimer 关闭 fd 再回调，回调内
@@ -224,10 +226,10 @@ class EventLoop
                 }
                 catch (...)
                 {
-                    CloseOwnedTimer(tfd);
+                    CloseOwnedTimerById(timer_id);
                     throw;
                 }
-                CloseOwnedTimer(tfd);
+                CloseOwnedTimerById(timer_id);
             });
         }
         catch (const std::bad_alloc&)
@@ -255,15 +257,40 @@ class EventLoop
     }
 
     /**
-     * @brief 运行事件循环，直到 Stop() 被调用
+     * @brief 运行事件循环，直到 Stop() 被调用；同一实例不允许嵌套或并发 Run
      * @param poll_timeout_ms poll 超时（毫秒），-1 表示阻塞等待
      * @param sys_errno       可选：poll 失败时的 errno
-     * @return kOk 正常停止；kNoMemory 构建 pollfd 数组失败；
+     * @return kInvalidArgument 已有 Run 尚未退出（errno 出参为 EBUSY）；
+     *         kOk 正常停止；kNoMemory 构建 pollfd 数组失败；
      *         kSystem/kTimeout poll 失败；用户回调异常仍向外传播
      */
     [[nodiscard]]
     ErrorCode Run(int poll_timeout_ms = 500, int* sys_errno = nullptr)
     {
+        // Stop 只请求退出，不能让仍在分发/回收的外层 Run 提前失去所有权。
+        bool expected = false;
+        if (!run_active_.compare_exchange_strong(expected, true, std::memory_order_acquire,
+                                                 std::memory_order_relaxed))
+        {
+            if (sys_errno) *sys_errno = EBUSY;
+            return ErrorCode::kInvalidArgument;
+        }
+        struct RunGuard
+        {
+            std::atomic<bool>& active;
+            std::atomic<bool>& running;
+            ~RunGuard()
+            {
+                running.store(false, std::memory_order_relaxed);
+                active.store(false, std::memory_order_release);
+            }
+        } guard{run_active_, running_};
+
+        if (wake_error_ != ErrorCode::kOk)
+        {
+            if (sys_errno) *sys_errno = wake_errno_;
+            return wake_error_;
+        }
         running_.store(true, std::memory_order_relaxed);
         while (running_.load(std::memory_order_relaxed))
         {
@@ -272,7 +299,7 @@ class EventLoop
             std::vector<std::size_t> idx;
             try
             {
-                pfds.reserve(entries_.size());
+                pfds.reserve(entries_.size() + 1);
                 idx.reserve(entries_.size());
                 for (std::size_t k = 0; k < entries_.size(); ++k)
                 {
@@ -283,6 +310,7 @@ class EventLoop
                     pfds.push_back({entries_[k].fd, entries_[k].events, 0});
                     idx.push_back(k);
                 }
+                pfds.push_back({wake_fd_.Get(), POLLIN, 0});
             }
             catch (const std::bad_alloc&)
             {
@@ -305,11 +333,17 @@ class EventLoop
                 return ErrnoToErrorCode(errno);
             }
 
+            if (pfds.back().revents & POLLIN)
+            {
+                uint64_t count;
+                while (::read(wake_fd_.Get(), &count, sizeof(count)) < 0 && errno == EINTR) {}
+            }
+
             // 分发事件。分发期间 AddFd 只追加（deque 追加不失效既有元素引用）、
             // RemoveFd 只打墓碑（分发前重查），下标映射保持稳定
             try
             {
-                for (std::size_t i = 0; i < pfds.size() && running_.load(std::memory_order_relaxed); ++i)
+                for (std::size_t i = 0; i < idx.size() && running_.load(std::memory_order_relaxed); ++i)
                 {
                     Entry& e = entries_[idx[i]];
                     if (!e.dead && pfds[i].revents != 0 && e.cb)
@@ -344,12 +378,22 @@ class EventLoop
     }
 
     /** @brief 停止事件循环（线程安全、信号安全） */
-    void Stop() { running_.store(false, std::memory_order_relaxed); }
+    void Stop() noexcept
+    {
+        const int saved_errno = errno;
+        running_.store(false, std::memory_order_relaxed);
+        const uint64_t one = 1;
+        if (wake_fd_)
+        {
+            while (::write(wake_fd_.Get(), &one, sizeof(one)) < 0 && errno == EINTR) {}
+        }
+        errno = saved_errno;
+    }
 
     /**
-     * @brief 排空 timerfd（必须在定时器回调中调用以清除事件）
+     * @brief 非阻塞排空 timerfd：周期回调需调用；一次性回调已由包装层排空
      * @param tfd timerfd 文件描述符
-     * @return 到期次数
+     * @return 到期次数，已排空时返回 0
      */
     static uint64_t DrainTimerfd(int tfd)
     {
@@ -368,14 +412,20 @@ class EventLoop
      * @param out_fd 成功时写入 timerfd
      */
     [[nodiscard]]
-    static ErrorCode CreateTimerfd(int initial_ms, int interval_ms, int* out_fd, int* sys_errno) noexcept
+    static ErrorCode CreateTimerfd(int64_t initial_ms, int64_t interval_ms, int* out_fd, int* sys_errno) noexcept
     {
         if (!out_fd)
         {
             return ErrorCode::kInvalidArgument;
         }
 
-        const int tfd = ::timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC);
+        if (initial_ms / 1000 > std::numeric_limits<time_t>::max() ||
+            interval_ms / 1000 > std::numeric_limits<time_t>::max())
+        {
+            return ErrorCode::kInvalidArgument;
+        }
+
+        const int tfd = ::timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
         if (tfd < 0)
         {
             if (sys_errno)
@@ -447,12 +497,26 @@ class EventLoop
     void CloseOwnedTimer(int tfd)
     {
         auto it = std::find_if(owned_timerfds_.begin(), owned_timerfds_.end(),
-                               [tfd](const UniqueFd& u) { return u.Get() == tfd; });
+                               [tfd](const OwnedTimer& timer) { return timer.fd.Get() == tfd; });
         if (it != owned_timerfds_.end())
         {
             owned_timerfds_.erase(it);
         }
     }
+
+    void CloseOwnedTimerById(uint64_t id)
+    {
+        auto it = std::find_if(owned_timerfds_.begin(), owned_timerfds_.end(),
+                              [id](const OwnedTimer& timer) { return timer.id == id; });
+        if (it != owned_timerfds_.end()) owned_timerfds_.erase(it);
+    }
+
+    struct OwnedTimer
+    {
+        UniqueFd fd;
+        uint64_t id;
+        OwnedTimer(int descriptor, uint64_t identity) noexcept : fd(descriptor), id(identity) {}
+    };
 
     /** @brief 回收所有墓碑条目（仅在非分发阶段调用） */
     void CompactDead()
@@ -464,11 +528,16 @@ class EventLoop
     // deque 而非 vector：回调内 AddFd 追加时，既有元素的引用不失效，
     // 分发循环中持有的 Entry& 在回调执行期间始终有效
     std::deque<Entry> entries_;                        ///< fd 监听条目列表
-    std::vector<UniqueFd> owned_timerfds_;             ///< EventLoop 持有的 timerfd 列表
+    std::vector<OwnedTimer> owned_timerfds_;             ///< EventLoop 持有的 timerfd 列表
     std::vector<std::pair<HookId, Hook>> post_hooks_;  ///< 分发批次结束钩子
+    UniqueFd wake_fd_;
+    ErrorCode wake_error_ = ErrorCode::kOk;
+    int wake_errno_ = 0;
+    uint64_t next_timer_id_ = 1;
     HookId next_hook_id_ = 1;                          ///< 下一个钩子 ID
     /// 事件循环运行标志（atomic 以支持信号处理器写入）；纯停止标志，不发布其他数据，故各处用 relaxed
     std::atomic<bool> running_{false};
+    std::atomic<bool> run_active_{false};  ///< Run 独占所有权，至分发/回收完全退出才释放
 };
 
 }  // namespace shm

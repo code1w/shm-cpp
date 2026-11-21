@@ -10,17 +10,24 @@
 #define SHM_IPC_COMMON_HPP_
 
 #include <fcntl.h>
+#include <poll.h>
 #include <linux/memfd.h>
 #include <sys/eventfd.h>
 #include <sys/mman.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/un.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <array>
+#include <chrono>
+#include <limits>
+#include <memory>
 #include <cerrno>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <string_view>
 #include <utility>
@@ -31,6 +38,37 @@ namespace shm {
 
 inline constexpr const char* kDefaultSocketPath = "/tmp/fd-pass.socket";
 
+namespace detail {
+
+// 回调更新只替换槽位；调用期间持有原实例，保留 mutable 捕获的状态。
+// 分发时仅复制 shared_ptr，不复制 std::function，也不进行额外分配。
+template <typename Callback>
+class StableCallback
+{
+ public:
+    StableCallback& operator=(Callback callback)
+    {
+        std::shared_ptr<Callback> next;
+        if (callback) next = std::make_shared<Callback>(std::move(callback));
+        callback_ = std::move(next);
+        return *this;
+    }
+    explicit operator bool() const noexcept { return static_cast<bool>(callback_); }
+    Callback Copy() const { return callback_ ? *callback_ : Callback{}; }
+
+    template <typename... Args>
+    decltype(auto) operator()(Args&&... args) const
+    {
+        auto active = callback_;
+        return (*active)(std::forward<Args>(args)...);
+    }
+
+ private:
+    std::shared_ptr<Callback> callback_;
+};
+
+} // namespace detail
+
 // memfd seal 常量：glibc 2.17 等老版本的 <fcntl.h> 未定义，而
 // <linux/fcntl.h> 与其 struct flock 定义冲突，故直接使用内核 UAPI 固定值
 #ifndef MFD_ALLOW_SEALING
@@ -40,6 +78,10 @@ inline constexpr const char* kDefaultSocketPath = "/tmp/fd-pass.socket";
 #define F_ADD_SEALS 1033      ///< UAPI: fcntl 命令，为文件添加 seal
 #define F_SEAL_SHRINK 0x0002  ///< 禁止 ftruncate 缩小文件
 #define F_SEAL_GROW 0x0004    ///< 禁止 ftruncate 扩大文件
+#endif
+
+#ifndef F_GET_SEALS
+#define F_GET_SEALS 1034
 #endif
 
 // ---------------------------------------------------------------------------
@@ -271,7 +313,7 @@ class MmapRegion
 enum class FdTag : uint32_t
 {
     kMemfd   = 0x4D454D46,  ///< "MEMF"
-    kEventfd = 0x45564644,  ///< "EVFD"
+    kEventfd = 0x45564644,  ///< "EVFD"：通道与独立 eventfd 传递工具
 };
 
 /** @brief 携带类型标签的文件描述符 */
@@ -292,6 +334,7 @@ struct TaggedFd
  * 发给对端后，任何持有 fd 者（含创建者）都无法再 ftruncate 改变大小，
  * 防止恶意对端握手后缩小文件使接收方映射读越界（SIGBUS）。
  * seal 不影响已建立的可写映射，本库创建后也不再改文件大小。
+ * 内核不支持封印或添加封印失败时返回错误，不创建缺少尺寸保护的环。
  *
  * @param name       memfd 名称（调试用，需 NUL 结尾）
  * @param size       文件大小（字节）
@@ -306,14 +349,8 @@ inline ErrorCode CreateMemfd(const char* name, std::size_t size, UniqueFd* out, 
         return ErrorCode::kInvalidArgument;
     }
 
-    // MFD_ALLOW_SEALING 允许随后 fcntl(F_ADD_SEALS)；内核不识别该标志
-    // （EINVAL）时退化为普通 memfd，仅失去防 truncate 硬化
-    int fd =
-        static_cast<int>(::syscall(__NR_memfd_create, name, static_cast<unsigned>(MFD_CLOEXEC | MFD_ALLOW_SEALING)));
-    if (fd < 0 && errno == EINVAL)
-    {
-        fd = static_cast<int>(::syscall(__NR_memfd_create, name, static_cast<unsigned>(MFD_CLOEXEC)));
-    }
+    const int fd = static_cast<int>(::syscall(
+        __NR_memfd_create, name, static_cast<unsigned>(MFD_CLOEXEC | MFD_ALLOW_SEALING)));
     if (fd < 0)
     {
         if (sys_errno)
@@ -332,11 +369,47 @@ inline ErrorCode CreateMemfd(const char* name, std::size_t size, UniqueFd* out, 
         }
         return ErrnoToErrorCode(err);
     }
-    // 封印尺寸（尽力而为：不支持 seal 的内核静默跳过，与历史行为一致）
-    (void)::fcntl(fd, F_ADD_SEALS, F_SEAL_SHRINK | F_SEAL_GROW);
+    if (::fcntl(fd, F_ADD_SEALS, F_SEAL_SHRINK | F_SEAL_GROW) < 0)
+    {
+        const int err = errno;
+        ::close(fd);
+        return ErrnoFailure(err, sys_errno);
+    }
     *out = UniqueFd{fd};
     return ErrorCode::kOk;
 }
+
+namespace detail {
+
+// 所有 fd 交换共用同一个 steady_clock 截止时间；EINTR/短读不重置预算。
+struct IoDeadline
+{
+    std::chrono::steady_clock::time_point end;
+    explicit IoDeadline(int timeout_ms)
+        : end(std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms)) {}
+
+    ErrorCode Wait(int fd, short events, int* sys_errno) const noexcept
+    {
+        for (;;)
+        {
+            const auto remaining = end - std::chrono::steady_clock::now();
+            if (remaining <= std::chrono::steady_clock::duration::zero())
+            {
+                if (sys_errno) *sys_errno = ETIMEDOUT;
+                return ErrorCode::kTimeout;
+            }
+            const auto us = std::chrono::duration_cast<std::chrono::microseconds>(remaining).count();
+            const int ms = static_cast<int>(std::min<int64_t>((us + 999) / 1000, INT32_MAX));
+            pollfd pfd{fd, events, 0};
+            const int rc = ::poll(&pfd, 1, ms);
+            if (rc > 0) return ErrorCode::kOk; // HUP/ERR 交由 sendmsg/recvmsg 解释
+            if (rc == 0) continue; // 用绝对时钟确认真正超时
+            if (errno != EINTR) return ErrnoFailure(errno, sys_errno);
+        }
+    }
+};
+
+} // namespace detail
 
 /**
  * @brief 通过 Unix socket 发送文件描述符（SCM_RIGHTS）
@@ -346,7 +419,8 @@ inline ErrorCode CreateMemfd(const char* name, std::size_t size, UniqueFd* out, 
  * @param sys_errno 可选：失败时的 errno
  */
 [[nodiscard]]
-inline ErrorCode SendFd(int socket, int fd, FdTag tag, int* sys_errno = nullptr) noexcept
+inline ErrorCode SendFd(int socket, int fd, FdTag tag, int* sys_errno = nullptr,
+                        const detail::IoDeadline* deadline = nullptr) noexcept
 {
     if (socket < 0 || fd < 0)
     {
@@ -383,9 +457,15 @@ inline ErrorCode SendFd(int socket, int fd, FdTag tag, int* sys_errno = nullptr)
         ssize_t n = 0;
         do
         {
-            n = ::sendmsg(socket, &msg, MSG_NOSIGNAL);
+            if (deadline)
+            {
+                const ErrorCode ec = deadline->Wait(socket, POLLOUT, sys_errno);
+                if (ec != ErrorCode::kOk) return ec;
+            }
+            n = ::sendmsg(socket, &msg, MSG_NOSIGNAL | (deadline ? MSG_DONTWAIT : 0));
         } while (n < 0 && errno == EINTR);
 
+        if (n < 0 && deadline && (errno == EAGAIN || errno == EWOULDBLOCK)) continue;
         if (n < 0)
         {
             if (sys_errno)
@@ -420,6 +500,25 @@ inline ErrorCode TakeRightsFd(const msghdr& msg, UniqueFd* owned) noexcept
     // 静默继续会导致 fd 泄漏或标签错位，必须显式报错
     if (msg.msg_flags & MSG_CTRUNC)
     {
+        // 内核仅自动关闭未交付的 fd；控制缓冲区中的 fd 已属于本进程。
+        auto received = msg;
+        for (auto* c = CMSG_FIRSTHDR(&received); c; c = CMSG_NXTHDR(&received, c))
+        {
+            if (c->cmsg_level != SOL_SOCKET || c->cmsg_type != SCM_RIGHTS || c->cmsg_len < CMSG_LEN(0))
+            {
+                continue;
+            }
+            const std::size_t n = (c->cmsg_len - CMSG_LEN(0)) / sizeof(int);
+            for (std::size_t i = 0; i < n; ++i)
+            {
+                int fd = -1;
+                std::memcpy(&fd, CMSG_DATA(c) + i * sizeof(int), sizeof(fd));
+                if (fd >= 0)
+                {
+                    ::close(fd);
+                }
+            }
+        }
         return ErrorCode::kProtocol;
     }
 
@@ -467,7 +566,8 @@ inline ErrorCode TakeRightsFd(const msghdr& msg, UniqueFd* owned) noexcept
  * @param sys_errno 可选：失败时的 errno
  */
 [[nodiscard]]
-inline ErrorCode RecvFd(int socket, TaggedFd* out, int* sys_errno = nullptr) noexcept
+inline ErrorCode RecvFd(int socket, TaggedFd* out, int* sys_errno = nullptr,
+                        const detail::IoDeadline* deadline = nullptr) noexcept
 {
     if (socket < 0 || !out)
     {
@@ -500,9 +600,15 @@ inline ErrorCode RecvFd(int socket, TaggedFd* out, int* sys_errno = nullptr) noe
         ssize_t n = 0;
         do
         {
-            n = ::recvmsg(socket, &msg, MSG_WAITALL);
+            if (deadline)
+            {
+                const ErrorCode ec = deadline->Wait(socket, POLLIN, sys_errno);
+                if (ec != ErrorCode::kOk) return ec;
+            }
+            n = ::recvmsg(socket, &msg, MSG_CMSG_CLOEXEC | (deadline ? MSG_DONTWAIT : MSG_WAITALL));
         } while (n < 0 && errno == EINTR);
 
+        if (n < 0 && deadline && (errno == EAGAIN || errno == EWOULDBLOCK)) continue;
         if (n < 0)
         {
             return ErrnoFailure(errno, sys_errno);
@@ -538,7 +644,8 @@ inline ErrorCode RecvFd(int socket, TaggedFd* out, int* sys_errno = nullptr) noe
  * @param sys_errno 可选：失败时的 errno
  */
 [[nodiscard]]
-inline ErrorCode RecvFdExpect(int socket, FdTag expected, UniqueFd* out, int* sys_errno = nullptr) noexcept
+inline ErrorCode RecvFdExpect(int socket, FdTag expected, UniqueFd* out, int* sys_errno = nullptr,
+                              const detail::IoDeadline* deadline = nullptr) noexcept
 {
     if (!out)
     {
@@ -546,7 +653,7 @@ inline ErrorCode RecvFdExpect(int socket, FdTag expected, UniqueFd* out, int* sy
     }
 
     TaggedFd tagged{};
-    const ErrorCode ec = RecvFd(socket, &tagged, sys_errno);
+    const ErrorCode ec = RecvFd(socket, &tagged, sys_errno, deadline);
     if (ec != ErrorCode::kOk)
     {
         return ec;
@@ -586,6 +693,27 @@ inline ErrorCode CreateEventfd(UniqueFd* out, int* sys_errno = nullptr) noexcept
     return ErrorCode::kOk;
 }
 
+/** @brief 验证 Linux eventfd 的内核类型及非阻塞属性，失败即拒绝握手。
+ * /proc/self/fd 不可访问时返回系统错误，不能仅相信对端提供的类型标签。
+ */
+[[nodiscard]]
+inline ErrorCode ValidateNotifyEventfd(int fd, int* sys_errno = nullptr) noexcept
+{
+    const int flags = ::fcntl(fd, F_GETFL);
+    if (flags < 0) return ErrnoFailure(errno, sys_errno);
+    if (!(flags & O_NONBLOCK)) return ErrorCode::kProtocol;
+    char path[64];
+    std::snprintf(path, sizeof(path), "/proc/self/fd/%d", fd);
+    char target[64];
+    const ssize_t n = ::readlink(path, target, sizeof(target));
+    if (n < 0) return ErrnoFailure(errno, sys_errno);
+    constexpr char expected[] = "anon_inode:[eventfd]";
+    if (n != static_cast<ssize_t>(sizeof(expected) - 1) ||
+        std::memcmp(target, expected, sizeof(expected) - 1) != 0)
+        return ErrorCode::kProtocol;
+    return ErrorCode::kOk;
+}
+
 /**
  * @brief 从 uri 中提取 Unix socket 路径
  *
@@ -605,11 +733,11 @@ inline std::string_view UriToPath(std::string_view uri) noexcept
 
 /**
  * @brief 路径写入栈上的 NUL 结尾缓冲区
- * @return false 表示路径过长或为空
+ * @return false 表示路径过长、为空、含嵌入 NUL 或输出缓冲非法
  */
 inline bool CopyUnixPath(std::string_view path, char* buf, std::size_t buf_size) noexcept
 {
-    if (path.empty() || path.size() >= buf_size)
+    if (!buf || path.empty() || path.size() >= buf_size || path.find('\0') != std::string_view::npos)
     {
         return false;
     }
@@ -620,7 +748,7 @@ inline bool CopyUnixPath(std::string_view path, char* buf, std::size_t buf_size)
 
 /**
  * @brief 创建并绑定 Unix domain socket 监听端
- * @param path       socket 文件路径（已存在则先 unlink）
+ * @param path       socket 文件路径（已存在则返回错误，绝不替换已有入口）
  * @param out        成功时写入监听 socket
  * @param backlog    listen 积压队列长度
  * @param sys_errno  可选：失败时的 errno
@@ -639,12 +767,12 @@ inline ErrorCode ListenUnixSocket(std::string_view path, UniqueFd* out, int back
     {
         if (sys_errno)
         {
-            *sys_errno = ENAMETOOLONG;
+            *sys_errno = path.size() >= sizeof(cpath) ? ENAMETOOLONG : EINVAL;
         }
         return ErrorCode::kInvalidArgument;
     }
 
-    UniqueFd sfd{::socket(AF_UNIX, SOCK_STREAM, 0)};
+    UniqueFd sfd{::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0)};
     if (!sfd)
     {
         if (sys_errno)
@@ -653,8 +781,6 @@ inline ErrorCode ListenUnixSocket(std::string_view path, UniqueFd* out, int back
         }
         return ErrnoToErrorCode(errno);
     }
-
-    ::unlink(cpath);
 
     sockaddr_un addr{};
     addr.sun_family = AF_UNIX;
@@ -668,13 +794,19 @@ inline ErrorCode ListenUnixSocket(std::string_view path, UniqueFd* out, int back
         }
         return ErrnoToErrorCode(errno);
     }
+    // bind 已创建路径。记录节点身份，listen 失败时只回收本次创建的入口。
+    struct stat bound{};
+    const bool have_identity = ::lstat(cpath, &bound) == 0 && S_ISSOCK(bound.st_mode);
     if (::listen(sfd.Get(), backlog) < 0)
     {
-        if (sys_errno)
+        const int err = errno;
+        struct stat current{};
+        if (have_identity && ::lstat(cpath, &current) == 0 && S_ISSOCK(current.st_mode) &&
+            current.st_dev == bound.st_dev && current.st_ino == bound.st_ino)
         {
-            *sys_errno = errno;
+            ::unlink(cpath);
         }
-        return ErrnoToErrorCode(errno);
+        return ErrnoFailure(err, sys_errno);
     }
 
     *out = std::move(sfd);
@@ -686,9 +818,11 @@ inline ErrorCode ListenUnixSocket(std::string_view path, UniqueFd* out, int back
  * @param path       socket 文件路径
  * @param out        成功时写入已连接的 socket
  * @param sys_errno  可选：失败时的 errno
+ * @param shared_deadline 可选：与后续握手共享的截止时间；默认连接超时 5 秒
  */
 [[nodiscard]]
-inline ErrorCode ConnectUnixSocket(std::string_view path, UniqueFd* out, int* sys_errno = nullptr) noexcept
+inline ErrorCode ConnectUnixSocket(std::string_view path, UniqueFd* out, int* sys_errno = nullptr,
+                                   const detail::IoDeadline* shared_deadline = nullptr) noexcept
 {
     if (!out)
     {
@@ -700,12 +834,12 @@ inline ErrorCode ConnectUnixSocket(std::string_view path, UniqueFd* out, int* sy
     {
         if (sys_errno)
         {
-            *sys_errno = ENAMETOOLONG;
+            *sys_errno = path.size() >= sizeof(cpath) ? ENAMETOOLONG : EINVAL;
         }
         return ErrorCode::kInvalidArgument;
     }
 
-    UniqueFd sfd{::socket(AF_UNIX, SOCK_STREAM, 0)};
+    UniqueFd sfd{::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0)};
     if (!sfd)
     {
         if (sys_errno)
@@ -719,14 +853,38 @@ inline ErrorCode ConnectUnixSocket(std::string_view path, UniqueFd* out, int* sy
     addr.sun_family = AF_UNIX;
     std::memcpy(addr.sun_path, cpath, std::strlen(cpath));
 
-    if (::connect(sfd.Get(), reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0)
+    const detail::IoDeadline local_deadline{5000};
+    const auto& deadline = shared_deadline ? *shared_deadline : local_deadline;
+    for (;;)
     {
-        if (sys_errno)
+        if (std::chrono::steady_clock::now() >= deadline.end)
+            return ErrnoFailure(ETIMEDOUT, sys_errno);
+        if (::connect(sfd.Get(), reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0) break;
+        const int err = errno;
+        if (err == EINTR) continue;
+        if (err == EAGAIN || err == EWOULDBLOCK)
         {
-            *sys_errno = errno;
+            // AF_UNIX 队列满时尚未开始连接；POLLOUT 可能立即返回，必须限速重试。
+            const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+                deadline.end - std::chrono::steady_clock::now()).count();
+            if (remaining <= 0) return ErrnoFailure(ETIMEDOUT, sys_errno);
+            if (::poll(nullptr, 0, static_cast<int>(std::min<int64_t>(remaining, 10))) < 0 && errno != EINTR)
+                return ErrnoFailure(errno, sys_errno);
+            continue;
         }
-        return ErrnoToErrorCode(errno);
+        if (err != EINPROGRESS && err != EALREADY) return ErrnoFailure(err, sys_errno);
+        const ErrorCode ec = deadline.Wait(sfd.Get(), POLLOUT, sys_errno);
+        if (ec != ErrorCode::kOk) return ec;
+        int socket_error = 0;
+        socklen_t length = sizeof(socket_error);
+        if (::getsockopt(sfd.Get(), SOL_SOCKET, SO_ERROR, &socket_error, &length) != 0)
+            return ErrnoFailure(errno, sys_errno);
+        if (socket_error != 0) return ErrnoFailure(socket_error, sys_errno);
+        break;
     }
+    const int flags = ::fcntl(sfd.Get(), F_GETFL);
+    if (flags < 0 || ::fcntl(sfd.Get(), F_SETFL, flags & ~O_NONBLOCK) < 0)
+        return ErrnoFailure(errno, sys_errno);
 
     *out = std::move(sfd);
     return ErrorCode::kOk;

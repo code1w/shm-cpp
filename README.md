@@ -30,6 +30,16 @@ make -j$(nproc)
 
 生成两个可执行文件：`server` 和 `client`。
 
+## 通道版本与边界保证
+
+通道通知使用非阻塞 eventfd（`EFD_NONBLOCK | EFD_CLOEXEC`），握手标签为 `kEventfd`。已放弃 Unix datagram socketpair 通知方案；使用该方案的旧客户端和服务端需要同步升级。`NotifyReadFd()` 用于 poll，`RingChannel::DrainNotify()` 一次读取合并计数，返回值不能视为消息数。
+
+共享 eventfd 通过 SCM_RIGHTS 传递，两端共享其 file status flags。通信双方必须保持 `O_NONBLOCK`，不得通过 `F_SETFL` 清除该属性；握手只校验当时的属性，不提供握手后对端改属性的隔离。此版本采用遵守协议的可信对端模型。读取预算、reader_wait 按需通知和本地 WakeReader 唤醒继续保留。
+
+服务端为各在途连接独立执行握手，任务数量受 `SetMaxClients()` 约束；每条连接有 5 秒总期限，Stop 会打断并回收所有握手任务。连接结果绑定接受时的服务代次，Stop/Start 后不会收编旧结果。定时器 fd 为非阻塞；周期回调需排空计数，一次性回调已由包装层排空，再次排空安全返回 0。
+
+边界回归可运行 `./build/test_audit_core_fixes` 和 `./build/test_audit_round2_fixes`，覆盖通知失败、fd 0、广播重入关闭、慢握手隔离、批次重启与eventfd 计数饱和、合并排空及端点验证。可通过 `-DSHM_IPC_SANITIZE=address,undefined` 构建对应 sanitizer 检查。
+
 ## 快速开始
 
 终端 1 — 启动服务端：
@@ -78,10 +88,10 @@ shm-cpp/
   ═══════════════ 双向通道建立完成 ═══════════════════
 
   5. try_write() → 环形缓冲区 ──(shm)──→ try_read()     # client→server 数据流
-     socket 'C' 通知 ──────────────────→                 # 唤醒读端
+     write(eventfd) 通知 ──────────────────→                 # 唤醒读端
   6. try_read()  ←──(shm)── 环形缓冲区 ← try_write()    # server→client 数据流
-                 ←──────────────────── socket 'S' 通知   # 唤醒读端
-  7. socket '\0' ──────────────────────→ 断开 + 清理     # 关闭连接
+                 ←──────────────────── write(eventfd) 通知   # 唤醒读端
+  7. shutdown(socket) ──────────────────────→ 断开 + 清理     # 关闭连接
 ```
 
 ### 共享内存布局
@@ -207,7 +217,7 @@ Ring::try_read(shm, buf.get(), &len, &seq);
 | SPSC 而非 MPMC | 每个连接方向只有一个生产者和一个消费者，SPSC 不需要 CAS 循环，延迟更低 |
 | `memfd_create` 而非 `shm_open` | 匿名内存，无需管理 `/dev/shm` 下的文件生命周期 |
 | `timerfd` 而非 `SIGALRM` | timerfd 是普通 fd，可以和 socket fd 一起放入 poll；SIGALRM 是进程全局的，无法为每个客户端独立计时 |
-| socket 通知字节 (`'C'`/`'S'`) | 环形缓冲区是纯共享内存轮询模型，需要一个唤醒机制避免空转；单字节通知开销极小 |
+| eventfd 按需通知 | 仅在读方准备睡眠时唤醒，计数自动合并；避免频繁 socket 消息排队 |
 | Header-only 库 | 代码量小，全部为模板/inline，避免链接复杂度 |
 | `poll` 而非 `epoll` | 连接数不超过 16，poll 更简单且性能差异可忽略 |
 

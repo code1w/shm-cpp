@@ -1,0 +1,7 @@
+part0: big-pod any reuse OK
+part1b: zero-copy peek/commit OK
+part1: sync client echo OK
+part2: async client echo OK
+part3: pending verify timer removed on client dtor
+part4: double Start() is a no-op
+=== TEST PASSED ===

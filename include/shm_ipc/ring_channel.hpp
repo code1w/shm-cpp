@@ -3,11 +3,11 @@
  * @brief 双向共享内存环形通道（C++17）
  *
  * 封装一对字节流环形缓冲区（一写一读），并包含 memfd 创建、
- * eventfd 创建及 fd 交换握手逻辑。
+ * 通知 eventfd 创建及 fd 交换握手逻辑。
  *
- * 通知机制：每个方向拥有一个共享 eventfd。读方创建后通过
- * SCM_RIGHTS 发送给写方。写方调用 NotifyPeer() 写入 eventfd；
- * 读方轮询 NotifyReadFd() 的 POLLIN 事件。
+ * 通知机制：每个方向使用一个非阻塞 eventfd。读方保留本地 fd，并通过
+ * SCM_RIGHTS 将其传给对端；写方发布数据后按 reader_wait 状态写入计数唤醒读方。
+ * 两端必须保持共享 eventfd 的 O_NONBLOCK 属性，不得修改其阻塞模式。
  */
 
 #ifndef SHM_IPC_RING_CHANNEL_HPP_
@@ -41,32 +41,11 @@ class RingChannel;
 
 namespace detail {
 
-/// @brief RAII：握手期间设置 socket 收发超时（5秒，防止半连接阻塞），
-///        结束（含异常路径）恢复默认阻塞模式
-struct HandshakeGuard
-{
-    explicit HandshakeGuard(int fd) : fd_(fd)
-    {
-        timeval tv{};
-        tv.tv_sec  = 5;
-        tv.tv_usec = 0;
-        ::setsockopt(fd_, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-        ::setsockopt(fd_, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
-    }
-    ~HandshakeGuard()
-    {
-        timeval tv{};
-        ::setsockopt(fd_, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-        ::setsockopt(fd_, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
-    }
-    int fd_;
-};
-
 /**
  * @brief RAII 通道级批量写入器
  *
  * 封装 RingBuf::BatchWriter，Flush 时自动调用 NotifyPeer()。
- * 将 N 次写入的原子操作从 3N 降至 2，eventfd 通知从 N 降至 1。
+ * 将 N 次写入的原子操作从 3N 降至 2，通知 eventfd 通知从 N 降至 1。
  *
  * @code
  * {
@@ -198,7 +177,7 @@ class RingChannel
 
     RingChannel() = default;
 
-    // 移动语义（持有 memfd、mmap 区域、eventfd），禁止复制
+    // 移动语义（持有 memfd、mmap 区域、通知 eventfd），禁止复制
     RingChannel(RingChannel&&)                 = default;
     RingChannel& operator=(RingChannel&&)      = default;
     RingChannel(const RingChannel&)            = delete;
@@ -211,19 +190,20 @@ class RingChannel
      *
      *   客户端（kClient）              服务端（kServer）
      *   1. 发送 memfd_c2s      →       1. 接收 memfd_c2s
-     *   2. 发送 efd_client     →       2. 接收 efd_client（服务端写入唤醒客户端）
+     *   2. 发送 notify_client     →       2. 接收 notify_client（服务端写入唤醒客户端）
      *   3. 接收 memfd_s2c      ←       3. 创建并发送 memfd_s2c
-     *   4. 接收 efd_server     ←       4. 创建并发送 efd_server（客户端写入唤醒服务端）
+     *   4. 接收 notify_server     ←       4. 创建并发送 notify_server（客户端写入唤醒服务端）
      *
      * @param socket_fd 已建立连接的 Unix socket fd
      * @param role      本端角色
      * @param out       成功时写入初始化完成的 RingChannel（失败时保持原状）
      * @param sys_errno 可选：失败时的 errno
+     * @param shared_deadline 可选：连接与握手共用的期限；为空时握手预算为 5 秒
      * @return kOk 成功；kSizeMismatch 对端环尺寸不符；其余见 ErrorCode
      */
     [[nodiscard]]
     static ErrorCode CreateRingChannel(int socket_fd, ChannelRole role, RingChannel* out,
-                                       int* sys_errno = nullptr) noexcept
+                                       int* sys_errno = nullptr, const detail::IoDeadline* shared_deadline = nullptr) noexcept
     {
         if (!out || socket_fd < 0)
         {
@@ -231,7 +211,8 @@ class RingChannel
         }
 
         RingChannel ch;
-        const detail::HandshakeGuard guard{socket_fd};  // 握手超时，返回时恢复
+        const detail::IoDeadline local_deadline{5000};
+        const detail::IoDeadline& deadline = shared_deadline ? *shared_deadline : local_deadline;
 
         ErrorCode ec = ErrorCode::kOk;
         if (role == ChannelRole::kClient)
@@ -241,17 +222,17 @@ class RingChannel
             {
                 return ec;
             }
-            ec = CreateEventfd(&ch.notify_read_efd_, sys_errno);
+            ec = ch.CreateNotifyEventfd(sys_errno);
             if (ec != ErrorCode::kOk)
             {
                 return ec;
             }
-            ec = ch.SendLocalFds(socket_fd, sys_errno);  // 先发：memfd_c2s、efd_client
+            ec = ch.SendLocalFds(socket_fd, sys_errno, &deadline);  // 先发：memfd_c2s、notify_client
             if (ec != ErrorCode::kOk)
             {
                 return ec;
             }
-            ec = ch.RecvPeerFds(socket_fd, sys_errno);  // 后收：memfd_s2c、efd_server
+            ec = ch.RecvPeerFds(socket_fd, sys_errno, &deadline);  // 后收：memfd_s2c、notify_server
             if (ec != ErrorCode::kOk)
             {
                 return ec;
@@ -259,7 +240,7 @@ class RingChannel
         }
         else
         {
-            ec = ch.RecvPeerFds(socket_fd, sys_errno);  // 先收：memfd_c2s、efd_client
+            ec = ch.RecvPeerFds(socket_fd, sys_errno, &deadline);  // 先收：memfd_c2s、notify_client
             if (ec != ErrorCode::kOk)
             {
                 return ec;
@@ -269,12 +250,12 @@ class RingChannel
             {
                 return ec;
             }
-            ec = CreateEventfd(&ch.notify_read_efd_, sys_errno);
+            ec = ch.CreateNotifyEventfd(sys_errno);
             if (ec != ErrorCode::kOk)
             {
                 return ec;
             }
-            ec = ch.SendLocalFds(socket_fd, sys_errno);  // 后发：memfd_s2c、efd_server
+            ec = ch.SendLocalFds(socket_fd, sys_errno, &deadline);  // 后发：memfd_s2c、notify_server
             if (ec != ErrorCode::kOk)
             {
                 return ec;
@@ -350,7 +331,7 @@ class RingChannel
      * @param seg1_len 输出：第一段长度
      * @param seg2     输出：第二段数据指针（回绕部分）
      * @param seg2_len 输出：第二段长度
-     * @return 0 有数据，-1 缓冲区为空
+     * @return 0 有数据，-1 缓冲区为空，-2 控制头位置损坏
      */
     int Peek(const void** seg1, uint32_t* seg1_len, const void** seg2, uint32_t* seg2_len)
     {
@@ -426,25 +407,25 @@ class RingChannel
     // ---- 通知 ----
 
     /**
-     * @brief 返回用于轮询（POLLIN）的 eventfd，对端写入时触发
-     * @return eventfd 文件描述符
+     * @brief 返回用于轮询（POLLIN）的通知 eventfd，对端写入时触发
+     * @return 通知 eventfd 文件描述符
      */
     [[nodiscard]]
     int NotifyReadFd() const noexcept
     {
-        return notify_read_efd_.Get();
+        return notify_read_fd_.Get();
     }
 
     /**
      * @brief 通知对端：我们已向写环写入新数据
      *
      * 必须在数据发布（write_pos 已 store）之后调用。对端若启用了按需通知
-     * （调用过 PrepareWait），仅在其即将睡眠时才写 eventfd；处理中的读方
+     * （调用过 PrepareWait），仅在其即将睡眠时才写通知 eventfd；处理中的读方
      * 无需唤醒，省掉一次 syscall。对端未启用时每次都写（与旧行为一致）。
      */
     void NotifyPeer() const
     {
-        if (!notify_write_efd_)
+        if (!notify_write_fd_)
         {  // 未完成握手 / moved-from
             return;
         }
@@ -456,8 +437,17 @@ class RingChannel
         ssize_t r  = 0;
         do
         {
-            r = ::write(notify_write_efd_.Get(), &v, sizeof(v));
+            r = ::write(notify_write_fd_.Get(), &v, sizeof(v));
         } while (r < 0 && errno == EINTR);
+    }
+
+    /** @brief 限额收包后唤醒本地读方，确保剩余数据在下一轮继续处理。 */
+    void WakeReader() const noexcept
+    {
+        if (!notify_read_fd_) return;
+        const uint64_t one = 1;
+        while (::write(notify_read_fd_.Get(), &one, sizeof(one)) < 0 && errno == EINTR) {}
+        // EAGAIN 表示 eventfd 计数饱和，本地 fd 已可读，无需再次写入。
     }
 
     /**
@@ -495,19 +485,16 @@ class RingChannel
     }
 
     /**
-     * @brief 排空 eventfd（在通知回调中调用）
-     * @param efd eventfd 文件描述符
-     * @return 读出的计数值
+     * @brief 非阻塞读取合并通知计数（在通知回调中调用）
+     * @param fd 通知 fd（通道或内部 eventfd）
+     * @return 本次合并读出的 eventfd 计数，不能视为消息数量
      */
-    static uint64_t DrainNotify(int efd)
+    static uint64_t DrainNotify(int fd)
     {
-        uint64_t v = 0;
-        ssize_t r  = 0;
-        do
-        {
-            r = ::read(efd, &v, sizeof(v));
-        } while (r < 0 && errno == EINTR);
-        return v;
+        uint64_t value = 0;
+        ssize_t n;
+        do { n = ::read(fd, &value, sizeof(value)); } while (n < 0 && errno == EINTR);
+        return n == sizeof(value) ? value : 0;
     }
 
     /// @brief 单次写入最大字节数
@@ -528,6 +515,11 @@ class RingChannel
     }
 
  private:
+    ErrorCode CreateNotifyEventfd(int* sys_errno) noexcept
+    {
+        return CreateEventfd(&notify_read_fd_, sys_errno);
+    }
+
     /// @brief 创建写环：memfd + mmap + 清零初始化
     /// @param name      memfd 名称（调试用）
     /// @param sys_errno 可选：失败时的 errno
@@ -553,24 +545,31 @@ class RingChannel
         return ErrorCode::kOk;
     }
 
-    /// @brief 发送本端 fd：写环 memfd + "唤醒自身"的 eventfd
-    ErrorCode SendLocalFds(int socket_fd, int* sys_errno = nullptr) const noexcept
+    /// @brief 发送本端 fd：写环 memfd + "唤醒自身"的通知 eventfd
+    ErrorCode SendLocalFds(int socket_fd, int* sys_errno, const detail::IoDeadline* deadline) const noexcept
     {
-        const ErrorCode ec = SendFd(socket_fd, write_memfd_.Get(), FdTag::kMemfd, sys_errno);
+        const ErrorCode ec = SendFd(socket_fd, write_memfd_.Get(), FdTag::kMemfd, sys_errno, deadline);
         if (ec != ErrorCode::kOk)
         {
             return ec;
         }
-        return SendFd(socket_fd, notify_read_efd_.Get(), FdTag::kEventfd, sys_errno);
+        return SendFd(socket_fd, notify_read_fd_.Get(), FdTag::kEventfd, sys_errno, deadline);
     }
 
-    /// @brief 接收对端 fd：读环 memfd（mmap 挂载）+ "唤醒对端"的 eventfd
-    ErrorCode RecvPeerFds(int socket_fd, int* sys_errno = nullptr) noexcept
+    /// @brief 接收对端 fd：读环 memfd（mmap 挂载）+ "唤醒对端"的通知 eventfd
+    ErrorCode RecvPeerFds(int socket_fd, int* sys_errno, const detail::IoDeadline* deadline) noexcept
     {
-        ErrorCode ec = RecvFdExpect(socket_fd, FdTag::kMemfd, &read_memfd_, sys_errno);
+        ErrorCode ec = RecvFdExpect(socket_fd, FdTag::kMemfd, &read_memfd_, sys_errno, deadline);
         if (ec != ErrorCode::kOk)
         {
             return ec;
+        }
+
+        const int seals = ::fcntl(read_memfd_.Get(), F_GET_SEALS);
+        const int required = F_SEAL_SHRINK | F_SEAL_GROW;
+        if (seals < 0 || (seals & required) != required)
+        {
+            return ErrorCode::kProtocol;
         }
 
         // 必须先校验对端 memfd 尺寸再 mmap/访问：
@@ -602,7 +601,9 @@ class RingChannel
                 return ec;
             }
         }
-        return RecvFdExpect(socket_fd, FdTag::kEventfd, &notify_write_efd_, sys_errno);
+        ec = RecvFdExpect(socket_fd, FdTag::kEventfd, &notify_write_fd_, sys_errno, deadline);
+        if (ec != ErrorCode::kOk) return ec;
+        return ValidateNotifyEventfd(notify_write_fd_.Get(), sys_errno);
     }
 
     UniqueFd write_memfd_;     ///< 写环对应的 memfd
@@ -610,8 +611,8 @@ class RingChannel
     UniqueFd read_memfd_;      ///< 读环对应的 memfd
     MmapRegion read_region_;   ///< 读环的 mmap 映射区域
 
-    UniqueFd notify_write_efd_;  ///< 写入此 eventfd 以唤醒对端
-    UniqueFd notify_read_efd_;   ///< 对端写入此 eventfd 以唤醒自身
+    UniqueFd notify_write_fd_;  ///< 写入此通知 eventfd 以唤醒对端
+    UniqueFd notify_read_fd_;   ///< 对端写入此通知 eventfd 以唤醒自身
 };
 
 /// @brief 默认配置别名（8MB 环）

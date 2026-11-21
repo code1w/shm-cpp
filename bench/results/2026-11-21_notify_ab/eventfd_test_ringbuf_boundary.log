@@ -1,0 +1,42 @@
+test_ringbuf_boundary: /tmp/shm-notify-ab/eventfd/include/shm_ipc/ringbuf.hpp:820: static void shm::RingBuf<Capacity>::CommitRead(void*, uint32_t) [with long unsigned int Capacity = 4096; uint32_t = unsigned int]: Assertion `static_cast<uint64_t>(len) <= avail' failed.
+test_ringbuf_boundary: /tmp/shm-notify-ab/eventfd/include/shm_ipc/ringbuf.hpp:340: void shm::detail::BatchWriter<Capacity>::RewindTo(uint64_t, int) [with long unsigned int Capacity = 4096; uint64_t = long unsigned int]: Assertion `pending <= PendingBytes()' failed.
+=== RingBuf boundary test suite (Capacity=4096) ===
+
+--- Test 1: full ring (used == Capacity) ---
+  PASS: full ring write reject + two-segment peek verified
+--- Test 2: full ring cycle (fill/drain/refill) ---
+  PASS: fill/drain/refill cycle keeps content intact
+--- Test 3: BatchWriter length bounds ---
+  PASS: len bounds 0 / max / max+1 / full-ring
+--- Test 4: Reserve boundaries ---
+  PASS: Reserve exact-fit / wrap / oversize / full-ring
+--- Test 5: empty/zero-length ops ---
+  PASS: zero-length ops never consume
+--- Test 6: BatchWriter misc ---
+  PASS: empty flush / move semantics / moved-from safety
+--- Test 7: CommitRead overrun assert (death test) ---
+  PASS: overrun CommitRead aborts in debug build
+--- Test 8: RewindTo overrun assert (death test) ---
+  PASS: overrun RewindTo aborts in debug build
+--- Test 9: null read buffer guards ---
+  PASS: null buffers rejected without crash/consume
+--- Test 10: moved-from BatchWriter is inert ---
+  PASS: moved-from writer cannot write
+--- Test 11: CommitReserve validation ---
+  PASS: illegal commits rejected in all build modes
+--- Test 12: two-thread SPSC stress ---
+  PASS: 20000 messages across concurrent producer/consumer
+--- Test 13: mirrored contig wrap ---
+  PASS: 11 tail offsets
+--- Test 14: mirrored full ring across wrap ---
+  PASS: full ring across mirror, single-segment peek
+--- Test 15: mirrored BatchWriter cross-tail Reserve ---
+  PASS: mirrored Reserve/CommitReserve across tail
+--- Test 16: contig API guards ---
+  PASS: contig zero/oversize/null/empty rejected
+--- Test 17: reader_wait state machine ---
+  PASS: always / one-shot / stale-baseline transitions
+--- Test 18: reader_wait lost-wakeup stress ---
+  PASS: 400000 msgs, 6049 notifies (1.51%), 3629 sleeps
+
+=== TEST PASSED === (18 sub-tests)

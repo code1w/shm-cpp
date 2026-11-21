@@ -43,6 +43,40 @@ target_link_libraries(bench_codec PRIVATE shm_ipc)
 add_executable(bench_app bench/bench_app.cpp)
 target_link_libraries(bench_app PRIVATE shm_ipc)
 
+add_executable(test_audit_round3_fixes test/test_audit_round3_fixes.cpp)
+target_link_libraries(test_audit_round3_fixes PRIVATE shm_ipc)
+target_compile_options(test_audit_round3_fixes PRIVATE -UNDEBUG)
+target_link_options(test_audit_round3_fixes PRIVATE -Wl,--wrap=listen)
+
+add_executable(test_audit_round2_fixes test/test_audit_round2_fixes.cpp)
+target_link_libraries(test_audit_round2_fixes PRIVATE shm_ipc)
+target_compile_options(test_audit_round2_fixes PRIVATE -UNDEBUG)
+target_link_options(test_audit_round2_fixes PRIVATE -Wl,--wrap=accept4)
+
+add_executable(test_audit_core_fixes test/test_audit_core_fixes.cpp)
+target_link_libraries(test_audit_core_fixes PRIVATE shm_ipc)
+target_compile_options(test_audit_core_fixes PRIVATE -UNDEBUG)
+target_link_options(test_audit_core_fixes PRIVATE -Wl,--wrap=write)
+
+add_executable(test_audit_eof_reentry test/test_audit_eof_reentry.cpp)
+target_link_libraries(test_audit_eof_reentry PRIVATE shm_ipc)
+target_compile_options(test_audit_eof_reentry PRIVATE -UNDEBUG)
+target_link_options(test_audit_eof_reentry PRIVATE -Wl,--wrap=poll)
+
+add_executable(test_audit_hardening test/test_audit_hardening.cpp)
+target_link_libraries(test_audit_hardening PRIVATE shm_ipc)
+target_compile_options(test_audit_hardening PRIVATE -UNDEBUG)
+target_link_options(test_audit_hardening PRIVATE -Wl,--wrap=mmap)
+
+add_executable(test_audit_second test/test_audit_second.cpp)
+target_link_libraries(test_audit_second PRIVATE shm_ipc)
+target_compile_options(test_audit_second PRIVATE -UNDEBUG)
+
+add_executable(test_audit_regression test/test_audit_regression.cpp)
+target_link_libraries(test_audit_regression PRIVATE shm_ipc)
+target_compile_options(test_audit_regression PRIVATE -UNDEBUG)
+target_link_options(test_audit_regression PRIVATE -Wl,--wrap=poll)
+
 add_executable(test_codec test/test_codec.cpp)
 target_link_libraries(test_codec PRIVATE shm_ipc)
 

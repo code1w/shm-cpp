@@ -25,6 +25,10 @@
 #include <cstdio>
 #include <cstdlib>
 #include <utility>
+#include <string>
+#include <stdexcept>
+#include <thread>
+#include <atomic>
 
 namespace {
 
@@ -194,11 +198,90 @@ static void TestCancelledTimerSilenced()
     std::printf("  PASS: cancelled timer does not fire\n\n");
 }
 
+
+// 回归：Stop 前后均不得重入；回调异常/错误码退出后运行所有权必须释放。
+static void TestRunReentryAndRecovery()
+{
+    for (bool stop_before : {false, true})
+    {
+        for (int failure : {0, 1, 2})
+        {
+            shm::EventLoop loop;
+            shm::UniqueFd fd;
+            CHECK(shm::CreateEventfd(&fd) == shm::ErrorCode::kOk, "eventfd");
+            const uint64_t one = 1;
+            CHECK(::write(fd.Get(), &one, sizeof(one)) == 8, "write eventfd");
+            bool survived = false;
+            loop.AddFd(fd.Get(), [&, payload = std::string(1000, 'x')](int f, short) {
+                uint64_t v;
+                CHECK(::read(f, &v, sizeof(v)) == 8, "read eventfd");
+                loop.RemoveFd(f);
+                if (stop_before) loop.Stop();
+                int error = 0;
+                CHECK(loop.Run(0, &error) == shm::ErrorCode::kInvalidArgument && error == EBUSY,
+                      "nested Run must reject without dispatching or compacting");
+                CHECK(payload[0] == 'x' && payload.size() == 1000, "active callback capture was destroyed");
+                survived = true;
+                if (failure == 1) throw std::runtime_error("callback");
+                if (failure == 2) throw std::bad_alloc{};
+                loop.Stop();
+            });
+            bool caught = false;
+            shm::ErrorCode result = shm::ErrorCode::kOk;
+            try { result = loop.Run(-1); }
+            catch (const std::runtime_error&) { caught = true; }
+            CHECK(survived && caught == (failure == 1), "callback exception propagation");
+            CHECK(result == (failure == 2 ? shm::ErrorCode::kNoMemory : shm::ErrorCode::kOk), "Run result");
+            int timer; bool restarted = false;
+            CHECK(loop.AddOneShotTimer(1, [&](int, short) { restarted = true; loop.Stop(); }, &timer) == shm::ErrorCode::kOk,
+                  "restart timer");
+            CHECK(loop.Run(-1) == shm::ErrorCode::kOk && restarted, "Run guard leaked after exit");
+        }
+    }
+    // Stop 后的 post-dispatch 钩子也仍处于外层 Run 生命周期中。
+    shm::EventLoop loop;
+    shm::EventLoop::HookId hook;
+    bool checked = false;
+    CHECK(loop.AddPostDispatchHook([&] {
+        int error = 0;
+        CHECK(loop.Run(0, &error) == shm::ErrorCode::kInvalidArgument && error == EBUSY, "hook reentry");
+        checked = true;
+    }, &hook) == shm::ErrorCode::kOk, "post hook");
+    int timer;
+    CHECK(loop.AddOneShotTimer(1, [&](int, short) { loop.Stop(); }, &timer) == shm::ErrorCode::kOk, "stop timer");
+    CHECK(loop.Run(-1) == shm::ErrorCode::kOk && checked, "post hook lifecycle");
+    loop.RemovePostDispatchHook(hook);
+    std::printf("  PASS: Run rejects reentry and recovers after all exit paths\n\n");
+}
+
+static void TestConcurrentRunRejected()
+{
+    shm::EventLoop loop;
+    std::atomic<bool> entered{false}, contender_done{false};
+    int timer;
+    CHECK(loop.AddOneShotTimer(1, [&](int, short) {
+        entered.store(true, std::memory_order_release);
+        while (!contender_done.load(std::memory_order_acquire)) std::this_thread::yield();
+        loop.Stop();
+    }, &timer) == shm::ErrorCode::kOk, "concurrent stop timer");
+    std::thread contender([&] {
+        while (!entered.load(std::memory_order_acquire)) std::this_thread::yield();
+        int error = 0;
+        CHECK(loop.Run(0, &error) == shm::ErrorCode::kInvalidArgument && error == EBUSY, "concurrent Run");
+        contender_done.store(true, std::memory_order_release);
+    });
+    CHECK(loop.Run(-1) == shm::ErrorCode::kOk, "outer Run");
+    contender.join();
+    std::printf("  PASS: concurrent Run rejected before accessing loop state\n\n");
+}
+
 int main()
 {
     TestFdReuseOrdering();
     TestSameBatchAddRemove();
     TestCancelledTimerSilenced();
+    TestRunReentryAndRecovery();
+    TestConcurrentRunRejected();
 
     std::printf("=== TEST PASSED ===\n");
     return 0;

@@ -1,0 +1,51 @@
+Consolidate compiler generated dependencies of target test_shm_app
+Consolidate compiler generated dependencies of target app_server
+Consolidate compiler generated dependencies of target test_audit_round3_fixes
+[  3%] Built target shm_proto
+[  7%] Built target app_server
+[ 11%] Built target test_audit_round3_fixes
+[ 15%] Built target test_shm_app
+Consolidate compiler generated dependencies of target bench_app
+Consolidate compiler generated dependencies of target test_audit_round2_fixes
+Consolidate compiler generated dependencies of target bench_codec
+Consolidate compiler generated dependencies of target bench_batch
+[ 19%] Built target test_audit_round2_fixes
+[ 23%] Built target bench_app
+[ 26%] Built target bench_codec
+[ 30%] Built target bench_batch
+Consolidate compiler generated dependencies of target test_audit_hardening
+Consolidate compiler generated dependencies of target bench_shm
+Consolidate compiler generated dependencies of target test_codec
+Consolidate compiler generated dependencies of target test_audit_core_fixes
+[ 34%] Built target test_audit_hardening
+[ 38%] Built target bench_shm
+[ 42%] Built target test_codec
+[ 46%] Built target test_audit_core_fixes
+Consolidate compiler generated dependencies of target test_audit_regression
+Consolidate compiler generated dependencies of target bench_socket
+Consolidate compiler generated dependencies of target test_audit_eof_reentry
+Consolidate compiler generated dependencies of target test_proto_codec
+[ 50%] Built target test_audit_regression
+[ 53%] Built target bench_socket
+[ 57%] Built target test_audit_eof_reentry
+[ 61%] Built target test_proto_codec
+Consolidate compiler generated dependencies of target socket_client
+Consolidate compiler generated dependencies of target test_proto_wrap
+Consolidate compiler generated dependencies of target socket_server
+Consolidate compiler generated dependencies of target client
+[ 65%] Built target socket_client
+[ 69%] Built target test_proto_wrap
+[ 73%] Built target socket_server
+[ 76%] Built target client
+Consolidate compiler generated dependencies of target test_audit_second
+Consolidate compiler generated dependencies of target test_ringbuf_wrap
+[ 80%] Built target test_audit_second
+Consolidate compiler generated dependencies of target app_client
+Consolidate compiler generated dependencies of target test_eventloop
+[ 84%] Built target test_ringbuf_wrap
+Consolidate compiler generated dependencies of target test_ringbuf_boundary
+[ 88%] Built target app_client
+[ 92%] Built target test_eventloop
+[ 96%] Built target test_ringbuf_boundary
+Consolidate compiler generated dependencies of target server
+[100%] Built target server

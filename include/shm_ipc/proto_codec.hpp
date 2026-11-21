@@ -11,6 +11,7 @@
 #define SHM_IPC_PROTO_CODEC_HPP_
 
 #include <cstring>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -118,8 +119,9 @@ class ProtoCodec : public ICodec
     static uint32_t EncodeTo(const T& msg, void* buf, uint32_t buf_size, uint32_t seq)
     {
         std::string name = msg.GetTypeName();
-        auto name_len    = static_cast<uint16_t>(name.size());
-        auto pb_len      = static_cast<uint32_t>(msg.ByteSizeLong());
+        uint16_t name_len = 0;
+        uint32_t pb_len = 0;
+        if (!CheckedSize(msg, name, &name_len, &pb_len)) return 0;
 
         const uint32_t payload_len = kTypeNameLenSize + name_len + pb_len;
         char* p                    = EncodeFrame(buf, buf_size, payload_len, seq);
@@ -134,7 +136,7 @@ class ProtoCodec : public ICodec
         std::memcpy(p, name.data(), name_len);
         p += name_len;
 
-        msg.SerializeToArray(p, static_cast<int>(pb_len));
+        if (!msg.SerializeToArray(p, static_cast<int>(pb_len))) return 0;
         return kMsgHeaderSize + payload_len;
     }
 
@@ -188,6 +190,7 @@ class ProtoCodec : public ICodec
      */
     static bool DecodeFrom(const void* payload, uint32_t payload_len, T* out)
     {
+        if (payload_len > static_cast<uint32_t>(std::numeric_limits<int>::max())) return false;
         return out->ParseFromArray(payload, static_cast<int>(payload_len));
     }
 
@@ -205,9 +208,9 @@ class ProtoCodec : public ICodec
     static int Send(RingChannel<Cap>& ch, const T& msg, uint32_t seq)
     {
         std::string name = msg.GetTypeName();
-        auto name_len    = static_cast<uint16_t>(name.size());
-        auto pb_len      = static_cast<uint32_t>(msg.ByteSizeLong());
-        if (pb_len > RingChannel<Cap>::kMaxWriteSize)
+        uint16_t name_len = 0;
+        uint32_t pb_len = 0;
+        if (!CheckedSize(msg, name, &name_len, &pb_len) || pb_len > RingChannel<Cap>::kMaxWriteSize)
         {
             return -1;
         }
@@ -216,10 +219,7 @@ class ProtoCodec : public ICodec
         return SendFrame(ch, payload_len, seq, [&](auto& batch) {
             batch.TryWrite(&name_len, kTypeNameLenSize);
             batch.TryWrite(name.data(), name_len);
-            if (pb_len > 0)
-            {
-                SerializeToBatch(batch, msg, pb_len);
-            }
+            if (!SerializeToBatch(batch, msg, pb_len)) batch.Cancel();
         });
     }
 
@@ -232,21 +232,20 @@ class ProtoCodec : public ICodec
     static int SendBatch(typename RingChannel<Cap>::ChannelBatchWriter& batch, const T& msg, uint32_t seq)
     {
         std::string name = msg.GetTypeName();
-        auto name_len    = static_cast<uint16_t>(name.size());
-        auto pb_len      = static_cast<uint32_t>(msg.ByteSizeLong());
-        if (pb_len > RingChannel<Cap>::kMaxWriteSize)
+        uint16_t name_len = 0;
+        uint32_t pb_len = 0;
+        if (!CheckedSize(msg, name, &name_len, &pb_len) || pb_len > RingChannel<Cap>::kMaxWriteSize)
         {
             return -1;
         }
         uint32_t payload_len = kTypeNameLenSize + name_len + pb_len;
 
+        const uint64_t before = batch.PendingBytes();
+        const int before_count = batch.Count();
         return SendFrameBatch<Cap>(batch, payload_len, seq, [&](auto& b) {
             b.TryWrite(&name_len, kTypeNameLenSize);
             b.TryWrite(name.data(), name_len);
-            if (pb_len > 0)
-            {
-                SerializeToBatch(b, msg, pb_len);
-            }
+            if (!SerializeToBatch(b, msg, pb_len)) b.RewindTo(before, before_count);
         });
     }
 
@@ -286,6 +285,17 @@ class ProtoCodec : public ICodec
     }
 
  private:
+    static bool CheckedSize(const T& msg, const std::string& name, uint16_t* name_len, uint32_t* pb_len)
+    {
+        const auto size = msg.ByteSizeLong();
+        if (name.size() > UINT16_MAX || size > static_cast<uint64_t>(std::numeric_limits<int>::max())) return false;
+        const uint64_t total = kMsgHeaderSize + kTypeNameLenSize + static_cast<uint64_t>(name.size()) + size;
+        if (total > UINT32_MAX) return false;
+        *name_len = static_cast<uint16_t>(name.size());
+        *pb_len = static_cast<uint32_t>(size);
+        return true;
+    }
+
     /**
      * @brief 校验帧内 type_name 是否与 T 的实际类型名一致
      */
@@ -303,13 +313,19 @@ class ProtoCodec : public ICodec
      * 优先使用 Reserve 获取直写指针（零拷贝），跨环尾时回退到临时缓冲区。
      */
     template <typename BatchWriter>
-    static void SerializeToBatch(BatchWriter& batch, const T& msg, uint32_t pb_len)
+    static bool SerializeToBatch(BatchWriter& batch, const T& msg, uint32_t pb_len)
     {
+        if (pb_len == 0)
+        {
+            char empty = 0;
+            return msg.SerializeToArray(&empty, 0);
+        }
         char* ptr = batch.Reserve(pb_len);
         if (ptr)
         {
-            msg.SerializeToArray(ptr, static_cast<int>(pb_len));
+            if (!msg.SerializeToArray(ptr, static_cast<int>(pb_len))) return false;
             batch.CommitReserve(pb_len);
+            return true;
         }
         else
         {
@@ -322,8 +338,8 @@ class ProtoCodec : public ICodec
                 heap_buf.resize(pb_len);
                 buf = heap_buf.data();
             }
-            msg.SerializeToArray(buf, static_cast<int>(pb_len));
-            batch.TryWrite(buf, pb_len);
+            if (!msg.SerializeToArray(buf, static_cast<int>(pb_len))) return false;
+            return batch.TryWrite(buf, pb_len) == 0;
         }
     }
 };

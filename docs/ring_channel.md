@@ -1,5 +1,8 @@
 # RingChannel 技术文档
 
+当前通知后端为非阻塞 eventfd，已放弃 socketpair 通知方案。fd 通过 SCM_RIGHTS 共享，双方必须保持 O_NONBLOCK，不得修改共享阻塞属性；握手时验证类型与非阻塞属性。DrainNotify 一次读取合并计数，该计数不等于消息数量。读取预算与本地 WakeReader 使用原有机制。
+
+
 ## 1. 架构总览
 
 `RingChannel` 是 `shm_ipc` 库的核心组件，实现了基于共享内存的高性能双向进程间通信（IPC）通道。整体架构分为四个层次：
@@ -78,7 +81,7 @@ inline ErrorCode CreateMemfd(const char *name, std::size_t size,
 1. **使用 `syscall(__NR_memfd_create)` 而非 `memfd_create()`**：直接使用系统调用号，避免依赖 glibc 2.27+ 的包装函数，提高在老版本系统上的可移植性。
 2. **`name` 参数仅用于调试**：出现在 `/proc/<pid>/fd/` 的符号链接中（如 `memfd:client_to_server`），便于通过 `ls -la /proc/<pid>/fd/` 排查问题，不影响功能。
 3. **`MFD_CLOEXEC | MFD_ALLOW_SEALING`**：`MFD_CLOEXEC` 只影响本进程 `exec` 时是否继承该 fd，不影响 `SCM_RIGHTS` 传递给其他进程，因此可以安全开启，防止 fd 泄露给子进程。未使用 `MFD_HUGETLB` 以保持通用性。
-4. **创建即封印（seal）**：`F_SEAL_SHRINK | F_SEAL_GROW` 使文件大小不可再变。否则恶意对端在握手后 `ftruncate` 缩小文件，接收方映射区域会因访问已被截断的页而触发 `SIGBUS`。seal 不影响已建立的可写映射。不支持 seal 的内核静默跳过，仅失去这层硬化。
+4. **创建即封印（seal）**：`F_SEAL_SHRINK | F_SEAL_GROW` 使文件大小不可再变。否则恶意对端在握手后 `ftruncate` 缩小文件，接收方映射区域会因访问已被截断的页而触发 `SIGBUS`。seal 不影响已建立的可写映射。创建端在封印失败时返回错误；接收端在检查尺寸之前验证这两个 seal，拒绝未封印或仅部分封印的共享文件。
 5. **错误码而非异常**：`ftruncate` 失败时先 `close(fd)` 再返回错误码；成功时才把 fd 交给出参 `UniqueFd`。
 
 ### 2.4 在 RingChannel 中的使用
@@ -611,6 +614,19 @@ enum class FdTag : uint32_t
 
 这防止握手时序错乱——如果客户端和服务端的发送/接收顺序不一致，`RecvFdExpect` 会立即返回 `kProtocol`（并关闭收到的 fd），而不是静默地把 eventfd 当作 memfd 使用（这会导致难以排查的内存损坏）。
 
+标签来自对端，不能证明 fd 的真实类型。通道握手还会检查通知 fd 的
+`O_NONBLOCK` 标志，并通过 `/proc/self/fd/<fd>` 校验内核类型为
+`anon_inode:[eventfd]`。伪造类型或阻塞 eventfd 返回 `kProtocol`；
+`/proc/self/fd` 无法访问时返回系统错误并拒绝建立通道。
+
+环数据访问使用当前游标快照检查 `write_pos - read_pos <= Capacity`，
+按无符号减法保留正常的 uint64 游标回绕。损坏环的 `Peek` 返回 `-2`，
+`FrameReader` 将其转换为协议错误 `-3`；连接层关闭连接。
+裸 `TryRead` 返回 0、写入返回失败，调用方可通过 `Peek` 区分空环与损坏环。
+
+这些检查不能阻止持有可写共享映射或共享 fd 的对端在运行期间篡改数据、
+游标或 fd 状态；通道仍要求对端遵守 SPSC 协议。
+
 ---
 
 ## 7. Codec — 帧编解码
@@ -813,7 +829,7 @@ Client 进程                                        Server 进程
 ```
 写方 CPU                              读方 CPU
 ─────────                             ─────────
-memcpy(payload)      ①             
+memcpy(payload)      ①           
 write_pos = new_val  ②                 load write_pos  → 看到 new_val
                                        memcpy(payload)  → 可能看到旧数据！
 ```
@@ -825,7 +841,7 @@ write_pos = new_val  ②                 load write_pos  → 看到 new_val
 ```
 写方                                  读方
 ─────                                ─────
-memcpy(payload)                  
+memcpy(payload)                
 write_pos.store(release)  ③          write_pos.load(acquire)  ⑤
        │                                    │
        │  release 保证：                     │  acquire 保证：
@@ -888,3 +904,57 @@ x86 是 TSO（Total Store Order）架构，硬件保证：
 | `src/client.cpp`                        | 客户端，定时发送 + eventfd 接收                                                                                                 |
 | `bench/bench_shm.cpp`                   | fork + socketpair 回声延迟基准测试                                                                                              |
 | `bench/bench_app.cpp`                   | 上层接口（ShmServer + ShmAsyncClient）按批吞吐基准                                                                              |
+
+### 异常与时间边界
+
+通道握手使用一个 `steady_clock` 截止时间，四次 fd 交换共享 5 秒预算。
+短读、短写和 EINTR 都不重置预算；超时返回 `kTimeout`，errno 出参为
+`ETIMEDOUT`。握手使用 `poll` 配合非阻塞的单次系统调用，不修改调用方的
+socket 收发超时配置。
+
+`ShmConnection` 的 codec 或消息回调抛异常时，连接执行 shutdown，异常
+继续向外传播。已投递的帧会提交读取，不再重放；未投递的剩余数据随连接
+关闭处理。关闭回调抛异常时，连接上下文及 RPC 上下文仍会清理。
+
+直接编码预留因普通映射跨尾失败时，会回退到编码缓冲和跨尾写入路径。
+验证超时及一次性定时器使用 int64 毫秒，避免超过 INT32_MAX 的时间截断；
+无法由平台 time_t 表示的超时会返回参数错误。
+
+### 读取所有权、重入与调度预算
+
+`FrameReader` 不可复制，也不可移动赋值。移动构造会转移待提交帧并清空
+源对象的待提交长度，避免重复推进读游标；含有 FrameReader 的 codec 同样
+不可复制。调用方应在 reader 销毁前提交最后一帧。
+
+异步客户端为每次 Connect 分配事务代次。旧建连回调抛异常时，只能回滚
+同一代次的连接，不能关闭回调内重连成功的新连接。
+
+正常 `DrainRing` 每轮最多处理 64 个消息或心跳、256 KiB 数据，或处理至
+2 ms 预算用尽，达到任一条件即让出事件循环。检查发生在一帧处理完成后，
+单帧解码和用户回调不能被抢占。剩余数据通过本地 eventfd 安排下一轮消费，
+无需对端继续写入。EOF 路径使用 `DrainRing(true)` 完整处理尾部数据。
+
+同步客户端的零长度读取立即返回 0；非零长度且缓冲指针为空返回 -1，
+错误码为 `kInvalidArgument`。读取上限按环容量限制，避免 size_t 转为
+uint32_t 时截断。
+
+同一 `EventLoop` 不允许嵌套或并发 `Run()`。已有 Run 尚未完全退出时，
+再次调用返回 `kInvalidArgument`，errno 出参为 `EBUSY`。`Stop()` 只请求
+退出，独占运行守卫会覆盖剩余分发、post-dispatch 钩子和墓碑回收；
+正常退出、错误码返回及回调抛异常后，守卫都会释放，允许再次运行。
+
+### 回调替换及路径输入
+
+连接、服务端和异步客户端的回调槽位会在调用期间保留当前回调实例。
+回调内替换或清空自身只影响后续调用；当前捕获对象一直存活到本次调用
+结束，mutable 捕获的状态也会保留。该机制不会在每次分发时复制函数对象。
+验证回调返回后，已拒绝或关闭的连接不再触发建连回调；等待异步验证的
+连接仍保持原有建连通知语义。
+
+文件系统 Unix socket 路径不允许嵌入 NUL。监听、连接及 unlink 共用路径
+校验；含 NUL 的路径不会被截断或进入系统调用，监听/连接返回
+`kInvalidArgument`，errno 出参为 `EINVAL`。
+
+服务端收编握手完成连接时，先构造临时队列，再清除握手 eventfd 通知。
+队列构造分配失败会返回 `kNoMemory`，完成队列及可读通知保持原状；
+调用方恢复 `Run()` 后可继续收编，无需等待新客户端到来。
