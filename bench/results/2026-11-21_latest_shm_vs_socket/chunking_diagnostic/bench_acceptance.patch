@@ -1,0 +1,11 @@
+--- base/bench_acceptance.cpp
++++ profile/bench_acceptance.cpp
+@@ -142,7 +142,7 @@
+     Options o;
+     REQUIRE(argc>=3);o.role=argv[1];o.path=argv[2];
+     for(int i=3;i<argc;++i) { REQUIRE(i+1<argc);std::string k=argv[i];const char* v=argv[++i];
+-        if(k=="--transport")o.transport=v;else if(k=="--socket-buffer")socket_bench::buffer_bytes=std::atoi(v);else if(k=="--socket-coalesce")socket_bench::coalesce=std::atoi(v)!=0;else if(k=="--bytes")o.bytes=std::atoi(v);else if(k=="--batch")o.batch=std::atoi(v);
++        if(k=="--transport")o.transport=v;else if(k=="--socket-threshold")socket_bench::flush_threshold=std::strtoull(v,nullptr,10);else if(k=="--socket-buffer")socket_bench::buffer_bytes=std::atoi(v);else if(k=="--socket-coalesce")socket_bench::coalesce=std::atoi(v)!=0;else if(k=="--bytes")o.bytes=std::atoi(v);else if(k=="--batch")o.batch=std::atoi(v);
+         else if(k=="--seconds")o.seconds=std::atof(v);else if(k=="--warmup")o.warmup=std::atof(v);
+         else if(k=="--gap-us")o.gap_us=std::atoi(v);else if(k=="--sessions")o.sessions=std::atoi(v);
+         else if(k=="--messages")o.messages=std::strtoull(v,nullptr,10);else if(k=="--stride")o.stride=std::atoi(v);else if(k=="--reconnect")o.reconnect=std::atoi(v);else REQUIRE(false);

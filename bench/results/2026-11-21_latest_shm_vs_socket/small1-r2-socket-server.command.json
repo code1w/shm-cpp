@@ -1,0 +1,1 @@
+["taskset", "-c", "2", "/tmp/shm-vs-socket/bench_acceptance", "server", "/tmp/shm-socket-ab-ef2a_av0/ipc.sock", "--transport", "socket"]

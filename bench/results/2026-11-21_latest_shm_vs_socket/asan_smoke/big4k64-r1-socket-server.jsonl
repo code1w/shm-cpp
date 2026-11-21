@@ -1,0 +1,6 @@
+{"role":"ready"}
+{"role":"socket_buffers","send":425984,"receive":425984,"coalesce":true}
+{"role":"socket_io","send_calls":3084,"short_writes":0,"write_eagain":0,"recv_calls":4113}
+{"role":"server_close","time_ns":101349630803363663}
+{"role":"server_tick","active":0,"opened":1,"closed":1,"replies":65792,"send_failures":0,"fds":7,"ring_maps":0}
+{"role":"server_final","opened":1,"closed":1,"base_fds":4,"final_fds":4,"ring_maps":0}

@@ -1,6 +1,7 @@
 // Cross-process application acceptance harness: codec + EventLoop + connection.
 // Sampled per-request RTT, fixed-size histogram, deterministic content checks.
 #include <shm_ipc/shm_server.hpp>
+#include "socket_peer.hpp"
 #include <shm_ipc/shm_async_client.hpp>
 #include <shm_ipc/simple_pod_codec.hpp>
 #include <algorithm>
@@ -56,7 +57,7 @@ struct Histogram {
         return max;
     }
 };
-struct Options { std::string role,path;int bytes=16,batch=64,gap_us=0,sessions=1,stride=64,reconnect=0;double seconds=10,warmup=1;uint64_t messages=0; };
+struct Options { std::string role,path,transport="shm";int bytes=16,batch=64,gap_us=0,sessions=1,stride=64,reconnect=0;double seconds=10,warmup=1;uint64_t messages=0; };
 template<class T> std::any Make() { T p{};for(size_t i=0;i<sizeof(p.data);++i)p.data[i]=static_cast<unsigned char>(i*131+17);return p; }
 template<class T> void SetSeq(std::any& a,uint64_t seq) { std::any_cast<T&>(a).seq=seq; }
 template<class T> uint64_t Verify(const std::any& a,bool full) {
@@ -65,24 +66,13 @@ template<class T> uint64_t Verify(const std::any& a,bool full) {
     else { REQUIRE(p->data[0]==17);REQUIRE(p->data[sizeof(p->data)-1]==static_cast<unsigned char>((sizeof(p->data)-1)*131+17)); }
     return p->seq;
 }
-int main(int argc,char** argv) {
-    ::signal(SIGPIPE,SIG_IGN);::signal(SIGTERM,Signal);::signal(SIGINT,Signal);
-    Options o;
-    REQUIRE(argc>=3);o.role=argv[1];o.path=argv[2];
-    for(int i=3;i<argc;++i) { REQUIRE(i+1<argc);std::string k=argv[i];const char* v=argv[++i];
-        if(k=="--bytes")o.bytes=std::atoi(v);else if(k=="--batch")o.batch=std::atoi(v);
-        else if(k=="--seconds")o.seconds=std::atof(v);else if(k=="--warmup")o.warmup=std::atof(v);
-        else if(k=="--gap-us")o.gap_us=std::atoi(v);else if(k=="--sessions")o.sessions=std::atoi(v);
-        else if(k=="--messages")o.messages=std::strtoull(v,nullptr,10);else if(k=="--stride")o.stride=std::atoi(v);else if(k=="--reconnect")o.reconnect=std::atoi(v);else REQUIRE(false);
-    }
-    REQUIRE((o.bytes==16||o.bytes==4096||o.bytes==1048576)&&o.batch>0&&o.batch<=256&&o.sessions>0&&o.stride>0&&o.gap_us>=0&&o.seconds>0&&o.warmup>=0);
-    REQUIRE(o.bytes!=1048576||o.batch<=4);
-    shm::codec::SimplePodCodec::RegisterPod<Small>();shm::codec::SimplePodCodec::RegisterPod<Big>();shm::codec::SimplePodCodec::RegisterPod<Huge>();
+template<class Server,class Client>
+static int Run(const Options& o) {
     const size_t base_fds=Fds(),base_maps=Maps();
     if(o.role=="server") {
         uint64_t replies=0,opened=0,closed=0,send_failures=0;int active=0;
         {
-            shm::EventLoop loop;shm::ShmServer server(&loop,o.path,"acceptance");
+            shm::EventLoop loop;Server server(&loop,o.path,"acceptance");
             server.SetCodecFactory([]{return std::make_shared<shm::codec::SimplePodCodec>();});
             server.SetConnectionCallback([&](const comm::TcpConnPtr&){++opened;++active;});
             server.SetCloseCallback([&](const comm::TcpConnPtr&){++closed;--active;REQUIRE(active>=0);std::printf("{\"role\":\"server_close\",\"time_ns\":%llu}\n",(unsigned long long)Now());std::fflush(stdout);});
@@ -103,7 +93,7 @@ int main(int argc,char** argv) {
     Histogram hist;std::vector<uint64_t> stamps(o.batch);
     std::any request=o.bytes==16?Make<Small>():o.bytes==4096?Make<Big>():Make<Huge>();
     {
-        shm::EventLoop loop;shm::ShmAsyncClient client(&loop);
+        shm::EventLoop loop;Client client(&loop);
         client.SetCodecFactory([]{return std::make_shared<shm::codec::SimplePodCodec>();});
         auto batch=[&](const comm::TcpConnPtr& c) {
             uint64_t amount=o.batch;if(o.messages)amount=std::min<uint64_t>(amount,o.messages-sent);
@@ -145,4 +135,23 @@ int main(int argc,char** argv) {
     REQUIRE(Fds()==base_fds&&Maps()==base_maps);
     std::printf("{\"role\":\"client_final\",\"completed\":%s,\"failed\":%s,\"sessions\":%d,\"close_events\":%d,\"received\":%llu,\"base_fds\":%zu,\"final_fds\":%zu,\"ring_maps\":%zu}\n",completed?"true":"false",failed?"true":"false",session,close_events,(unsigned long long)received,base_fds,Fds(),Maps());
     return completed&&!failed?0:2;
+}
+
+int main(int argc,char** argv) {
+    ::signal(SIGPIPE,SIG_IGN);::signal(SIGTERM,Signal);::signal(SIGINT,Signal);
+    Options o;
+    REQUIRE(argc>=3);o.role=argv[1];o.path=argv[2];
+    for(int i=3;i<argc;++i) { REQUIRE(i+1<argc);std::string k=argv[i];const char* v=argv[++i];
+        if(k=="--transport")o.transport=v;else if(k=="--socket-buffer")socket_bench::buffer_bytes=std::atoi(v);else if(k=="--socket-coalesce")socket_bench::coalesce=std::atoi(v)!=0;else if(k=="--bytes")o.bytes=std::atoi(v);else if(k=="--batch")o.batch=std::atoi(v);
+        else if(k=="--seconds")o.seconds=std::atof(v);else if(k=="--warmup")o.warmup=std::atof(v);
+        else if(k=="--gap-us")o.gap_us=std::atoi(v);else if(k=="--sessions")o.sessions=std::atoi(v);
+        else if(k=="--messages")o.messages=std::strtoull(v,nullptr,10);else if(k=="--stride")o.stride=std::atoi(v);else if(k=="--reconnect")o.reconnect=std::atoi(v);else REQUIRE(false);
+    }
+    REQUIRE((o.bytes==16||o.bytes==4096||o.bytes==1048576)&&o.batch>0&&o.batch<=256&&o.sessions>0&&o.stride>0&&o.gap_us>=0&&o.seconds>0&&o.warmup>=0);
+    REQUIRE(o.bytes!=1048576||o.batch<=4);
+    shm::codec::SimplePodCodec::RegisterPod<Small>();shm::codec::SimplePodCodec::RegisterPod<Big>();shm::codec::SimplePodCodec::RegisterPod<Huge>();
+    REQUIRE(o.transport=="shm"||o.transport=="socket");
+    REQUIRE(socket_bench::buffer_bytes>0);
+    if(o.transport=="socket")return Run<socket_bench::Server,socket_bench::Client>(o);
+    return Run<shm::ShmServer,shm::ShmAsyncClient>(o);
 }

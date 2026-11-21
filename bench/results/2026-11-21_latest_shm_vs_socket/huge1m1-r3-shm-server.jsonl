@@ -1,0 +1,15 @@
+{"role":"ready"}
+{"role":"server_tick","active":1,"opened":1,"closed":0,"replies":1170,"send_failures":0,"fds":13,"ring_maps":4}
+{"role":"server_tick","active":1,"opened":1,"closed":0,"replies":2417,"send_failures":0,"fds":13,"ring_maps":4}
+{"role":"server_tick","active":1,"opened":1,"closed":0,"replies":3648,"send_failures":0,"fds":13,"ring_maps":4}
+{"role":"server_tick","active":1,"opened":1,"closed":0,"replies":4901,"send_failures":0,"fds":13,"ring_maps":4}
+{"role":"server_tick","active":1,"opened":1,"closed":0,"replies":6183,"send_failures":0,"fds":13,"ring_maps":4}
+{"role":"server_tick","active":1,"opened":1,"closed":0,"replies":7433,"send_failures":0,"fds":13,"ring_maps":4}
+{"role":"server_tick","active":1,"opened":1,"closed":0,"replies":8691,"send_failures":0,"fds":13,"ring_maps":4}
+{"role":"server_tick","active":1,"opened":1,"closed":0,"replies":9947,"send_failures":0,"fds":13,"ring_maps":4}
+{"role":"server_tick","active":1,"opened":1,"closed":0,"replies":11207,"send_failures":0,"fds":13,"ring_maps":4}
+{"role":"server_tick","active":1,"opened":1,"closed":0,"replies":12488,"send_failures":0,"fds":13,"ring_maps":4}
+{"role":"server_tick","active":1,"opened":1,"closed":0,"replies":13769,"send_failures":0,"fds":13,"ring_maps":4}
+{"role":"server_close","time_ns":101350143351371521}
+{"role":"server_tick","active":0,"opened":1,"closed":1,"replies":13821,"send_failures":0,"fds":8,"ring_maps":0}
+{"role":"server_final","opened":1,"closed":1,"base_fds":4,"final_fds":4,"ring_maps":0}

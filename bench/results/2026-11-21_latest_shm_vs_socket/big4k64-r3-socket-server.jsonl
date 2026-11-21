@@ -1,0 +1,17 @@
+{"role":"ready"}
+{"role":"socket_buffers","send":425984,"receive":425984,"coalesce":true}
+{"role":"server_tick","active":1,"opened":1,"closed":0,"replies":700416,"send_failures":0,"fds":8,"ring_maps":0}
+{"role":"server_tick","active":1,"opened":1,"closed":0,"replies":1456512,"send_failures":0,"fds":8,"ring_maps":0}
+{"role":"server_tick","active":1,"opened":1,"closed":0,"replies":2212800,"send_failures":0,"fds":8,"ring_maps":0}
+{"role":"server_tick","active":1,"opened":1,"closed":0,"replies":2964608,"send_failures":0,"fds":8,"ring_maps":0}
+{"role":"server_tick","active":1,"opened":1,"closed":0,"replies":3720192,"send_failures":0,"fds":8,"ring_maps":0}
+{"role":"server_tick","active":1,"opened":1,"closed":0,"replies":4470464,"send_failures":0,"fds":8,"ring_maps":0}
+{"role":"server_tick","active":1,"opened":1,"closed":0,"replies":5222848,"send_failures":0,"fds":8,"ring_maps":0}
+{"role":"server_tick","active":1,"opened":1,"closed":0,"replies":5975936,"send_failures":0,"fds":8,"ring_maps":0}
+{"role":"server_tick","active":1,"opened":1,"closed":0,"replies":6730816,"send_failures":0,"fds":8,"ring_maps":0}
+{"role":"server_tick","active":1,"opened":1,"closed":0,"replies":7485248,"send_failures":0,"fds":8,"ring_maps":0}
+{"role":"server_tick","active":1,"opened":1,"closed":0,"replies":8244288,"send_failures":0,"fds":8,"ring_maps":0}
+{"role":"socket_io","send_calls":387337,"short_writes":0,"write_eagain":0,"recv_calls":516450}
+{"role":"server_close","time_ns":101350119262860562}
+{"role":"server_tick","active":0,"opened":1,"closed":1,"replies":8263104,"send_failures":0,"fds":7,"ring_maps":0}
+{"role":"server_final","opened":1,"closed":1,"base_fds":4,"final_fds":4,"ring_maps":0}

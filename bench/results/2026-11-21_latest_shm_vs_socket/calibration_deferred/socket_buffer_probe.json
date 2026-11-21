@@ -1,0 +1,8 @@
+{
+  "requested_bytes": 4194304,
+  "effective_send": 425984,
+  "effective_receive": 425984,
+  "force_send_errno": 1,
+  "force_receive_errno": 1,
+  "global_sysctl_modified": false
+}

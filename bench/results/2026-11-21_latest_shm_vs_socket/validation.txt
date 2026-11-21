@@ -1,0 +1,6 @@
+42 final A/B application measurements validated (7 cases x 3 pairs).
+14 final-adapter ASan/UBSan+leak smoke measurements validated, including actual short-write/EAGAIN paths.
+9 three-mode same-binary chunking diagnostic measurements validated.
+Final native processes returned success and fd/mapping cleanup checks passed.
+Final source fingerprints match; calibration-deferred header archive matches its historical recorded fingerprint and is excluded from results.
+Production include/ implementation unchanged.

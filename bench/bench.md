@@ -1,9 +1,11 @@
 # Echo Benchmark: Unix Socket vs Shared Memory
 
+最新的应用层吞吐与逐请求 RTT 对比见 [2026-11-21 SHM vs Unix socket](results/2026-11-21_latest_shm_vs_socket/README.md)，两端使用共同 codec 和 EventLoop。下方为历史传输层 busy-poll 测量，两类路径应分别解读。
+
 ## 测试环境
 
 - Linux 3.10.0, GCC 11.2.0, `-O2`
-- `fork()` + `socketpair()` 单进程内 server/client
+- `fork()` + `socketpair()` 两个进程分别运行 server/client
 - Ping-pong echo：client 发一条 → server 原样回送 → client 收到后再发下一条
 - 每组预热 1000 轮，不计入统计
 

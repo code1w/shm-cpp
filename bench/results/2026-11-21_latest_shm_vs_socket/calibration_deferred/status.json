@@ -1,0 +1,5 @@
+{
+  "final_comparison": false,
+  "cancelled": true,
+  "reason": "reply flush deferred until end of receive loop; corrected before final comparison"
+}

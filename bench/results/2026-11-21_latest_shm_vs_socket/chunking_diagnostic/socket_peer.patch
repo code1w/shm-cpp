@@ -1,0 +1,19 @@
+--- base/socket_peer.hpp
++++ profile/socket_peer.hpp
+@@ -16,6 +16,7 @@
+ 
+ namespace socket_bench {
+ inline bool coalesce=true;
++inline size_t flush_threshold=0;
+ inline int buffer_bytes=4*1024*1024;
+ inline void Check(bool condition) { if(!condition)throw std::runtime_error("socket benchmark invariant"); }
+ class Peer : public comm::ITcpConnection,public std::enable_shared_from_this<Peer> {
+@@ -111,7 +112,7 @@
+         size_t need=0;int32_t len=codec_->Encode(pkg,tx_.data()+tx_size_,tx_.size()-tx_size_,&need);
+         if(len!=bytes)return false;
+         tx_size_+=size_t(len);
+-        if(!coalesce)Flush();
++        if(!coalesce || (flush_threshold && tx_size_-tx_off_>=flush_threshold))Flush();
+         return !failed_;
+     }
+     void Close() override {

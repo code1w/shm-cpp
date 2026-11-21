@@ -1,0 +1,1 @@
+["taskset", "-c", "4", "/tmp/socket-chunk-profile-zxv4e6bt/bench", "client", "/tmp/socket-chunk-case-ryk7kqhg/ipc.sock", "--transport", "socket", "--socket-threshold", "1280", "--seconds", "5", "--warmup", "1", "--batch", "256", "--stride", "64"]

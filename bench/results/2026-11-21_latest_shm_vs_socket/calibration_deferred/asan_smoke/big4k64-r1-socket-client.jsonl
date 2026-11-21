@@ -1,0 +1,6 @@
+{"role":"socket_buffers","send":425984,"receive":425984,"coalesce":true}
+{"role":"client_connected","session":1,"time_ns":101349404199222311}
+{"role":"result","session":1,"bytes":4096,"batch":64,"gap_us":0,"messages":56768,"seconds":0.300176921,"msg_s":189115.139,"samples":3584,"p50_ns":237568,"p99_ns":401408,"p999_ns":516096,"max_ns":2519336,"full_checks":906,"errors":0}
+{"role":"socket_io","send_calls":887,"short_writes":0,"write_eagain":0,"recv_calls":3547}
+{"role":"client_close","unexpected":false,"time_ns":101349404499514019}
+{"role":"client_final","completed":true,"failed":false,"sessions":1,"close_events":1,"received":56768,"base_fds":4,"final_fds":4,"ring_maps":0}
