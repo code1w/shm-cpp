@@ -1,0 +1,6 @@
+{"role":"client_connected","session":1,"time_ns":101347169374602180}
+{"role":"client_close","unexpected":true,"time_ns":101347169543221867}
+{"role":"client_connected","session":2,"time_ns":101347170374871187}
+{"role":"result","session":2,"bytes":16,"batch":64,"gap_us":0,"messages":609472,"seconds":0.400031738,"msg_s":1523559.113,"samples":38084,"p50_ns":17664,"p99_ns":40960,"p999_ns":48128,"max_ns":167151,"full_checks":9527,"errors":0}
+{"role":"client_close","unexpected":false,"time_ns":101347170774954274}
+{"role":"client_final","completed":true,"failed":false,"sessions":2,"close_events":2,"received":609472,"base_fds":4,"final_fds":4,"ring_maps":0}

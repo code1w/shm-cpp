@@ -1,0 +1,2 @@
+{"time": 1795261145.8358765, "pid": 19196, "role": "server", "VmRSS": "18444 kB", "RssAnon": "388 kB", "RssShmem": "16400 kB", "Threads": "1"}
+{"time": 1795261145.8360207, "pid": 19197, "role": "client", "VmRSS": "18444 kB", "RssAnon": "384 kB", "RssShmem": "16400 kB", "Threads": "1"}

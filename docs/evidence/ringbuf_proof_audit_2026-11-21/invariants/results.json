@@ -1,0 +1,42 @@
+{
+  "solver": "4.12.2",
+  "scope": "logical unbounded positions; memory visibility is a separate obligation",
+  "transitions": [
+    {
+      "transition": "pending_write",
+      "counterexample": "unsat",
+      "enabled": "sat"
+    },
+    {
+      "transition": "publish",
+      "counterexample": "unsat",
+      "enabled": "sat"
+    },
+    {
+      "transition": "consume",
+      "counterexample": "unsat",
+      "enabled": "sat"
+    },
+    {
+      "transition": "cancel",
+      "counterexample": "unsat",
+      "enabled": "sat"
+    },
+    {
+      "transition": "rewind",
+      "counterexample": "unsat",
+      "enabled": "sat"
+    },
+    {
+      "transition": "fresh_snapshot",
+      "counterexample": "unsat",
+      "enabled": "sat"
+    },
+    {
+      "transition": "ordinary_write",
+      "counterexample": "unsat",
+      "enabled": "sat"
+    }
+  ],
+  "unsafe_guard_detected": true
+}

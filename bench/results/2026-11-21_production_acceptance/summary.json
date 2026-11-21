@@ -1,0 +1,260 @@
+{
+  "performance": [
+    {
+      "case": "big4k64",
+      "runs": 3,
+      "rpc_s_median": 1155091.25,
+      "p50_us_median": 27.392,
+      "p99_us_median": 40.448,
+      "p999_us_median": 50.688,
+      "max_us": 1009.758,
+      "min_samples": 720938,
+      "total_samples": 2164130,
+      "rpc_s_range": [
+        1154277.032,
+        1155644.986
+      ]
+    },
+    {
+      "case": "burst_small1",
+      "runs": 3,
+      "rpc_s_median": 920.783,
+      "p50_us_median": 24.32,
+      "p99_us_median": 45.568,
+      "p999_us_median": 204.8,
+      "max_us": 4125.111,
+      "min_samples": 9199,
+      "total_samples": 27622,
+      "rpc_s_range": [
+        919.874,
+        921.472
+      ]
+    },
+    {
+      "case": "huge1m1",
+      "runs": 3,
+      "rpc_s_median": 1264.344,
+      "p50_us_median": 786.432,
+      "p99_us_median": 860.16,
+      "p999_us_median": 991.232,
+      "max_us": 4235.377,
+      "min_samples": 12565,
+      "total_samples": 37889,
+      "rpc_s_range": [
+        1256.486,
+        1267.954
+      ]
+    },
+    {
+      "case": "huge1m4",
+      "runs": 3,
+      "rpc_s_median": 2578.814,
+      "p50_us_median": 1097.728,
+      "p99_us_median": 1327.104,
+      "p999_us_median": 1507.328,
+      "max_us": 4020.394,
+      "min_samples": 25756,
+      "total_samples": 77348,
+      "rpc_s_range": [
+        2575.431,
+        2579.918
+      ]
+    },
+    {
+      "case": "small1",
+      "runs": 3,
+      "rpc_s_median": 94960.196,
+      "p50_us_median": 10.496,
+      "p99_us_median": 15.36,
+      "p999_us_median": 26.624,
+      "max_us": 110.552,
+      "min_samples": 14689,
+      "total_samples": 44176,
+      "rpc_s_range": [
+        94588.411,
+        94962.497
+      ]
+    },
+    {
+      "case": "small256",
+      "runs": 3,
+      "rpc_s_median": 11811403.484,
+      "p50_us_median": 9.856,
+      "p99_us_median": 15.104,
+      "p999_us_median": 26.368,
+      "max_us": 3374.913,
+      "min_samples": 1829768,
+      "total_samples": 5525346,
+      "rpc_s_range": [
+        11701492.031,
+        11824788.927
+      ]
+    },
+    {
+      "case": "small64",
+      "runs": 3,
+      "rpc_s_median": 4737189.884,
+      "p50_us_median": 9.216,
+      "p99_us_median": 13.056,
+      "p999_us_median": 25.344,
+      "max_us": 2551.852,
+      "min_samples": 733893,
+      "total_samples": 2217905,
+      "rpc_s_range": [
+        4694288.414,
+        4757079.475
+      ]
+    }
+  ],
+  "resource_soak": [
+    {
+      "role": "server",
+      "samples": 576,
+      "rss_kib_first_median": 18444.0,
+      "fds_first_median": 12.0,
+      "ring_maps_first_median": 4.0,
+      "threads_first_median": 1.0,
+      "rss_kib_last_median": 18444.0,
+      "fds_last_median": 12.0,
+      "ring_maps_last_median": 4.0,
+      "threads_last_median": 1.0,
+      "rss_kib_range": [
+        1912,
+        18444
+      ],
+      "fd_range": [
+        7,
+        12
+      ],
+      "maps_range": [
+        0,
+        4
+      ]
+    },
+    {
+      "role": "client",
+      "samples": 575,
+      "rss_kib_first_median": 18444.0,
+      "fds_first_median": 10.0,
+      "ring_maps_first_median": 4.0,
+      "threads_first_median": 1.0,
+      "rss_kib_last_median": 18444.0,
+      "fds_last_median": 10.0,
+      "ring_maps_last_median": 4.0,
+      "threads_last_median": 1.0,
+      "rss_kib_range": [
+        18444,
+        18444
+      ],
+      "fd_range": [
+        10,
+        10
+      ],
+      "maps_range": [
+        4,
+        4
+      ]
+    }
+  ],
+  "soak_result": {
+    "role": "result",
+    "session": 1,
+    "bytes": 16,
+    "batch": 256,
+    "gap_us": 0,
+    "messages": 7065022976,
+    "seconds": 600.000008345,
+    "msg_s": 11775038.13,
+    "samples": 110384932,
+    "p50_ns": 9856,
+    "p99_ns": 15104,
+    "p999_ns": 26368,
+    "max_ns": 5337469,
+    "full_checks": 111251581,
+    "errors": 0,
+    "case": "soak"
+  },
+  "faults": [
+    {
+      "scenario": "normal_same_client_reconnect",
+      "sessions": 300,
+      "passed": true
+    },
+    {
+      "scenario": "client_sigkill",
+      "round": 0,
+      "cleanup_and_recovery_test_s": 1.6249932199716568,
+      "close_callback_ms": 0.664603,
+      "passed": true,
+      "kill_time_ns": 101346427200828374,
+      "metric_correction": "first post-kill close, instead of later recovery-session close; kill time recovered exactly from original integer timestamp difference"
+    },
+    {
+      "scenario": "client_sigkill",
+      "round": 1,
+      "cleanup_and_recovery_test_s": 1.6823344081640244,
+      "close_callback_ms": 0.590544,
+      "passed": true,
+      "kill_time_ns": 101346429172702048,
+      "metric_correction": "first post-kill close, instead of later recovery-session close; kill time recovered exactly from original integer timestamp difference"
+    },
+    {
+      "scenario": "client_sigkill",
+      "round": 2,
+      "cleanup_and_recovery_test_s": 1.6225426197052002,
+      "close_callback_ms": 0.61468,
+      "passed": true,
+      "kill_time_ns": 101346431202198732,
+      "metric_correction": "first post-kill close, instead of later recovery-session close; kill time recovered exactly from original integer timestamp difference"
+    },
+    {
+      "scenario": "client_sigkill",
+      "round": 3,
+      "cleanup_and_recovery_test_s": 1.679060235619545,
+      "close_callback_ms": 0.595561,
+      "passed": true,
+      "kill_time_ns": 101346433171560236,
+      "metric_correction": "first post-kill close, instead of later recovery-session close; kill time recovered exactly from original integer timestamp difference"
+    },
+    {
+      "scenario": "client_sigkill",
+      "round": 4,
+      "cleanup_and_recovery_test_s": 1.6330131441354752,
+      "close_callback_ms": 0.592532,
+      "passed": true,
+      "kill_time_ns": 101346435197814568,
+      "metric_correction": "first post-kill close, instead of later recovery-session close; kill time recovered exactly from original integer timestamp difference"
+    },
+    {
+      "scenario": "server_sigkill_same_client_recovery",
+      "round": 0,
+      "recovery_test_s": 3.5057340413331985,
+      "client_disconnect_ms": 0.624138,
+      "client_reconnected_ms": 482.371108,
+      "stale_path_direct_restart_refused": true,
+      "supervisor_cleanup_required": true,
+      "passed": true
+    },
+    {
+      "scenario": "server_sigkill_same_client_recovery",
+      "round": 1,
+      "recovery_test_s": 3.533009350299835,
+      "client_disconnect_ms": 0.632535,
+      "client_reconnected_ms": 502.659291,
+      "stale_path_direct_restart_refused": true,
+      "supervisor_cleanup_required": true,
+      "passed": true
+    },
+    {
+      "scenario": "server_sigkill_same_client_recovery",
+      "round": 2,
+      "recovery_test_s": 3.508128061890602,
+      "client_disconnect_ms": 0.596708,
+      "client_reconnected_ms": 482.253333,
+      "stale_path_direct_restart_refused": true,
+      "supervisor_cleanup_required": true,
+      "passed": true
+    }
+  ],
+  "latency_scope": "closed-loop admitted RPC RTT, histogram upper bounds, no latency SLA asserted"
+}

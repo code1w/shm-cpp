@@ -1,0 +1,20 @@
+--- production/ringbuf.hpp
++++ actual_publish_relaxed/ringbuf.hpp
+@@ -542,7 +542,7 @@
+             std::memcpy(base, src + tail, len - tail);
+         }
+ 
+-        hdr->write_pos.store(w + len, std::memory_order_release);
++        hdr->write_pos.store(w + len, std::memory_order_relaxed);
+         return 0;
+     }
+ 
+@@ -652,7 +652,7 @@
+         }
+ 
+         std::memcpy(base + detail::RingPhys<Capacity>(w), data, len);
+-        hdr->write_pos.store(w + len, std::memory_order_release);
++        hdr->write_pos.store(w + len, std::memory_order_relaxed);
+         return 0;
+     }
+ 

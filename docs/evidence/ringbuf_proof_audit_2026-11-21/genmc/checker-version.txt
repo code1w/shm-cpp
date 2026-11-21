@@ -1,0 +1,3 @@
+GenMC (https://plv.mpi-sws.org/genmc):
+  GenMC v0.10.0 (commit #eab70f8)
+  Built with LLVM 16.0.6 (Release)

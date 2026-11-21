@@ -1,0 +1,2 @@
+seed=0 step=0 capacity=0 mirror=0 origin=0
+FAIL /home/dev/github/shm-cpp/test/test_ringbuf_model.cpp:140: b.TryWrite(data.data(),data.size())==0

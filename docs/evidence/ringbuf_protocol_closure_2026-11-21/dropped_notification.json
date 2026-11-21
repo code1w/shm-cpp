@@ -1,0 +1,375 @@
+{
+  "capacity": 2,
+  "modulus": 8,
+  "frame_bytes": 2,
+  "bounded_drain_progress": true,
+  "drop_notify": true,
+  "closed": false,
+  "visited_states": 314,
+  "transitions": 499,
+  "progress_check": null,
+  "in_flight_sleep_states": 8,
+  "bad_state": {
+    "used": 2,
+    "pos": 2,
+    "flag": 0,
+    "event": false,
+    "writer": 0,
+    "loaded": -1,
+    "reader": 8,
+    "seen": 1,
+    "progress": 0
+  },
+  "trace": [
+    {
+      "action": "W: publish byte",
+      "before": {
+        "used": 0,
+        "pos": 0,
+        "flag": 2,
+        "event": false,
+        "writer": 0,
+        "loaded": -1,
+        "reader": 0,
+        "seen": 0,
+        "progress": 0
+      },
+      "after": {
+        "used": 1,
+        "pos": 1,
+        "flag": 2,
+        "event": false,
+        "writer": 1,
+        "loaded": -1,
+        "reader": 0,
+        "seen": 0,
+        "progress": 0
+      }
+    },
+    {
+      "action": "W: fence",
+      "before": {
+        "used": 1,
+        "pos": 1,
+        "flag": 2,
+        "event": false,
+        "writer": 1,
+        "loaded": -1,
+        "reader": 0,
+        "seen": 0,
+        "progress": 0
+      },
+      "after": {
+        "used": 1,
+        "pos": 1,
+        "flag": 2,
+        "event": false,
+        "writer": 2,
+        "loaded": -1,
+        "reader": 0,
+        "seen": 0,
+        "progress": 0
+      }
+    },
+    {
+      "action": "R: drain notification",
+      "before": {
+        "used": 1,
+        "pos": 1,
+        "flag": 2,
+        "event": false,
+        "writer": 2,
+        "loaded": -1,
+        "reader": 0,
+        "seen": 0,
+        "progress": 0
+      },
+      "after": {
+        "used": 1,
+        "pos": 1,
+        "flag": 2,
+        "event": false,
+        "writer": 2,
+        "loaded": -1,
+        "reader": 1,
+        "seen": 0,
+        "progress": 0
+      }
+    },
+    {
+      "action": "R: capture write baseline",
+      "before": {
+        "used": 1,
+        "pos": 1,
+        "flag": 2,
+        "event": false,
+        "writer": 2,
+        "loaded": -1,
+        "reader": 1,
+        "seen": 0,
+        "progress": 0
+      },
+      "after": {
+        "used": 1,
+        "pos": 1,
+        "flag": 2,
+        "event": false,
+        "writer": 2,
+        "loaded": -1,
+        "reader": 2,
+        "seen": 1,
+        "progress": 0
+      }
+    },
+    {
+      "action": "R: peek",
+      "before": {
+        "used": 1,
+        "pos": 1,
+        "flag": 2,
+        "event": false,
+        "writer": 2,
+        "loaded": -1,
+        "reader": 2,
+        "seen": 1,
+        "progress": 0
+      },
+      "after": {
+        "used": 1,
+        "pos": 1,
+        "flag": 2,
+        "event": false,
+        "writer": 2,
+        "loaded": -1,
+        "reader": 4,
+        "seen": 1,
+        "progress": 0
+      }
+    },
+    {
+      "action": "R: set Waiting",
+      "before": {
+        "used": 1,
+        "pos": 1,
+        "flag": 2,
+        "event": false,
+        "writer": 2,
+        "loaded": -1,
+        "reader": 4,
+        "seen": 1,
+        "progress": 0
+      },
+      "after": {
+        "used": 1,
+        "pos": 1,
+        "flag": 1,
+        "event": false,
+        "writer": 2,
+        "loaded": -1,
+        "reader": 5,
+        "seen": 1,
+        "progress": 0
+      }
+    },
+    {
+      "action": "W: observes Waiting",
+      "before": {
+        "used": 1,
+        "pos": 1,
+        "flag": 1,
+        "event": false,
+        "writer": 2,
+        "loaded": -1,
+        "reader": 5,
+        "seen": 1,
+        "progress": 0
+      },
+      "after": {
+        "used": 1,
+        "pos": 1,
+        "flag": 1,
+        "event": false,
+        "writer": 3,
+        "loaded": 1,
+        "reader": 5,
+        "seen": 1,
+        "progress": 0
+      }
+    },
+    {
+      "action": "W: exchange Waiting to Awake",
+      "before": {
+        "used": 1,
+        "pos": 1,
+        "flag": 1,
+        "event": false,
+        "writer": 3,
+        "loaded": 1,
+        "reader": 5,
+        "seen": 1,
+        "progress": 0
+      },
+      "after": {
+        "used": 1,
+        "pos": 1,
+        "flag": 0,
+        "event": false,
+        "writer": 4,
+        "loaded": -1,
+        "reader": 5,
+        "seen": 1,
+        "progress": 0
+      }
+    },
+    {
+      "action": "W: DROP notification",
+      "before": {
+        "used": 1,
+        "pos": 1,
+        "flag": 0,
+        "event": false,
+        "writer": 4,
+        "loaded": -1,
+        "reader": 5,
+        "seen": 1,
+        "progress": 0
+      },
+      "after": {
+        "used": 1,
+        "pos": 1,
+        "flag": 0,
+        "event": false,
+        "writer": 0,
+        "loaded": -1,
+        "reader": 5,
+        "seen": 1,
+        "progress": 0
+      }
+    },
+    {
+      "action": "R: fence",
+      "before": {
+        "used": 1,
+        "pos": 1,
+        "flag": 0,
+        "event": false,
+        "writer": 0,
+        "loaded": -1,
+        "reader": 5,
+        "seen": 1,
+        "progress": 0
+      },
+      "after": {
+        "used": 1,
+        "pos": 1,
+        "flag": 0,
+        "event": false,
+        "writer": 0,
+        "loaded": -1,
+        "reader": 6,
+        "seen": 1,
+        "progress": 0
+      }
+    },
+    {
+      "action": "R: recheck baseline",
+      "before": {
+        "used": 1,
+        "pos": 1,
+        "flag": 0,
+        "event": false,
+        "writer": 0,
+        "loaded": -1,
+        "reader": 6,
+        "seen": 1,
+        "progress": 0
+      },
+      "after": {
+        "used": 1,
+        "pos": 1,
+        "flag": 0,
+        "event": false,
+        "writer": 0,
+        "loaded": -1,
+        "reader": 8,
+        "seen": 1,
+        "progress": 0
+      }
+    },
+    {
+      "action": "W: publish byte",
+      "before": {
+        "used": 1,
+        "pos": 1,
+        "flag": 0,
+        "event": false,
+        "writer": 0,
+        "loaded": -1,
+        "reader": 8,
+        "seen": 1,
+        "progress": 0
+      },
+      "after": {
+        "used": 2,
+        "pos": 2,
+        "flag": 0,
+        "event": false,
+        "writer": 1,
+        "loaded": -1,
+        "reader": 8,
+        "seen": 1,
+        "progress": 0
+      }
+    },
+    {
+      "action": "W: fence",
+      "before": {
+        "used": 2,
+        "pos": 2,
+        "flag": 0,
+        "event": false,
+        "writer": 1,
+        "loaded": -1,
+        "reader": 8,
+        "seen": 1,
+        "progress": 0
+      },
+      "after": {
+        "used": 2,
+        "pos": 2,
+        "flag": 0,
+        "event": false,
+        "writer": 2,
+        "loaded": -1,
+        "reader": 8,
+        "seen": 1,
+        "progress": 0
+      }
+    },
+    {
+      "action": "W: observes Awake",
+      "before": {
+        "used": 2,
+        "pos": 2,
+        "flag": 0,
+        "event": false,
+        "writer": 2,
+        "loaded": -1,
+        "reader": 8,
+        "seen": 1,
+        "progress": 0
+      },
+      "after": {
+        "used": 2,
+        "pos": 2,
+        "flag": 0,
+        "event": false,
+        "writer": 0,
+        "loaded": -1,
+        "reader": 8,
+        "seen": 1,
+        "progress": 0
+      }
+    }
+  ]
+}

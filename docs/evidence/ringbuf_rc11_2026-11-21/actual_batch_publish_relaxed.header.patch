@@ -1,0 +1,11 @@
+--- production/ringbuf.hpp
++++ actual_batch_publish_relaxed/ringbuf.hpp
+@@ -282,7 +282,7 @@
+         const int n = count_;
+         if (w_ != w_start_)
+         {
+-            hdr_->write_pos.store(w_, std::memory_order_release);
++            hdr_->write_pos.store(w_, std::memory_order_relaxed);
+             w_start_ = w_;
+         }
+         count_ = 0;

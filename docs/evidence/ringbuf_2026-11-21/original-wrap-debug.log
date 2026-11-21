@@ -1,0 +1,30 @@
+=== RingBuf wrap-around test suite (Capacity=4096) ===
+
+--- Test 1: TryWrite + ReadExact wrap ---
+  PASS: 13 tail offsets
+--- Test 2: TryWrite + TryRead partial wrap ---
+  PASS
+--- Test 3: Peek + CommitRead wrap ---
+  PASS
+--- Test 4: Peek no-wrap (single segment) ---
+  PASS
+--- Test 5: BatchWriter wrap ---
+  PASS
+--- Test 6: Multi-frame continuous wrap ---
+  PASS: 100 frames (multiple wrap-arounds)
+--- Test 7: Multi-frame batch write wrap ---
+  PASS: 8 iterations × 10 frames
+--- Test 8: Exhaustive tail offsets ---
+  PASS: 65 tail offsets tested
+--- Test 9: Codec Encode/Decode through ring wrap ---
+  PASS: 9 tail offsets
+--- Test 10: Large message near kMaxWriteSize wrap ---
+  PASS: 6 tail offsets with msg_len=2048
+--- Test 11: TryWrite reject cases ---
+  PASS
+--- Test 12: ReadExact partial-available no consume ---
+  PASS
+--- Test 13: FreeSpace + Available consistency ---
+  PASS
+
+=== TEST PASSED === (25 sub-tests)

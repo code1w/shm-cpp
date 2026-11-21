@@ -1,0 +1,25 @@
+[
+  {
+    "scenario": "normal_same_client_reconnect",
+    "sessions": 8,
+    "passed": true
+  },
+  {
+    "scenario": "client_sigkill",
+    "round": 0,
+    "kill_time_ns": 101347188647787552,
+    "cleanup_and_recovery_test_s": 1.6620443910360336,
+    "close_callback_ms": 1.134493,
+    "passed": true
+  },
+  {
+    "scenario": "server_sigkill_same_client_recovery",
+    "round": 0,
+    "recovery_test_s": 1.2682064920663834,
+    "client_disconnect_ms": 1.098237,
+    "client_reconnected_ms": 841.736137,
+    "stale_path_direct_restart_refused": true,
+    "supervisor_cleanup_required": true,
+    "passed": true
+  }
+]

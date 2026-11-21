@@ -1,0 +1,36 @@
+{
+  "solver": "4.12.2",
+  "scope": "two-miss branch, not full C++ memory model",
+  "cases": [
+    {
+      "name": "both_sc",
+      "bad_state": "unsat",
+      "unsat_core": [
+        "write_pos_fr_fence_order",
+        "reader_wait_fr_fence_order",
+        "lost_wakeup_candidate"
+      ],
+      "witness": null
+    },
+    {
+      "name": "no_reader_sc",
+      "bad_state": "sat",
+      "unsat_core": [],
+      "witness": "[reader_saw_publication = False,\n writer_saw_waiting = False,\n lost_wakeup_candidate = True]"
+    },
+    {
+      "name": "no_writer_sc",
+      "bad_state": "sat",
+      "unsat_core": [],
+      "witness": "[reader_saw_publication = False,\n writer_saw_waiting = False,\n lost_wakeup_candidate = True]"
+    },
+    {
+      "name": "neither_sc",
+      "bad_state": "sat",
+      "unsat_core": [],
+      "witness": "[reader_saw_publication = False,\n writer_saw_waiting = False,\n lost_wakeup_candidate = True]"
+    }
+  ],
+  "non_vacuity_read_source_cases": 4,
+  "encoder_edge_mutations_detected": 2
+}

@@ -1,0 +1,51 @@
+GenMC v0.10.0 (LLVM 16.0.6)
+Copyright (C) 2023 MPI-SWS. All rights reserved.
+
+*** Compilation complete.
+*** Transformation complete.
+Error: Non-atomic race!
+Event (1, 3) conflicts with event (2, 3) in graph:
+<-1, 0> main:
+	(0, 1): Wrlx (_ZL6region[0], 0) atomic:949
+	(0, 2): Wrlx (_ZL6region[64], 0) atomic:949
+	(0, 3): Wrlx (_ZL6region[128], 2) atomic:949
+	(0, 4): THREAD_CREATE [thread 1] pthread.h:142
+	(0, 5): THREAD_CREATE [thread 2] pthread.h:142
+	(0, 6): BLOCK [join]
+<0, 1> _ZL6readerPv:
+	(1, 1): Rrlx (_ZL6region[64], 0) [(0, 2)] atomic:957
+	(1, 2): Racq (_ZL6region[0], 1) [(2, 4)] atomic:957
+	(1, 3): Rna (_ZL6region[4096], 0) [BOTTOM]
+<0, 2> _ZL6writerPv:
+	(2, 1): Rrlx (_ZL6region[0], 0) [(0, 1)] atomic:957
+	(2, 2): Racq (_ZL6region[64], 0) [(0, 2)] atomic:957
+	(2, 3): Wna (_ZL6region[4096], 167) ringbuf.hpp:537
+	(2, 4): Wrlx (_ZL6region[0], 1) atomic:949
+	(2, 5): THREAD_END
+Coherence:
+_ZL6region[0]: [ (0, 1): Wrlx (GU#0, 0) (2, 4): Wrlx (GU#0, 1) ]
+
+Trace to (1, 3):
+[main] atomic: 949: {__c11_atomic_store(&__a_, __d, __m);}
+[main] atomic: 949: {__c11_atomic_store(&__a_, __d, __m);}
+[main] atomic: 949: {__c11_atomic_store(&__a_, __d, __m);}
+[main] pthread.h: 142: (*__newthread) = __VERIFIER_thread_create(__attr, __start_routine, __arg);
+[_ZL6readerPv] atomic: 957: {return __c11_atomic_load(&__a_, __m);}
+[main] pthread.h: 142: (*__newthread) = __VERIFIER_thread_create(__attr, __start_routine, __arg);
+[_ZL6writerPv] atomic: 957: {return __c11_atomic_load(&__a_, __m);}
+[_ZL6writerPv] atomic: 957: {return __c11_atomic_load(&__a_, __m);}
+[_ZL6writerPv] ringbuf.hpp: 537: std::memcpy(base + phys_w, src, len);
+[_ZL6writerPv] atomic: 949: {__c11_atomic_store(&__a_, __d, __m);}
+[_ZL6readerPv] atomic: 957: {return __c11_atomic_load(&__a_, __m);}
+Trace to (2, 3):
+[main] atomic: 949: {__c11_atomic_store(&__a_, __d, __m);}
+[main] atomic: 949: {__c11_atomic_store(&__a_, __d, __m);}
+[main] atomic: 949: {__c11_atomic_store(&__a_, __d, __m);}
+[main] pthread.h: 142: (*__newthread) = __VERIFIER_thread_create(__attr, __start_routine, __arg);
+[_ZL6writerPv] atomic: 957: {return __c11_atomic_load(&__a_, __m);}
+[_ZL6writerPv] atomic: 957: {return __c11_atomic_load(&__a_, __m);}
+[_ZL6writerPv] ringbuf.hpp: 537: std::memcpy(base + phys_w, src, len);
+*** Verification unsuccessful.
+Number of complete executions explored: 0
+Number of blocked executions seen: 2
+Total wall-clock time: 0.51s

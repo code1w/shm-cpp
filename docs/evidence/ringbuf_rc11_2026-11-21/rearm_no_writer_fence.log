@@ -1,0 +1,145 @@
+GenMC v0.10.0 (LLVM 16.0.6)
+Copyright (C) 2023 MPI-SWS. All rights reserved.
+
+*** Compilation complete.
+*** Transformation complete.
+Warning: Write-write race!
+Event (1, 12) conflicts with event (2, 4) in graph:
+<-1, 0> main:
+	(0, 1): THREAD_CREATE [thread 1] pthread.h:142
+	(0, 2): THREAD_CREATE [thread 2] pthread.h:142
+	(0, 3): BLOCK [join]
+<0, 1> reader:
+	(1, 1): URrlx (events, 0) [INIT] L.50
+	(1, 2): UWrlx (events, 0) L.50
+	(1, 3): Racq (write_pos, 1) [(2, 1)] L.51
+	(1, 4): Wrel (read_pos, 1) L.52
+	(1, 5): Wrlx (reader_wait, 1) L.21
+	(1, 6): Fsc L.23
+	(1, 7): Racq (write_pos, 1) [(2, 1)] L.25
+	(1, 8): URrlx (events, 1) [(2, 6)] L.55
+	(1, 9): UWrlx (events, 0)
+	(1, 10): Racq (write_pos, 1) [(2, 1)] L.58
+	(1, 11): Wrel (read_pos, 1) L.59
+	(1, 12): Wrlx (reader_wait, 1) L.21
+<0, 2> writer:
+	(2, 1): Wrel (write_pos, 1) L.43
+	(2, 2): Rrlx (reader_wait, 1) [(1, 5)] L.35
+	(2, 3): URar (reader_wait, 1) [(1, 5)] L.38
+	(2, 4): UWar (reader_wait, 0)
+	(2, 5): URrlx (events, 0) [(1, 2)] L.44
+	(2, 6): UWrlx (events, 1)
+	(2, 7): Wrel (write_pos, 2) L.43
+	(2, 8): Rrlx (reader_wait, 0) [(2, 4)] L.35
+	(2, 9): THREAD_END
+Coherence:
+reader_wait: [ (1, 5): Wrlx (GU#296, 1) (2, 4): UWar (GU#296, 0) (1, 12): Wrlx (GU#296, 1) ]
+read_pos: [ (1, 4): Wrel (GU#16, 1) (1, 11): Wrel (GU#16, 1) ]
+write_pos: [ (2, 1): Wrel (GU#0, 1) (2, 7): Wrel (GU#0, 2) ]
+events: [ (1, 2): UWrlx (GU#40, 0) (2, 6): UWrlx (GU#40, 1) (1, 9): UWrlx (GU#40, 0) ]
+
+Trace to (1, 12):
+[main] pthread.h: 142: (*__newthread) = __VERIFIER_thread_create(__attr, __start_routine, __arg);
+[reader] reader_rearm.c: 50: atomic_exchange_explicit(&events,0,memory_order_relaxed); /* DrainNotify */
+[main] pthread.h: 142: (*__newthread) = __VERIFIER_thread_create(__attr, __start_routine, __arg);
+[writer] reader_rearm.c: 43: atomic_store_explicit(&write_pos,i,memory_order_release);
+[reader] reader_rearm.c: 51: uint64_t w=atomic_load_explicit(&write_pos,memory_order_acquire);
+[reader] reader_rearm.c: 52: atomic_store_explicit(&read_pos,w,memory_order_release);
+[reader] reader_rearm.c: 21: atomic_store_explicit(&reader_wait,1,memory_order_relaxed);
+[reader] reader_rearm.c: 23: atomic_thread_fence(memory_order_seq_cst);
+[reader] reader_rearm.c: 25: if(atomic_load_explicit(&write_pos,memory_order_acquire)!=seen) {
+[writer] reader_rearm.c: 43: atomic_store_explicit(&write_pos,i,memory_order_release);
+[writer] reader_rearm.c: 35: uint32_t v=atomic_load_explicit(&reader_wait,memory_order_relaxed);
+[writer] reader_rearm.c: 38: return atomic_exchange_explicit(&reader_wait,0,memory_order_acq_rel)!=0;
+[writer] reader_rearm.c: 44: if(should_notify()) atomic_fetch_add_explicit(&events,1,memory_order_relaxed);
+[reader] reader_rearm.c: 55: unsigned n=atomic_exchange_explicit(&events,0,memory_order_relaxed);
+[reader] reader_rearm.c: 58: w=atomic_load_explicit(&write_pos,memory_order_acquire);
+[reader] reader_rearm.c: 59: atomic_store_explicit(&read_pos,w,memory_order_release);
+[reader] reader_rearm.c: 21: atomic_store_explicit(&reader_wait,1,memory_order_relaxed);
+Trace to (2, 4):
+[main] pthread.h: 142: (*__newthread) = __VERIFIER_thread_create(__attr, __start_routine, __arg);
+[writer] reader_rearm.c: 43: atomic_store_explicit(&write_pos,i,memory_order_release);
+[reader] reader_rearm.c: 50: atomic_exchange_explicit(&events,0,memory_order_relaxed); /* DrainNotify */
+[reader] reader_rearm.c: 51: uint64_t w=atomic_load_explicit(&write_pos,memory_order_acquire);
+[reader] reader_rearm.c: 52: atomic_store_explicit(&read_pos,w,memory_order_release);
+[reader] reader_rearm.c: 21: atomic_store_explicit(&reader_wait,1,memory_order_relaxed);
+[writer] reader_rearm.c: 35: uint32_t v=atomic_load_explicit(&reader_wait,memory_order_relaxed);
+[writer] reader_rearm.c: 38: return atomic_exchange_explicit(&reader_wait,0,memory_order_acq_rel)!=0;
+Error: Safety violation!
+Event (0, 8) in graph:
+<-1, 0> main:
+	(0, 1): THREAD_CREATE [thread 1] pthread.h:142
+	(0, 2): THREAD_CREATE [thread 2] pthread.h:142
+	(0, 3): THREAD_JOIN [thread 1] pthread.h:159
+	(0, 4): THREAD_JOIN [thread 2] pthread.h:159
+	(0, 5): Rrlx (write_pos, 2) [(2, 7)] L.67
+	(0, 6): Rrlx (read_pos, 1) [(1, 11)] L.67
+	(0, 7): Rna (final_sleep, 1) [(1, 15)] L.68
+	(0, 8): Rrlx (events, 0) [(1, 9)] L.68
+<0, 1> reader:
+	(1, 1): URrlx (events, 0) [INIT] L.50
+	(1, 2): UWrlx (events, 0) L.50
+	(1, 3): Racq (write_pos, 1) [(2, 1)] L.51
+	(1, 4): Wrel (read_pos, 1) L.52
+	(1, 5): Wrlx (reader_wait, 1) L.21
+	(1, 6): Fsc L.23
+	(1, 7): Racq (write_pos, 1) [(2, 1)] L.25
+	(1, 8): URrlx (events, 1) [(2, 6)] L.55
+	(1, 9): UWrlx (events, 0)
+	(1, 10): Racq (write_pos, 1) [(2, 1)] L.58
+	(1, 11): Wrel (read_pos, 1) L.59
+	(1, 12): Wrlx (reader_wait, 1) L.21
+	(1, 13): Fsc L.23
+	(1, 14): Racq (write_pos, 1) [(2, 1)] L.25
+	(1, 15): Wna (final_sleep, 1) L.60
+	(1, 16): THREAD_END
+<0, 2> writer:
+	(2, 1): Wrel (write_pos, 1) L.43
+	(2, 2): Rrlx (reader_wait, 1) [(1, 5)] L.35
+	(2, 3): URar (reader_wait, 1) [(1, 5)] L.38
+	(2, 4): UWar (reader_wait, 0)
+	(2, 5): URrlx (events, 0) [(1, 2)] L.44
+	(2, 6): UWrlx (events, 1)
+	(2, 7): Wrel (write_pos, 2) L.43
+	(2, 8): Rrlx (reader_wait, 0) [(2, 4)] L.35
+	(2, 9): THREAD_END
+Coherence:
+reader_wait: [ (1, 5): Wrlx (GU#296, 1) (2, 4): UWar (GU#296, 0) (1, 12): Wrlx (GU#296, 1) ]
+read_pos: [ (1, 4): Wrel (GU#16, 1) (1, 11): Wrel (GU#16, 1) ]
+write_pos: [ (2, 1): Wrel (GU#0, 1) (2, 7): Wrel (GU#0, 2) ]
+events: [ (1, 2): UWrlx (GU#40, 0) (2, 6): UWrlx (GU#40, 1) (1, 9): UWrlx (GU#40, 0) ]
+
+Trace to (0, 8):
+[main] pthread.h: 142: (*__newthread) = __VERIFIER_thread_create(__attr, __start_routine, __arg);
+[reader] reader_rearm.c: 50: atomic_exchange_explicit(&events,0,memory_order_relaxed); /* DrainNotify */
+[writer] reader_rearm.c: 43: atomic_store_explicit(&write_pos,i,memory_order_release);
+[reader] reader_rearm.c: 51: uint64_t w=atomic_load_explicit(&write_pos,memory_order_acquire);
+[reader] reader_rearm.c: 52: atomic_store_explicit(&read_pos,w,memory_order_release);
+[reader] reader_rearm.c: 21: atomic_store_explicit(&reader_wait,1,memory_order_relaxed);
+[reader] reader_rearm.c: 23: atomic_thread_fence(memory_order_seq_cst);
+[reader] reader_rearm.c: 25: if(atomic_load_explicit(&write_pos,memory_order_acquire)!=seen) {
+[writer] reader_rearm.c: 43: atomic_store_explicit(&write_pos,i,memory_order_release);
+[writer] reader_rearm.c: 35: uint32_t v=atomic_load_explicit(&reader_wait,memory_order_relaxed);
+[writer] reader_rearm.c: 38: return atomic_exchange_explicit(&reader_wait,0,memory_order_acq_rel)!=0;
+[writer] reader_rearm.c: 44: if(should_notify()) atomic_fetch_add_explicit(&events,1,memory_order_relaxed);
+[reader] reader_rearm.c: 55: unsigned n=atomic_exchange_explicit(&events,0,memory_order_relaxed);
+[reader] reader_rearm.c: 58: w=atomic_load_explicit(&write_pos,memory_order_acquire);
+[reader] reader_rearm.c: 59: atomic_store_explicit(&read_pos,w,memory_order_release);
+[reader] reader_rearm.c: 21: atomic_store_explicit(&reader_wait,1,memory_order_relaxed);
+[reader] reader_rearm.c: 23: atomic_thread_fence(memory_order_seq_cst);
+[reader] reader_rearm.c: 25: if(atomic_load_explicit(&write_pos,memory_order_acquire)!=seen) {
+[reader] reader_rearm.c: 60: final_sleep=arm(w);
+[reader] reader_rearm.c: 61: return 0;
+[writer] reader_rearm.c: 43: atomic_store_explicit(&write_pos,i,memory_order_release);
+[writer] reader_rearm.c: 35: uint32_t v=atomic_load_explicit(&reader_wait,memory_order_relaxed);
+[writer] reader_rearm.c: 46: return 0;
+[main] pthread.h: 159: void *__retval = __VERIFIER_thread_join(__th);
+[main] reader_rearm.c: 67: uint64_t pending=atomic_load_explicit(&write_pos,memory_order_relaxed)-atomic_load_explicit(&read_pos,memory_order_relaxed);
+[main] reader_rearm.c: 67: uint64_t pending=atomic_load_explicit(&write_pos,memory_order_relaxed)-atomic_load_explicit(&read_pos,memory_order_relaxed);
+[main] reader_rearm.c: 68: assert(!final_sleep || !pending || atomic_load_explicit(&events,memory_order_relaxed)>0);
+[main] reader_rearm.c: 68: assert(!final_sleep || !pending || atomic_load_explicit(&events,memory_order_relaxed)>0);
+Assertion violation: !final_sleep || !pending || atomic_load_explicit(&events,memory_order_relaxed)>0
+*** Verification unsuccessful.
+Number of complete executions explored: 3
+Number of blocked executions seen: 2
+Total wall-clock time: 0.04s

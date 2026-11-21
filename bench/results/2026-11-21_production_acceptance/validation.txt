@@ -1,0 +1,6 @@
+21 performance runs + 300 same-client reconnect sessions + 5 client kills + 3 server kills/recovery + 600-second soak passed.
+330 completed request/response result records validated.
+948159 full-sample serial RTT observations validated.
+Exact current-source Debug and ASan/UBSan+leak smoke scenarios passed.
+Measurement runner archived byte-for-byte against its recorded source hash; corrected observer/metric version is the default reproduction script.
+Core source files and Release benchmark source unchanged throughout measurements.

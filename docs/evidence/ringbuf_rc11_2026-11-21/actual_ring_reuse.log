@@ -1,0 +1,8 @@
+GenMC v0.10.0 (LLVM 16.0.6)
+Copyright (C) 2023 MPI-SWS. All rights reserved.
+
+*** Compilation complete.
+*** Transformation complete.
+*** Verification complete. No errors were detected.
+Number of complete executions explored: 1
+Total wall-clock time: 0.51s

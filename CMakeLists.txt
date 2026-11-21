@@ -40,6 +40,9 @@ add_executable(bench_codec bench/bench_codec.cpp)
 target_link_libraries(bench_codec PRIVATE shm_ipc)
 
 # 上层接口吞吐（ShmServer + ShmAsyncClient + SimplePodCodec）
+add_executable(bench_acceptance bench/bench_acceptance.cpp)
+target_link_libraries(bench_acceptance PRIVATE shm_ipc)
+
 add_executable(bench_app bench/bench_app.cpp)
 target_link_libraries(bench_app PRIVATE shm_ipc)
 
@@ -82,6 +85,12 @@ target_link_libraries(test_codec PRIVATE shm_ipc)
 
 add_executable(test_ringbuf_wrap test/test_ringbuf_wrap.cpp)
 target_link_libraries(test_ringbuf_wrap PRIVATE shm_ipc)
+
+add_executable(test_ringbuf_model test/test_ringbuf_model.cpp)
+target_link_libraries(test_ringbuf_model PRIVATE shm_ipc)
+
+add_executable(test_ringbuf_process test/test_ringbuf_process.cpp)
+target_link_libraries(test_ringbuf_process PRIVATE shm_ipc)
 
 add_executable(test_eventloop test/test_eventloop.cpp)
 target_link_libraries(test_eventloop PRIVATE shm_ipc)

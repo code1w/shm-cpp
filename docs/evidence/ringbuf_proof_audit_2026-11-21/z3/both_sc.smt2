@@ -1,0 +1,33 @@
+; benchmark generated from python API
+(set-info :status unknown)
+(declare-fun writer_fence_rank () Int)
+(declare-fun reader_fence_rank () Int)
+(declare-fun strict_total_sc_order () Bool)
+(declare-fun reader_saw_publication () Bool)
+(declare-fun write_pos_fr_fence_order () Bool)
+(declare-fun writer_saw_waiting () Bool)
+(declare-fun reader_wait_fr_fence_order () Bool)
+(declare-fun lost_wakeup_candidate () Bool)
+(assert
+ (let (($x13 (>= writer_fence_rank 0)))
+ (let (($x10 (>= reader_fence_rank 0)))
+ (let (($x16 (and $x10 (< reader_fence_rank 2) $x13 (< writer_fence_rank 2) (and (distinct reader_fence_rank writer_fence_rank) true))))
+ (=> strict_total_sc_order $x16)))))
+(assert
+ (let (($x50 (not reader_saw_publication)))
+ (let (($x52 (=> $x50 (< reader_fence_rank writer_fence_rank))))
+ (=> (and write_pos_fr_fence_order $x50) (< reader_fence_rank writer_fence_rank)))))
+(assert
+ (let (($x65 (not writer_saw_waiting)))
+ (let (($x67 (=> $x65 (< writer_fence_rank reader_fence_rank))))
+ (=> (and reader_wait_fr_fence_order $x65) (< writer_fence_rank reader_fence_rank)))))
+(assert
+ (let (($x65 (not writer_saw_waiting)))
+ (let (($x50 (not reader_saw_publication)))
+ (let (($x77 (and $x50 $x65)))
+ (=> lost_wakeup_candidate $x77)))))
+(assert lost_wakeup_candidate)
+(assert strict_total_sc_order)
+(assert write_pos_fr_fence_order)
+(assert reader_wait_fr_fence_order)
+(check-sat)

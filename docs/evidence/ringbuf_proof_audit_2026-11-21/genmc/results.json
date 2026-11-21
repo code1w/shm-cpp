@@ -1,0 +1,91 @@
+[
+  {
+    "name": "raw_bytes",
+    "expected": "pass_no_assume",
+    "matched": true,
+    "returncode": 0,
+    "command": [
+      "/tmp/shm-genmc/genmc",
+      "--rc11",
+      "--disable-estimation",
+      "--disable-sr",
+      "--disable-ipr",
+      "--print-error-trace",
+      "--",
+      "-std=c11",
+      "-DFRAME_BYTES=1",
+      "/home/dev/github/shm-cpp/test/modelcheck/reader_rearm_audit.c"
+    ]
+  },
+  {
+    "name": "partial_frame",
+    "expected": "pass_no_assume",
+    "matched": true,
+    "returncode": 0,
+    "command": [
+      "/tmp/shm-genmc/genmc",
+      "--rc11",
+      "--disable-estimation",
+      "--disable-sr",
+      "--disable-ipr",
+      "--print-error-trace",
+      "--",
+      "-std=c11",
+      "/home/dev/github/shm-cpp/test/modelcheck/reader_rearm_audit.c"
+    ]
+  },
+  {
+    "name": "incomplete_only",
+    "expected": "pass_no_assume",
+    "matched": true,
+    "returncode": 0,
+    "command": [
+      "/tmp/shm-genmc/genmc",
+      "--rc11",
+      "--disable-estimation",
+      "--disable-sr",
+      "--disable-ipr",
+      "--print-error-trace",
+      "--",
+      "-std=c11",
+      "-DPUBLICATIONS=1",
+      "/home/dev/github/shm-cpp/test/modelcheck/reader_rearm_audit.c"
+    ]
+  },
+  {
+    "name": "no_reader_fence",
+    "expected": "counterexample",
+    "matched": true,
+    "returncode": 42,
+    "command": [
+      "/tmp/shm-genmc/genmc",
+      "--rc11",
+      "--disable-estimation",
+      "--disable-sr",
+      "--disable-ipr",
+      "--print-error-trace",
+      "--",
+      "-std=c11",
+      "-DREADER_FENCE=0",
+      "/home/dev/github/shm-cpp/test/modelcheck/reader_rearm_audit.c"
+    ]
+  },
+  {
+    "name": "no_writer_fence",
+    "expected": "counterexample",
+    "matched": true,
+    "returncode": 42,
+    "command": [
+      "/tmp/shm-genmc/genmc",
+      "--rc11",
+      "--disable-estimation",
+      "--disable-sr",
+      "--disable-ipr",
+      "--print-error-trace",
+      "--",
+      "-std=c11",
+      "-DWRITER_FENCE=0",
+      "/home/dev/github/shm-cpp/test/modelcheck/reader_rearm_audit.c"
+    ]
+  }
+]

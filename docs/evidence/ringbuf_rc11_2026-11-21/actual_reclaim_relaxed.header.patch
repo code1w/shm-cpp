@@ -1,0 +1,29 @@
+--- production/ringbuf.hpp
++++ actual_reclaim_relaxed/ringbuf.hpp
+@@ -625,7 +625,7 @@
+ 
+         detail::RingCopyOut<Capacity>(base, detail::RingPhys<Capacity>(r), data, len);
+ 
+-        hdr->read_pos.store(r + len, std::memory_order_release);
++        hdr->read_pos.store(r + len, std::memory_order_relaxed);
+         return 0;
+     }
+ 
+@@ -709,7 +709,7 @@
+         }
+ 
+         std::memcpy(data, base + detail::RingPhys<Capacity>(r), len);
+-        hdr->read_pos.store(r + len, std::memory_order_release);
++        hdr->read_pos.store(r + len, std::memory_order_relaxed);
+         return 0;
+     }
+ 
+@@ -822,7 +822,7 @@
+         {
+             len = static_cast<uint32_t>(avail);  // release 防御：不越过写位置
+         }
+-        hdr->read_pos.store(r + len, std::memory_order_release);
++        hdr->read_pos.store(r + len, std::memory_order_relaxed);
+     }
+ 
+     /**

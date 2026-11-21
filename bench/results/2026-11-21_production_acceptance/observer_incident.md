@@ -1,0 +1,1 @@
+21 native performance runs completed successfully. External /proc/PID/fd sampling raced the final client exit and raised PermissionError. The observer now only tolerates this error after confirming process termination. Complete JSON result and cleanup records were retained; --skip-performance resumes fault/soak scenarios without repeating or modifying performance measurements.

@@ -1,0 +1,72 @@
+[
+  {
+    "scenario": "normal_same_client_reconnect",
+    "sessions": 300,
+    "passed": true
+  },
+  {
+    "scenario": "client_sigkill",
+    "round": 0,
+    "cleanup_and_recovery_test_s": 1.6249932199716568,
+    "close_callback_ms": 664.306758,
+    "passed": true
+  },
+  {
+    "scenario": "client_sigkill",
+    "round": 1,
+    "cleanup_and_recovery_test_s": 1.6823344081640244,
+    "close_callback_ms": 718.693002,
+    "passed": true
+  },
+  {
+    "scenario": "client_sigkill",
+    "round": 2,
+    "cleanup_and_recovery_test_s": 1.6225426197052002,
+    "close_callback_ms": 663.45836,
+    "passed": true
+  },
+  {
+    "scenario": "client_sigkill",
+    "round": 3,
+    "cleanup_and_recovery_test_s": 1.679060235619545,
+    "close_callback_ms": 718.940176,
+    "passed": true
+  },
+  {
+    "scenario": "client_sigkill",
+    "round": 4,
+    "cleanup_and_recovery_test_s": 1.6330131441354752,
+    "close_callback_ms": 668.125027,
+    "passed": true
+  },
+  {
+    "scenario": "server_sigkill_same_client_recovery",
+    "round": 0,
+    "recovery_test_s": 3.5057340413331985,
+    "client_disconnect_ms": 0.624138,
+    "client_reconnected_ms": 482.371108,
+    "stale_path_direct_restart_refused": true,
+    "supervisor_cleanup_required": true,
+    "passed": true
+  },
+  {
+    "scenario": "server_sigkill_same_client_recovery",
+    "round": 1,
+    "recovery_test_s": 3.533009350299835,
+    "client_disconnect_ms": 0.632535,
+    "client_reconnected_ms": 502.659291,
+    "stale_path_direct_restart_refused": true,
+    "supervisor_cleanup_required": true,
+    "passed": true
+  },
+  {
+    "scenario": "server_sigkill_same_client_recovery",
+    "round": 2,
+    "recovery_test_s": 3.508128061890602,
+    "client_disconnect_ms": 0.596708,
+    "client_reconnected_ms": 482.253333,
+    "stale_path_direct_restart_refused": true,
+    "supervisor_cleanup_required": true,
+    "passed": true
+  }
+]

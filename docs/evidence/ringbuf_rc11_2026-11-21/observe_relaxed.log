@@ -1,0 +1,38 @@
+GenMC v0.10.0 (LLVM 16.0.6)
+Copyright (C) 2023 MPI-SWS. All rights reserved.
+
+*** Compilation complete.
+*** Transformation complete.
+Error: Non-atomic race!
+Event (1, 2) conflicts with event (2, 2) in graph:
+<-1, 0> main:
+	(0, 1): THREAD_CREATE [thread 1] pthread.h:142
+	(0, 2): THREAD_CREATE [thread 2] pthread.h:142
+	(0, 3): BLOCK [join]
+<0, 1> reader:
+	(1, 1): Rrlx (write_pos, 2) [(2, 4)] L.27
+	(1, 2): Rna (data[0], 0) [BOTTOM] L.29
+<0, 2> writer:
+	(2, 1): Rrlx (write_pos, 0) [INIT] L.20
+	(2, 2): Wna (data[0], 17) L.21
+	(2, 3): Wna (data[1], 29) L.21
+	(2, 4): Wrel (write_pos, 2) L.22
+	(2, 5): THREAD_END
+
+Trace to (1, 2):
+[main] pthread.h: 142: (*__newthread) = __VERIFIER_thread_create(__attr, __start_routine, __arg);
+[main] pthread.h: 142: (*__newthread) = __VERIFIER_thread_create(__attr, __start_routine, __arg);
+[writer] publication.c: 20: uint64_t w=atomic_load_explicit(&write_pos,memory_order_relaxed);
+[writer] publication.c: 21: data[0]=17; data[1]=29;
+[writer] publication.c: 21: data[0]=17; data[1]=29;
+[writer] publication.c: 22: atomic_store_explicit(&write_pos,w+2,PUBLISH_ORDER); /* BatchWriter::Flush */
+[reader] publication.c: 27: uint64_t w=atomic_load_explicit(&write_pos,OBSERVE_ORDER);
+[reader] publication.c: 29: assert(data[0]==17 && data[1]==29);
+Trace to (2, 2):
+[main] pthread.h: 142: (*__newthread) = __VERIFIER_thread_create(__attr, __start_routine, __arg);
+[writer] publication.c: 20: uint64_t w=atomic_load_explicit(&write_pos,memory_order_relaxed);
+[writer] publication.c: 21: data[0]=17; data[1]=29;
+*** Verification unsuccessful.
+Number of complete executions explored: 0
+Number of blocked executions seen: 2
+Total wall-clock time: 0.05s

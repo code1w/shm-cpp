@@ -1,0 +1,6 @@
+[published = 1,
+ amount = 1,
+ read = 0,
+ snapshot = 0,
+ capacity = 1,
+ local = 1]

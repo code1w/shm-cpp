@@ -1,0 +1,66 @@
+GenMC v0.10.0 (LLVM 16.0.6)
+Copyright (C) 2023 MPI-SWS. All rights reserved.
+
+*** Compilation complete.
+*** Transformation complete.
+Error: Non-atomic race!
+Event (2, 11) conflicts with event (1, 3) in graph:
+<-1, 0> main:
+	(0, 1): THREAD_CREATE [thread 1] pthread.h:142
+	(0, 2): THREAD_CREATE [thread 2] pthread.h:142
+	(0, 3): BLOCK [join]
+<0, 1> reader:
+	(1, 1): Rrlx (read_pos, 0) [INIT] L.32
+	(1, 2): Racq (write_pos, 1) [(2, 4)] L.33
+	(1, 3): Rna (data[0], 1) [(2, 3)] L.35
+	(1, 4): Wrel (read_pos, 1) L.36
+	(1, 5): Rrlx (read_pos, 1) [(1, 4)] L.32
+	(1, 6): Racq (write_pos, 1) [(2, 4)] L.33
+	(1, 7): BLOCK [user]
+<0, 2> writer:
+	(2, 1): Rrlx (write_pos, 0) [INIT] L.21
+	(2, 2): Rrlx (read_pos, 0) [INIT] L.22
+	(2, 3): Wna (data[0], 1) L.24
+	(2, 4): Wrel (write_pos, 1) L.25
+	(2, 5): Rrlx (write_pos, 1) [(2, 4)] L.21
+	(2, 6): Rrlx (read_pos, 1) [(1, 4)] L.22
+	(2, 7): Wna (data[1], 2) L.24
+	(2, 8): Wrel (write_pos, 2) L.25
+	(2, 9): Rrlx (write_pos, 2) [(2, 8)] L.21
+	(2, 10): Rrlx (read_pos, 1) [(1, 4)] L.22
+	(2, 11): Wna (data[0], 3) L.24
+Coherence:
+data[0]: [ (2, 3): Wna (GU#144, 1) (2, 11): Wna (GU#144, 3) ]
+write_pos: [ (2, 4): Wrel (GU#136, 1) (2, 8): Wrel (GU#136, 2) ]
+
+Trace to (2, 11):
+[main] pthread.h: 142: (*__newthread) = __VERIFIER_thread_create(__attr, __start_routine, __arg);
+[writer] reuse.c: 21: uint64_t w=atomic_load_explicit(&write_pos,memory_order_relaxed);
+[writer] reuse.c: 22: uint64_t r=atomic_load_explicit(&read_pos,SPACE_ORDER);
+[writer] reuse.c: 24: data[w%2]=(int)i+1;
+[writer] reuse.c: 25: atomic_store_explicit(&write_pos,w+1,memory_order_release);
+[writer] reuse.c: 21: uint64_t w=atomic_load_explicit(&write_pos,memory_order_relaxed);
+[reader] reuse.c: 32: uint64_t r=atomic_load_explicit(&read_pos,memory_order_relaxed);
+[reader] reuse.c: 33: uint64_t w=atomic_load_explicit(&write_pos,memory_order_acquire);
+[reader] reuse.c: 35: assert(data[r%2]==(int)i+1);
+[reader] reuse.c: 36: atomic_store_explicit(&read_pos,r+1,RECLAIM_ORDER);
+[writer] reuse.c: 22: uint64_t r=atomic_load_explicit(&read_pos,SPACE_ORDER);
+[writer] reuse.c: 24: data[w%2]=(int)i+1;
+[writer] reuse.c: 25: atomic_store_explicit(&write_pos,w+1,memory_order_release);
+[writer] reuse.c: 21: uint64_t w=atomic_load_explicit(&write_pos,memory_order_relaxed);
+[writer] reuse.c: 22: uint64_t r=atomic_load_explicit(&read_pos,SPACE_ORDER);
+[writer] reuse.c: 24: data[w%2]=(int)i+1;
+Trace to (1, 3):
+[main] pthread.h: 142: (*__newthread) = __VERIFIER_thread_create(__attr, __start_routine, __arg);
+[reader] reuse.c: 32: uint64_t r=atomic_load_explicit(&read_pos,memory_order_relaxed);
+[main] pthread.h: 142: (*__newthread) = __VERIFIER_thread_create(__attr, __start_routine, __arg);
+[writer] reuse.c: 21: uint64_t w=atomic_load_explicit(&write_pos,memory_order_relaxed);
+[writer] reuse.c: 22: uint64_t r=atomic_load_explicit(&read_pos,SPACE_ORDER);
+[writer] reuse.c: 24: data[w%2]=(int)i+1;
+[writer] reuse.c: 25: atomic_store_explicit(&write_pos,w+1,memory_order_release);
+[reader] reuse.c: 33: uint64_t w=atomic_load_explicit(&write_pos,memory_order_acquire);
+[reader] reuse.c: 35: assert(data[r%2]==(int)i+1);
+*** Verification unsuccessful.
+Number of complete executions explored: 0
+Number of blocked executions seen: 3
+Total wall-clock time: 0.04s

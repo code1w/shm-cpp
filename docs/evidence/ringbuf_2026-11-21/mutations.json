@@ -1,0 +1,22 @@
+[
+  {
+    "mutation": "publish_before_flush",
+    "returncode": -6,
+    "detected": true
+  },
+  {
+    "mutation": "cancel_publishes",
+    "returncode": -6,
+    "detected": true
+  },
+  {
+    "mutation": "reject_numeric_wrap",
+    "returncode": -6,
+    "detected": true
+  },
+  {
+    "mutation": "accept_mismatched_reservation",
+    "returncode": -6,
+    "detected": true
+  }
+]

@@ -1,0 +1,4 @@
+10 positive checks complete; 133 canonical complete executions.
+15 negative controls detected safety violations or non-atomic races.
+Finite RC11 safety checks, not a universal liveness or cross-process proof.
+Production ringbuf.hpp unchanged; checker source unmodified.

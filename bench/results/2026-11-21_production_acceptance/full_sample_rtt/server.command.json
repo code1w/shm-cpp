@@ -1,0 +1,1 @@
+["taskset", "-c", "2", "/tmp/shm-acceptance-build/bench_acceptance", "server", "/tmp/shm-rtt-lbxdab91/ipc.sock"]

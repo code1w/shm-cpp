@@ -1,0 +1,1 @@
+["taskset", "-c", "4", "/tmp/shm-acceptance-build/bench_acceptance", "client", "/tmp/shm-accept-8c7en0yv/ipc.sock", "--bytes", "1048576", "--batch", "4", "--gap-us", "0", "--stride", "1", "--seconds", "10", "--warmup", "1"]

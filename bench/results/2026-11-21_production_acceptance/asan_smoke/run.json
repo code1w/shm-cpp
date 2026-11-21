@@ -1,0 +1,11 @@
+{
+  "completed": true,
+  "smoke": true,
+  "soak_seconds": 2,
+  "synthetic_app_load": true,
+  "performance_reused": false,
+  "server_cpu": 2,
+  "client_cpu": 4,
+  "cases": 18,
+  "faults": 3
+}

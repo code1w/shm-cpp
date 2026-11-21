@@ -1,0 +1,11 @@
+--- production/ringbuf.hpp
++++ actual_wait_no_reader_fence/ringbuf.hpp
+@@ -869,7 +869,7 @@
+         auto* hdr = detail::RingHdr(shm);
+         // relaxed：与对端的顺序由前后的 seq_cst 栅栏保证（Dekker 式），标志本身不发布数据
+         hdr->reader_wait.store(kReaderWaiting, std::memory_order_relaxed);
+-        std::atomic_thread_fence(std::memory_order_seq_cst);
++        /* negative control: removed fence */
+         if (hdr->write_pos.load(std::memory_order_acquire) != seen_write)
+         {
+             // 若写方已抢先清零并通知，这里覆盖为 Awake 无副作用（仅多一次空唤醒）
