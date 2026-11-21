@@ -6,7 +6,15 @@
 
 ## 构建和后台启动
 
-在仓库根目录执行：
+在仓库根目录可直接执行启动脚本：
+
+```sh
+./start_soak7d.sh
+```
+
+脚本完成Release构建和nohup后台启动，并打印结果目录、状态/日志/停止命令。支持从任意目录通过绝对路径调用。可透传负载选项，例如 `./start_soak7d.sh --seconds 60` 做短跑，或 `./start_soak7d.sh --bytes 1048576 --batch 4`。`SOAK_OUTPUT_DIR` 可指定新结果目录，`SOAK_BUILD_JOBS` 可设置编译并行度。`--help` 只显示帮助。
+
+等价的手工启动命令，在仓库根目录执行：
 
 ```sh
 cmake -S . -B build/soak7d -DCMAKE_BUILD_TYPE=Release \
