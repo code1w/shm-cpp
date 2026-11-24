@@ -1,0 +1,10 @@
+{"role":"client_connected","session":1,"time_ns":101575961991412832}
+{"role":"client_tick","session":1,"replies":376932}
+{"role":"client_tick","session":1,"replies":772685}
+{"role":"client_tick","session":1,"replies":1166301}
+{"role":"client_tick","session":1,"replies":1564753}
+{"role":"client_tick","session":1,"replies":1957066}
+{"role":"result","session":1,"bytes":128,"batch":8,"gap_us":0,"messages":1977359,"seconds":5.000002426,"msg_s":395471.608,"samples":30513,"p50_ns":9088,"p99_ns":13568,"p999_ns":25088,"max_ns":89078,"full_checks":36422,"errors":0}
+{"role":"batch_stats","minimum":1,"maximum":8,"seed":324516837,"batches":439238,"messages":1977359,"prefix_count":256,"prefix_hash":14401882134132104216,"counts":[0,54719,54879,55231,54674,54743,55132,54894,54966]}
+{"role":"client_close","unexpected":false,"time_ns":101575967991476792}
+{"role":"client_final","completed":true,"failed":false,"sessions":1,"close_events":1,"received":2354291,"base_fds":4,"final_fds":4,"ring_maps":0}

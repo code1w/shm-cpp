@@ -1,0 +1,7 @@
+{"role":"socket_buffers","send":425984,"receive":425984,"coalesce":true}
+{"role":"client_connected","session":1,"time_ns":101575854809261007}
+{"role":"result","session":1,"bytes":16384,"batch":64,"gap_us":0,"messages":24755,"seconds":0.300017309,"msg_s":82511.906,"samples":1527,"p50_ns":282624,"p99_ns":770048,"p999_ns":3407872,"max_ns":3563638,"full_checks":394,"errors":0}
+{"role":"batch_stats","minimum":1,"maximum":64,"seed":324586520,"batches":772,"messages":24755,"prefix_count":256,"prefix_hash":13414817120719283204,"counts":[0,19,12,14,8,9,14,13,12,15,15,13,9,9,16,6,9,5,14,16,5,15,12,10,12,14,19,15,11,9,7,10,16,15,13,16,11,11,18,21,9,5,19,11,12,10,8,13,15,14,19,11,10,12,8,9,12,12,13,6,12,13,12,10,9]}
+{"role":"socket_io","send_calls":2348,"short_writes":672,"write_eagain":904,"recv_calls":4967}
+{"role":"client_close","unexpected":false,"time_ns":101575855109467292}
+{"role":"client_final","completed":true,"failed":false,"sessions":1,"close_events":1,"received":24755,"base_fds":4,"final_fds":4,"ring_maps":0}

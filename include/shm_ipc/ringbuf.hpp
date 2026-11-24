@@ -850,6 +850,13 @@ class RingBuf
 
     // ---- 按需通知（reader_wait）----
 
+    /// Dedicated polling reader never sleeps; enable on the sole reader thread.
+    static void SetReaderPolling(void* shm)
+    {
+        auto* hdr = detail::RingHdr(shm);
+        hdr->reader_wait.store(kReaderAwake, std::memory_order_relaxed);
+    }
+
     /**
      * @brief 读方：声明即将睡眠，并复查是否有新数据（读方调用）
      *

@@ -865,6 +865,10 @@ void TestReaderWaitStateMachine()
     CHECK(SmallRing::ShouldNotify(shm), "default notifies (1)");
     CHECK(SmallRing::ShouldNotify(shm), "default notifies (2)");
 
+    SmallRing::SetReaderPolling(shm);
+    CHECK(!SmallRing::ShouldNotify(shm), "polling reader needs no notification");
+    CHECK(!SmallRing::ShouldNotify(shm), "polling remains awake");
+
     // 读空后武装：可睡眠；写方只通知一次
     CHECK(SmallRing::ArmReaderWait(shm, SmallRing::WritePos(shm)), "arm on empty ring -> may sleep");
     CHECK(SmallRing::ShouldNotify(shm), "waiting reader gets a notify");

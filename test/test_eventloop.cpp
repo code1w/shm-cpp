@@ -275,6 +275,73 @@ static void TestConcurrentRunRejected()
     std::printf("  PASS: concurrent Run rejected before accessing loop state\n\n");
 }
 
+static void TestBusyPolling()
+{
+    using E = shm::ErrorCode;
+    shm::EventLoop loop;
+    CHECK(loop.SetBusyPolling(true, 0) == E::kInvalidArgument, "zero control interval");
+    CHECK(!loop.BusyPolling(), "invalid configuration leaves mode unchanged");
+    CHECK(loop.SetBusyPolling(true, 4) == E::kOk, "configure busy mode");
+    shm::EventLoop default_loop;
+    CHECK(default_loop.AddBusyPollFd(10000, [](int, short) { return E::kOk; }) == E::kInvalidArgument,
+          "busy registration requires opt-in");
+    CHECK(loop.AddBusyPollFd(10000, static_cast<shm::EventLoop::PollCallback>(nullptr)) == E::kInvalidArgument,
+          "null callback rejected");
+    CHECK(loop.AddBusyPollFd(-1, [](int, short) { return E::kOk; }) == E::kInvalidArgument,
+          "negative identity rejected");
+    int first = 0, replacement = 0, removed = 0;
+    CHECK(loop.AddBusyPollFd(10001, [&](int fd, short events) {
+        CHECK(fd == -1 && events == 0, "poll callback must not read fd");
+        CHECK(loop.SetBusyPolling(false) == E::kInvalidArgument, "no mode change during Run");
+        ++first;
+        loop.RemoveFd(10001);
+        loop.RemoveFd(10002);
+        return loop.AddBusyPollFd(10001, [&](int, short) {
+            ++replacement;
+            loop.Stop();
+            return E::kOk;
+        });
+    }) == E::kOk, "register first callback");
+    CHECK(loop.AddBusyPollFd(10002, [&](int, short) { ++removed; return E::kOk; }) == E::kOk, "register removed callback");
+    CHECK(loop.Run(-1) == E::kOk, "busy Run");
+    CHECK(first == 1 && replacement == 1 && removed == 0, "busy snapshot and tombstones");
+    loop.RemoveFd(10001);
+    int ticks = 0;
+    CHECK(loop.AddBusyPollFd(10003, [&](int, short) { ++ticks; return E::kOk; }) == E::kOk, "register timer observer");
+    int timer;
+    CHECK(loop.AddOneShotTimer(2, [&](int, short) { loop.Stop(); }, &timer) == E::kOk, "busy timer");
+    CHECK(loop.Run(-1) == E::kOk && ticks > 0, "busy control fds and restart");
+    loop.RemoveFd(10003);
+    for (E error : {E::kProtocol, E::kNoMemory})
+    {
+        CHECK(loop.AddBusyPollFd(10004, [&](int, short) {
+            loop.RemoveFd(10004);
+            return error;
+        }) == E::kOk, "register failing callback");
+        CHECK(loop.Run() == error, "busy callback error propagated");
+        CHECK(loop.AddBusyPollFd(10005, [&](int, short) {
+            loop.RemoveFd(10005);
+            loop.Stop();
+            return E::kOk;
+        }) == E::kOk, "register recovery callback");
+        CHECK(loop.Run() == E::kOk, "callback error releases Run ownership");
+    }
+    shm::EventLoop threaded;
+    CHECK(threaded.SetBusyPolling(true) == E::kOk, "configure threaded loop");
+    std::atomic<bool> entered{false};
+    CHECK(threaded.AddBusyPollFd(10006, [&](int, short) {
+        entered.store(true, std::memory_order_release);
+        return E::kOk;
+    }) == E::kOk, "register stop observer");
+    std::thread stopper([&] {
+        while (!entered.load(std::memory_order_acquire)) std::this_thread::yield();
+        threaded.Stop();
+    });
+    CHECK(threaded.Run(-1) == E::kOk, "cross-thread stop while polling");
+    stopper.join();
+    std::printf("  PASS: busy polling lifecycle, timers, removal, error returns\n");
+}
+
 int main()
 {
     TestFdReuseOrdering();
@@ -282,6 +349,7 @@ int main()
     TestCancelledTimerSilenced();
     TestRunReentryAndRecovery();
     TestConcurrentRunRejected();
+    TestBusyPolling();
 
     std::printf("=== TEST PASSED ===\n");
     return 0;

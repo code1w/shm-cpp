@@ -498,7 +498,20 @@ class ShmServer : public comm::ITcpServer
             conns_[id] = conn;
 
             // eventfd：对端写入新数据，实时读取
-            loop_->AddFd(conn->NotifyFd(), [this, id](int fd, short revents) { OnConnNotify(fd, revents, id); });
+            if (loop_->BusyPolling())
+            {
+                const auto ec = loop_->AddBusyPollFd(conn->NotifyFd(), [this, id](int fd, short revents) {
+                    OnConnNotify(fd, revents, id);
+                    return ErrorCode::kOk;
+                });
+                if (ec != ErrorCode::kOk)
+                {
+                    conns_.erase(id);
+                    conn->Close();
+                    return;
+                }
+            }
+            else loop_->AddFd(conn->NotifyFd(), [this, id](int fd, short revents) { OnConnNotify(fd, revents, id); });
             // socket：仅用于断连检测
             loop_->AddFd(conn->SocketFd(), [this, id](int fd, short revents) { OnConnSocket(fd, revents, id); });
         }
@@ -521,7 +534,7 @@ class ShmServer : public comm::ITcpServer
     /// @brief eventfd 回调：对端写入新数据，立即消费并解码分发
     void OnConnNotify(int efd, short /*revents*/, uint64_t conn_id)
     {
-        DefaultRingChannel::DrainNotify(efd);
+        if (efd >= 0) DefaultRingChannel::DrainNotify(efd);
         // 持有本地拷贝：消息回调内可能调用 Close()/CloseConn() 移除连接
         auto conn = FindConn(conn_id);
         if (!conn)

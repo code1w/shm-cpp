@@ -1,0 +1,1532 @@
+[
+  {
+    "case": "16B-small",
+    "bytes": 16,
+    "profile": "small",
+    "minimum": 1,
+    "maximum": 8,
+    "shm-eventfd": {
+      "rpc_s": 400578.248,
+      "payload_mib_s": 6.112338989257813,
+      "rpc_range": [
+        398905.758,
+        401842.407
+      ],
+      "mean_batch": 4.499720057332258,
+      "min_samples": 30790,
+      "p50_us": 8.96,
+      "p99_us": 13.184,
+      "p999_us": 24.576,
+      "paired_rpc_gain_pct": 11.344849484773167,
+      "paired_p50_reduction_pct": 27.835051546391753
+    },
+    "shm-busy": {
+      "rpc_s": 3912568.701,
+      "payload_mib_s": 59.70106050109863,
+      "rpc_range": [
+        3851788.858,
+        3937918.51
+      ],
+      "mean_batch": 4.5018581269610785,
+      "min_samples": 300839,
+      "p50_us": 0.76,
+      "p99_us": 1.36,
+      "p999_us": 4.864,
+      "paired_rpc_gain_pct": 983.6598196937496,
+      "paired_p50_reduction_pct": 93.87886597938144
+    },
+    "socket": {
+      "rpc_s": 359213.411,
+      "payload_mib_s": 5.4811616668701175,
+      "rpc_range": [
+        358261.527,
+        361051.377
+      ],
+      "mean_batch": 4.49883246567798,
+      "min_samples": 27672,
+      "p50_us": 12.416,
+      "p99_us": 17.408,
+      "p999_us": 28.16
+    },
+    "busy_vs_eventfd_gain_pct": 873.6574918037459
+  },
+  {
+    "case": "16B-burst",
+    "bytes": 16,
+    "profile": "burst",
+    "minimum": 1,
+    "maximum": 64,
+    "shm-eventfd": {
+      "rpc_s": 2624196.08,
+      "payload_mib_s": 40.042054443359376,
+      "rpc_range": [
+        2617996.871,
+        2624494.612
+      ],
+      "mean_batch": 32.514943465214714,
+      "min_samples": 204039,
+      "p50_us": 8.96,
+      "p99_us": 12.928,
+      "p999_us": 24.576,
+      "paired_rpc_gain_pct": 26.612536968074217,
+      "paired_p50_reduction_pct": 42.14876033057852
+    },
+    "shm-busy": {
+      "rpc_s": 6951145.61,
+      "payload_mib_s": 106.0660646057129,
+      "rpc_range": [
+        6823382.528,
+        6997572.983
+      ],
+      "mean_batch": 32.50088275614423,
+      "min_samples": 533406,
+      "p50_us": 2.848,
+      "p99_us": 7.552,
+      "p999_us": 13.184,
+      "paired_rpc_gain_pct": 235.37973294914448,
+      "paired_p50_reduction_pct": 81.61157024793388
+    },
+    "socket": {
+      "rpc_s": 2072619.46,
+      "payload_mib_s": 31.625663146972656,
+      "rpc_range": [
+        2064215.486,
+        2089621.742
+      ],
+      "mean_batch": 32.541429194967016,
+      "min_samples": 160698,
+      "p50_us": 15.488,
+      "p99_us": 22.528,
+      "p999_us": 32.0
+    },
+    "busy_vs_eventfd_gain_pct": 164.88666997780138
+  },
+  {
+    "case": "128B-small",
+    "bytes": 128,
+    "profile": "small",
+    "minimum": 1,
+    "maximum": 8,
+    "shm-eventfd": {
+      "rpc_s": 394136.148,
+      "payload_mib_s": 48.11232275390625,
+      "rpc_range": [
+        393882.766,
+        395471.608
+      ],
+      "mean_batch": 4.501794016000437,
+      "min_samples": 30381,
+      "p50_us": 9.088,
+      "p99_us": 13.568,
+      "p999_us": 25.088,
+      "paired_rpc_gain_pct": 12.349426790850671,
+      "paired_p50_reduction_pct": 28.282828282828287
+    },
+    "shm-busy": {
+      "rpc_s": 3110138.101,
+      "payload_mib_s": 379.65552990722654,
+      "rpc_range": [
+        3096945.984,
+        3146676.905
+      ],
+      "mean_batch": 4.499906678114152,
+      "min_samples": 241251,
+      "p50_us": 0.912,
+      "p99_us": 1.648,
+      "p999_us": 5.568,
+      "paired_rpc_gain_pct": 792.3009199716066,
+      "paired_p50_reduction_pct": 92.8030303030303
+    },
+    "socket": {
+      "rpc_s": 352001.447,
+      "payload_mib_s": 42.968926635742186,
+      "rpc_range": [
+        348552.605,
+        353400.996
+      ],
+      "mean_batch": 4.501589615704329,
+      "min_samples": 26923,
+      "p50_us": 12.672,
+      "p99_us": 17.92,
+      "p999_us": 28.672
+    },
+    "busy_vs_eventfd_gain_pct": 689.1024755739988
+  },
+  {
+    "case": "128B-burst",
+    "bytes": 128,
+    "profile": "burst",
+    "minimum": 1,
+    "maximum": 64,
+    "shm-eventfd": {
+      "rpc_s": 2492369.018,
+      "payload_mib_s": 304.24426489257814,
+      "rpc_range": [
+        2489240.883,
+        2507623.672
+      ],
+      "mean_batch": 32.48047904129568,
+      "min_samples": 194098,
+      "p50_us": 9.088,
+      "p99_us": 13.952,
+      "p999_us": 25.088,
+      "paired_rpc_gain_pct": 33.54856992986761,
+      "paired_p50_reduction_pct": 49.28571428571429
+    },
+    "shm-busy": {
+      "rpc_s": 5833435.746,
+      "payload_mib_s": 712.0893244628907,
+      "rpc_range": [
+        5692274.3,
+        5843315.86
+      ],
+      "mean_batch": 32.49392561002918,
+      "min_samples": 444471,
+      "p50_us": 3.296,
+      "p99_us": 9.216,
+      "p999_us": 15.104,
+      "paired_rpc_gain_pct": 212.7989851445863,
+      "paired_p50_reduction_pct": 81.60714285714286
+    },
+    "socket": {
+      "rpc_s": 1866264.101,
+      "payload_mib_s": 227.81544201660157,
+      "rpc_range": [
+        1863186.826,
+        1868073.791
+      ],
+      "mean_batch": 32.474500644891414,
+      "min_samples": 145271,
+      "p50_us": 17.92,
+      "p99_us": 25.6,
+      "p999_us": 35.328
+    },
+    "busy_vs_eventfd_gain_pct": 132.62803789642965
+  },
+  {
+    "case": "256B-small",
+    "bytes": 256,
+    "profile": "small",
+    "minimum": 1,
+    "maximum": 8,
+    "shm-eventfd": {
+      "rpc_s": 389036.799,
+      "payload_mib_s": 94.97968725585937,
+      "rpc_range": [
+        388909.717,
+        391486.403
+      ],
+      "mean_batch": 4.4994726055598475,
+      "min_samples": 29973,
+      "p50_us": 9.216,
+      "p99_us": 13.696,
+      "p999_us": 25.088,
+      "paired_rpc_gain_pct": 13.436443813579736,
+      "paired_p50_reduction_pct": 29.411764705882348
+    },
+    "shm-busy": {
+      "rpc_s": 2966557.467,
+      "payload_mib_s": 724.2571940917969,
+      "rpc_range": [
+        2961861.366,
+        2981533.907
+      ],
+      "mean_batch": 4.501249521661562,
+      "min_samples": 230644,
+      "p50_us": 0.96,
+      "p99_us": 1.728,
+      "p999_us": 6.272,
+      "paired_rpc_gain_pct": 765.8736722169102,
+      "paired_p50_reduction_pct": 92.5857843137255
+    },
+    "socket": {
+      "rpc_s": 342843.714,
+      "payload_mib_s": 83.70207861328124,
+      "rpc_range": [
+        342608.577,
+        345402.593
+      ],
+      "mean_batch": 4.497639218402898,
+      "min_samples": 26477,
+      "p50_us": 13.056,
+      "p99_us": 18.176,
+      "p999_us": 28.928
+    },
+    "busy_vs_eventfd_gain_pct": 661.3319289109203
+  },
+  {
+    "case": "256B-burst",
+    "bytes": 256,
+    "profile": "burst",
+    "minimum": 1,
+    "maximum": 64,
+    "shm-eventfd": {
+      "rpc_s": 2428772.798,
+      "payload_mib_s": 592.9621088867187,
+      "rpc_range": [
+        2422279.376,
+        2443731.189
+      ],
+      "mean_batch": 32.46045446161988,
+      "min_samples": 188761,
+      "p50_us": 9.216,
+      "p99_us": 14.592,
+      "p999_us": 25.088,
+      "paired_rpc_gain_pct": 44.083202180339256,
+      "paired_p50_reduction_pct": 55.00000000000001
+    },
+    "shm-busy": {
+      "rpc_s": 5549514.39,
+      "payload_mib_s": 1354.8619116210937,
+      "rpc_range": [
+        5424464.476,
+        5554749.619
+      ],
+      "mean_batch": 32.5025261543255,
+      "min_samples": 423522,
+      "p50_us": 3.328,
+      "p99_us": 9.984,
+      "p999_us": 17.408,
+      "paired_rpc_gain_pct": 228.39451552082159,
+      "paired_p50_reduction_pct": 83.75
+    },
+    "socket": {
+      "rpc_s": 1687978.27,
+      "payload_mib_s": 412.10406982421875,
+      "rpc_range": [
+        1685673.806,
+        1689892.531
+      ],
+      "mean_batch": 32.45576135639054,
+      "min_samples": 131312,
+      "p50_us": 20.48,
+      "p99_us": 28.416,
+      "p999_us": 38.4
+    },
+    "busy_vs_eventfd_gain_pct": 127.09185097690386
+  },
+  {
+    "case": "512B-small",
+    "bytes": 512,
+    "profile": "small",
+    "minimum": 1,
+    "maximum": 8,
+    "shm-eventfd": {
+      "rpc_s": 371654.365,
+      "payload_mib_s": 181.47185791015625,
+      "rpc_range": [
+        371290.095,
+        374233.04
+      ],
+      "mean_batch": 4.500161135161135,
+      "min_samples": 28668,
+      "p50_us": 9.472,
+      "p99_us": 13.824,
+      "p999_us": 25.344,
+      "paired_rpc_gain_pct": 14.017102560859085,
+      "paired_p50_reduction_pct": 31.481481481481477
+    },
+    "shm-busy": {
+      "rpc_s": 2042408.822,
+      "payload_mib_s": 997.2699326171875,
+      "rpc_range": [
+        1983999.101,
+        2055431.114
+      ],
+      "mean_batch": 4.499149033846116,
+      "min_samples": 154500,
+      "p50_us": 1.44,
+      "p99_us": 2.496,
+      "p999_us": 8.576,
+      "paired_rpc_gain_pct": 526.5755445363258,
+      "paired_p50_reduction_pct": 89.58333333333334
+    },
+    "socket": {
+      "rpc_s": 325963.699,
+      "payload_mib_s": 159.16196240234376,
+      "rpc_range": [
+        325239.099,
+        326090.437
+      ],
+      "mean_batch": 4.499312606628791,
+      "min_samples": 25137,
+      "p50_us": 13.824,
+      "p99_us": 19.2,
+      "p999_us": 29.696
+    },
+    "busy_vs_eventfd_gain_pct": 449.54522651711625
+  },
+  {
+    "case": "512B-burst",
+    "bytes": 512,
+    "profile": "burst",
+    "minimum": 1,
+    "maximum": 64,
+    "shm-eventfd": {
+      "rpc_s": 1843054.535,
+      "payload_mib_s": 899.9289721679687,
+      "rpc_range": [
+        1828483.738,
+        2079496.643
+      ],
+      "mean_batch": 32.547850810581714,
+      "min_samples": 142481,
+      "p50_us": 8.448,
+      "p99_us": 19.968,
+      "p999_us": 28.416,
+      "paired_rpc_gain_pct": 33.93877451704246,
+      "paired_p50_reduction_pct": 67.0
+    },
+    "shm-busy": {
+      "rpc_s": 3297531.899,
+      "payload_mib_s": 1610.1229975585939,
+      "rpc_range": [
+        3098118.31,
+        3477280.262
+      ],
+      "mean_batch": 32.53021651717892,
+      "min_samples": 241357,
+      "p50_us": 5.824,
+      "p99_us": 12.8,
+      "p999_us": 22.016,
+      "paired_rpc_gain_pct": 139.63880237700934,
+      "paired_p50_reduction_pct": 77.25
+    },
+    "socket": {
+      "rpc_s": 1378984.136,
+      "payload_mib_s": 673.33209765625,
+      "rpc_range": [
+        1376042.555,
+        1381045.167
+      ],
+      "mean_batch": 32.52894608964772,
+      "min_samples": 107219,
+      "p50_us": 25.344,
+      "p99_us": 35.84,
+      "p999_us": 45.568
+    },
+    "busy_vs_eventfd_gain_pct": 69.43647053644185
+  },
+  {
+    "case": "1024B-small",
+    "bytes": 1024,
+    "profile": "small",
+    "minimum": 1,
+    "maximum": 8,
+    "shm-eventfd": {
+      "rpc_s": 354217.568,
+      "payload_mib_s": 345.91559375,
+      "rpc_range": [
+        353221.916,
+        358400.096
+      ],
+      "mean_batch": 4.496706615031687,
+      "min_samples": 27273,
+      "p50_us": 9.728,
+      "p99_us": 15.36,
+      "p999_us": 25.6,
+      "paired_rpc_gain_pct": 18.611629523852823,
+      "paired_p50_reduction_pct": 37.1900826446281
+    },
+    "shm-busy": {
+      "rpc_s": 1536468.707,
+      "payload_mib_s": 1500.4577216796874,
+      "rpc_range": [
+        1530323.274,
+        1566371.327
+      ],
+      "mean_batch": 4.497663264263046,
+      "min_samples": 119188,
+      "p50_us": 1.872,
+      "p99_us": 3.488,
+      "p999_us": 9.344,
+      "paired_rpc_gain_pct": 414.4946877668054,
+      "paired_p50_reduction_pct": 87.91322314049587
+    },
+    "socket": {
+      "rpc_s": 299699.903,
+      "payload_mib_s": 292.6756865234375,
+      "rpc_range": [
+        298636.457,
+        300110.078
+      ],
+      "mean_batch": 4.49346895203368,
+      "min_samples": 23043,
+      "p50_us": 15.488,
+      "p99_us": 22.016,
+      "p999_us": 32.0
+    },
+    "busy_vs_eventfd_gain_pct": 333.76411725575394
+  },
+  {
+    "case": "1024B-burst",
+    "bytes": 1024,
+    "profile": "burst",
+    "minimum": 1,
+    "maximum": 64,
+    "shm-eventfd": {
+      "rpc_s": 1710269.964,
+      "payload_mib_s": 1670.18551171875,
+      "rpc_range": [
+        1528364.252,
+        1727504.982
+      ],
+      "mean_batch": 32.515078118761814,
+      "min_samples": 119058,
+      "p50_us": 9.6,
+      "p99_us": 19.712,
+      "p999_us": 27.904,
+      "paired_rpc_gain_pct": 48.25747415694992,
+      "paired_p50_reduction_pct": 69.00826446280992
+    },
+    "shm-busy": {
+      "rpc_s": 2575661.153,
+      "payload_mib_s": 2515.2940947265624,
+      "rpc_range": [
+        2538834.725,
+        2585984.27
+      ],
+      "mean_batch": 32.50168334023158,
+      "min_samples": 197931,
+      "p50_us": 8.192,
+      "p99_us": 14.464,
+      "p999_us": 23.04,
+      "paired_rpc_gain_pct": 123.27528686456972,
+      "paired_p50_reduction_pct": 73.77049180327869
+    },
+    "socket": {
+      "rpc_s": 1153580.94,
+      "payload_mib_s": 1126.54388671875,
+      "rpc_range": [
+        1150140.394,
+        1156942.539
+      ],
+      "mean_batch": 32.54628093577547,
+      "min_samples": 89300,
+      "p50_us": 31.232,
+      "p99_us": 42.496,
+      "p999_us": 53.76
+    },
+    "busy_vs_eventfd_gain_pct": 50.59968351288897
+  },
+  {
+    "case": "2048B-small",
+    "bytes": 2048,
+    "profile": "small",
+    "minimum": 1,
+    "maximum": 8,
+    "shm-eventfd": {
+      "rpc_s": 333829.705,
+      "payload_mib_s": 652.011142578125,
+      "rpc_range": [
+        330811.92,
+        338416.101
+      ],
+      "mean_batch": 4.5022698153667715,
+      "min_samples": 25576,
+      "p50_us": 10.112,
+      "p99_us": 16.256,
+      "p999_us": 26.368,
+      "paired_rpc_gain_pct": 28.18427404769135,
+      "paired_p50_reduction_pct": 45.205479452054796
+    },
+    "shm-busy": {
+      "rpc_s": 1106558.529,
+      "payload_mib_s": 2161.247126953125,
+      "rpc_range": [
+        1055463.263,
+        1143457.613
+      ],
+      "mean_batch": 4.50127229067433,
+      "min_samples": 82057,
+      "p50_us": 2.624,
+      "p99_us": 4.992,
+      "p999_us": 11.648,
+      "paired_rpc_gain_pct": 324.8974839765868,
+      "paired_p50_reduction_pct": 85.9375
+    },
+    "socket": {
+      "rpc_s": 260557.2,
+      "payload_mib_s": 508.90078125,
+      "rpc_range": [
+        260429.532,
+        260979.689
+      ],
+      "mean_batch": 4.504235631885712,
+      "min_samples": 20163,
+      "p50_us": 18.688,
+      "p99_us": 24.832,
+      "p999_us": 34.816
+    },
+    "busy_vs_eventfd_gain_pct": 231.47395586021923
+  },
+  {
+    "case": "2048B-burst",
+    "bytes": 2048,
+    "profile": "burst",
+    "minimum": 1,
+    "maximum": 64,
+    "shm-eventfd": {
+      "rpc_s": 1316605.568,
+      "payload_mib_s": 2571.49525,
+      "rpc_range": [
+        1118476.6,
+        1332508.723
+      ],
+      "mean_batch": 32.526683762457445,
+      "min_samples": 86882,
+      "p50_us": 13.056,
+      "p99_us": 24.576,
+      "p999_us": 35.84,
+      "paired_rpc_gain_pct": 46.7886494733081,
+      "paired_p50_reduction_pct": 68.4375
+    },
+    "shm-busy": {
+      "rpc_s": 1728858.686,
+      "payload_mib_s": 3376.67712109375,
+      "rpc_range": [
+        1683218.241,
+        1760510.97
+      ],
+      "mean_batch": 32.505286986342576,
+      "min_samples": 131133,
+      "p50_us": 12.288,
+      "p99_us": 23.04,
+      "p999_us": 31.488,
+      "paired_rpc_gain_pct": 92.75084187410789,
+      "paired_p50_reduction_pct": 70.3125
+    },
+    "socket": {
+      "rpc_s": 902255.507,
+      "payload_mib_s": 1762.217787109375,
+      "rpc_range": [
+        896939.629,
+        905744.148
+      ],
+      "mean_batch": 32.514971579374745,
+      "min_samples": 69697,
+      "p50_us": 40.96,
+      "p99_us": 55.808,
+      "p999_us": 67.584
+    },
+    "busy_vs_eventfd_gain_pct": 32.120033408591794
+  },
+  {
+    "case": "3072B-small",
+    "bytes": 3072,
+    "profile": "small",
+    "minimum": 1,
+    "maximum": 8,
+    "shm-eventfd": {
+      "rpc_s": 321812.702,
+      "payload_mib_s": 942.8106503906249,
+      "rpc_range": [
+        312554.628,
+        323917.445
+      ],
+      "mean_batch": 4.50348593451313,
+      "min_samples": 24098,
+      "p50_us": 10.368,
+      "p99_us": 17.152,
+      "p999_us": 26.368,
+      "paired_rpc_gain_pct": 33.78276776766549,
+      "paired_p50_reduction_pct": 46.710526315789465
+    },
+    "shm-busy": {
+      "rpc_s": 883806.688,
+      "payload_mib_s": 2589.27740625,
+      "rpc_range": [
+        820609.8,
+        913326.298
+      ],
+      "mean_batch": 4.499355142553399,
+      "min_samples": 63880,
+      "p50_us": 3.296,
+      "p99_us": 6.016,
+      "p999_us": 12.8,
+      "paired_rpc_gain_pct": 269.3797813093481,
+      "paired_p50_reduction_pct": 83.2792207792208
+    },
+    "socket": {
+      "rpc_s": 239713.863,
+      "payload_mib_s": 702.2867080078125,
+      "rpc_range": [
+        239267.749,
+        240548.695
+      ],
+      "mean_batch": 4.502079332816775,
+      "min_samples": 18435,
+      "p50_us": 19.712,
+      "p99_us": 27.904,
+      "p999_us": 37.888
+    },
+    "busy_vs_eventfd_gain_pct": 181.96267663200416
+  },
+  {
+    "case": "3072B-burst",
+    "bytes": 3072,
+    "profile": "burst",
+    "minimum": 1,
+    "maximum": 64,
+    "shm-eventfd": {
+      "rpc_s": 1021629.835,
+      "payload_mib_s": 2993.0561572265624,
+      "rpc_range": [
+        990892.472,
+        1136051.53
+      ],
+      "mean_batch": 32.48457346120633,
+      "min_samples": 76991,
+      "p50_us": 16.896,
+      "p99_us": 32.0,
+      "p999_us": 42.496,
+      "paired_rpc_gain_pct": 35.42087731974153,
+      "paired_p50_reduction_pct": 63.73626373626373
+    },
+    "shm-busy": {
+      "rpc_s": 1406376.478,
+      "payload_mib_s": 4120.243587890624,
+      "rpc_range": [
+        1345445.458,
+        1414203.146
+      ],
+      "mean_batch": 32.48865332142081,
+      "min_samples": 104838,
+      "p50_us": 15.36,
+      "p99_us": 27.904,
+      "p999_us": 35.84,
+      "paired_rpc_gain_pct": 86.42049200981698,
+      "paired_p50_reduction_pct": 67.03296703296704
+    },
+    "socket": {
+      "rpc_s": 754526.57,
+      "payload_mib_s": 2210.527060546875,
+      "rpc_range": [
+        754410.882,
+        755774.446
+      ],
+      "mean_batch": 32.54618245196249,
+      "min_samples": 58550,
+      "p50_us": 46.592,
+      "p99_us": 65.536,
+      "p999_us": 76.8
+    },
+    "busy_vs_eventfd_gain_pct": 35.78117666838023
+  },
+  {
+    "case": "4096B-small",
+    "bytes": 4096,
+    "profile": "small",
+    "minimum": 1,
+    "maximum": 8,
+    "shm-eventfd": {
+      "rpc_s": 284766.106,
+      "payload_mib_s": 1112.3676015625,
+      "rpc_range": [
+        282517.759,
+        301999.661
+      ],
+      "mean_batch": 4.499279525245056,
+      "min_samples": 21829,
+      "p50_us": 11.136,
+      "p99_us": 18.688,
+      "p999_us": 27.136,
+      "paired_rpc_gain_pct": 29.818430188474544,
+      "paired_p50_reduction_pct": 50.0
+    },
+    "shm-busy": {
+      "rpc_s": 766379.62,
+      "payload_mib_s": 2993.670390625,
+      "rpc_range": [
+        722587.025,
+        771041.228
+      ],
+      "mean_batch": 4.501795125435565,
+      "min_samples": 55973,
+      "p50_us": 3.872,
+      "p99_us": 6.528,
+      "p999_us": 14.592,
+      "paired_rpc_gain_pct": 248.61740297319145,
+      "paired_p50_reduction_pct": 82.61494252873564
+    },
+    "socket": {
+      "rpc_s": 219834.011,
+      "payload_mib_s": 858.72660546875,
+      "rpc_range": [
+        219357.225,
+        220837.392
+      ],
+      "mean_batch": 4.499426915330834,
+      "min_samples": 16938,
+      "p50_us": 22.272,
+      "p99_us": 30.208,
+      "p999_us": 40.448
+    },
+    "busy_vs_eventfd_gain_pct": 155.3119514925548
+  },
+  {
+    "case": "4096B-burst",
+    "bytes": 4096,
+    "profile": "burst",
+    "minimum": 1,
+    "maximum": 64,
+    "shm-eventfd": {
+      "rpc_s": 838453.933,
+      "payload_mib_s": 3275.21067578125,
+      "rpc_range": [
+        823512.371,
+        841012.126
+      ],
+      "mean_batch": 32.49928569737247,
+      "min_samples": 64100,
+      "p50_us": 21.248,
+      "p99_us": 40.96,
+      "p999_us": 52.224,
+      "paired_rpc_gain_pct": 33.637627915902414,
+      "paired_p50_reduction_pct": 55.851063829787236
+    },
+    "shm-busy": {
+      "rpc_s": 1079872.371,
+      "payload_mib_s": 4218.25144921875,
+      "rpc_range": [
+        1052977.822,
+        1084280.897
+      ],
+      "mean_batch": 32.49049338146811,
+      "min_samples": 81837,
+      "p50_us": 19.456,
+      "p99_us": 37.888,
+      "p999_us": 47.104,
+      "paired_rpc_gain_pct": 71.5927483694347,
+      "paired_p50_reduction_pct": 59.13978494623655
+    },
+    "socket": {
+      "rpc_s": 629322.848,
+      "payload_mib_s": 2458.292375,
+      "rpc_range": [
+        625118.391,
+        631135.552
+      ],
+      "mean_batch": 32.50099387198105,
+      "min_samples": 48389,
+      "p50_us": 47.616,
+      "p99_us": 82.944,
+      "p999_us": 94.208
+    },
+    "busy_vs_eventfd_gain_pct": 28.40152212026488
+  },
+  {
+    "case": "8192B-small",
+    "bytes": 8192,
+    "profile": "small",
+    "minimum": 1,
+    "maximum": 8,
+    "shm-eventfd": {
+      "rpc_s": 232391.409,
+      "payload_mib_s": 1815.5578828125,
+      "rpc_range": [
+        229328.111,
+        234320.313
+      ],
+      "mean_batch": 4.502027915742358,
+      "min_samples": 71229,
+      "p50_us": 12.8,
+      "p99_us": 22.528,
+      "p999_us": 30.464,
+      "paired_rpc_gain_pct": 32.49984863727335,
+      "paired_p50_reduction_pct": 54.54545454545454
+    },
+    "shm-busy": {
+      "rpc_s": 469415.265,
+      "payload_mib_s": 3667.3067578125,
+      "rpc_range": [
+        455188.179,
+        469640.33
+      ],
+      "mean_batch": 4.499985171037256,
+      "min_samples": 141835,
+      "p50_us": 5.952,
+      "p99_us": 11.776,
+      "p999_us": 19.968,
+      "paired_rpc_gain_pct": 166.9117677412285,
+      "paired_p50_reduction_pct": 78.86363636363636
+    },
+    "socket": {
+      "rpc_s": 175869.078,
+      "payload_mib_s": 1373.977171875,
+      "rpc_range": [
+        175389.943,
+        175956.133
+      ],
+      "mean_batch": 4.503615803005316,
+      "min_samples": 54486,
+      "p50_us": 28.16,
+      "p99_us": 38.912,
+      "p999_us": 49.152
+    },
+    "busy_vs_eventfd_gain_pct": 102.09022873130391
+  },
+  {
+    "case": "8192B-burst",
+    "bytes": 8192,
+    "profile": "burst",
+    "minimum": 1,
+    "maximum": 64,
+    "shm-eventfd": {
+      "rpc_s": 542992.028,
+      "payload_mib_s": 4242.12521875,
+      "rpc_range": [
+        530059.326,
+        543937.932
+      ],
+      "mean_batch": 32.456897273129385,
+      "min_samples": 165149,
+      "p50_us": 34.816,
+      "p99_us": 62.464,
+      "p999_us": 76.8,
+      "paired_rpc_gain_pct": 42.84913834072215,
+      "paired_p50_reduction_pct": 54.054054054054056
+    },
+    "shm-busy": {
+      "rpc_s": 628199.503,
+      "payload_mib_s": 4907.8086171875,
+      "rpc_range": [
+        621870.005,
+        651951.768
+      ],
+      "mean_batch": 32.48949088727529,
+      "min_samples": 193698,
+      "p50_us": 33.792,
+      "p99_us": 63.488,
+      "p999_us": 74.752,
+      "paired_rpc_gain_pct": 65.37223992572092,
+      "paired_p50_reduction_pct": 55.4054054054054
+    },
+    "socket": {
+      "rpc_s": 380777.888,
+      "payload_mib_s": 2974.82725,
+      "rpc_range": [
+        379869.985,
+        381745.508
+      ],
+      "mean_batch": 32.49858841645992,
+      "min_samples": 118132,
+      "p50_us": 75.776,
+      "p99_us": 139.264,
+      "p999_us": 151.552
+    },
+    "busy_vs_eventfd_gain_pct": 17.320830800739472
+  },
+  {
+    "case": "16384B-small",
+    "bytes": 16384,
+    "profile": "small",
+    "minimum": 1,
+    "maximum": 8,
+    "shm-eventfd": {
+      "rpc_s": 157418.561,
+      "payload_mib_s": 2459.665015625,
+      "rpc_range": [
+        157348.214,
+        158868.529
+      ],
+      "mean_batch": 4.499882800217248,
+      "min_samples": 48921,
+      "p50_us": 17.152,
+      "p99_us": 31.232,
+      "p999_us": 40.448,
+      "paired_rpc_gain_pct": 26.099665273915384,
+      "paired_p50_reduction_pct": 57.05128205128205
+    },
+    "shm-busy": {
+      "rpc_s": 264051.528,
+      "payload_mib_s": 4125.805125,
+      "rpc_range": [
+        255518.057,
+        264801.636
+      ],
+      "mean_batch": 4.496888882850816,
+      "min_samples": 79333,
+      "p50_us": 10.368,
+      "p99_us": 20.48,
+      "p999_us": 27.904,
+      "paired_rpc_gain_pct": 110.9364538501731,
+      "paired_p50_reduction_pct": 74.03846153846155
+    },
+    "socket": {
+      "rpc_s": 124869.001,
+      "payload_mib_s": 1951.078140625,
+      "rpc_range": [
+        124780.834,
+        125536.213
+      ],
+      "mean_batch": 4.504783366944889,
+      "min_samples": 38802,
+      "p50_us": 39.936,
+      "p99_us": 56.32,
+      "p999_us": 67.584
+    },
+    "busy_vs_eventfd_gain_pct": 67.81348913181814
+  },
+  {
+    "case": "16384B-burst",
+    "bytes": 16384,
+    "profile": "burst",
+    "minimum": 1,
+    "maximum": 64,
+    "shm-eventfd": {
+      "rpc_s": 297887.722,
+      "payload_mib_s": 4654.49565625,
+      "rpc_range": [
+        287379.278,
+        301125.434
+      ],
+      "mean_batch": 32.536920583468394,
+      "min_samples": 89316,
+      "p50_us": 64.512,
+      "p99_us": 108.544,
+      "p999_us": 128.0,
+      "paired_rpc_gain_pct": 50.63198766043093,
+      "paired_p50_reduction_pct": 57.432432432432435
+    },
+    "shm-busy": {
+      "rpc_s": 336286.534,
+      "payload_mib_s": 5254.47709375,
+      "rpc_range": [
+        332206.616,
+        354894.243
+      ],
+      "mean_batch": 32.52816527047092,
+      "min_samples": 103340,
+      "p50_us": 62.464,
+      "p99_us": 114.688,
+      "p999_us": 133.12,
+      "paired_rpc_gain_pct": 70.04899933357135,
+      "paired_p50_reduction_pct": 58.21917808219178
+    },
+    "socket": {
+      "rpc_s": 197758.608,
+      "payload_mib_s": 3089.97825,
+      "rpc_range": [
+        196579.989,
+        197789.987
+      ],
+      "mean_batch": 32.54232742923357,
+      "min_samples": 60953,
+      "p50_us": 149.504,
+      "p99_us": 266.24,
+      "p999_us": 299.008
+    },
+    "busy_vs_eventfd_gain_pct": 12.890364108393815
+  },
+  {
+    "case": "32768B-small",
+    "bytes": 32768,
+    "profile": "small",
+    "minimum": 1,
+    "maximum": 8,
+    "shm-eventfd": {
+      "rpc_s": 99319.922,
+      "payload_mib_s": 3103.7475625,
+      "rpc_range": [
+        96820.665,
+        99665.877
+      ],
+      "mean_batch": 4.499484157596825,
+      "min_samples": 30237,
+      "p50_us": 26.88,
+      "p99_us": 45.568,
+      "p999_us": 55.808,
+      "paired_rpc_gain_pct": 28.89398039951907,
+      "paired_p50_reduction_pct": 45.833333333333336
+    },
+    "shm-busy": {
+      "rpc_s": 137856.241,
+      "payload_mib_s": 4308.00753125,
+      "rpc_range": [
+        136766.008,
+        141775.113
+      ],
+      "mean_batch": 4.499660543391694,
+      "min_samples": 42573,
+      "p50_us": 20.736,
+      "p99_us": 34.816,
+      "p999_us": 45.568,
+      "paired_rpc_gain_pct": 81.03129404148521,
+      "paired_p50_reduction_pct": 58.673469387755105
+    },
+    "socket": {
+      "rpc_s": 76552.115,
+      "payload_mib_s": 2392.25359375,
+      "rpc_range": [
+        76150.503,
+        77323.919
+      ],
+      "mean_batch": 4.494466531817442,
+      "min_samples": 23754,
+      "p50_us": 49.664,
+      "p99_us": 90.112,
+      "p999_us": 102.4
+    },
+    "busy_vs_eventfd_gain_pct": 42.38307596833797
+  },
+  {
+    "case": "32768B-burst",
+    "bytes": 32768,
+    "profile": "burst",
+    "minimum": 1,
+    "maximum": 64,
+    "shm-eventfd": {
+      "rpc_s": 156216.621,
+      "payload_mib_s": 4881.76940625,
+      "rpc_range": [
+        154842.257,
+        156676.221
+      ],
+      "mean_batch": 32.429336544050486,
+      "min_samples": 48140,
+      "p50_us": 124.928,
+      "p99_us": 223.232,
+      "p999_us": 262.144,
+      "paired_rpc_gain_pct": 61.108353951014685,
+      "paired_p50_reduction_pct": 54.47761194029851
+    },
+    "shm-busy": {
+      "rpc_s": 169044.563,
+      "payload_mib_s": 5282.64259375,
+      "rpc_range": [
+        163301.552,
+        173171.272
+      ],
+      "mean_batch": 32.4062388379569,
+      "min_samples": 50691,
+      "p50_us": 124.928,
+      "p99_us": 231.424,
+      "p999_us": 262.144,
+      "paired_rpc_gain_pct": 74.83970365552915,
+      "paired_p50_reduction_pct": 55.79710144927537
+    },
+    "socket": {
+      "rpc_s": 96685.455,
+      "payload_mib_s": 3021.42046875,
+      "rpc_range": [
+        96584.811,
+        96963.7
+      ],
+      "mean_batch": 32.4250936329588,
+      "min_samples": 30171,
+      "p50_us": 282.624,
+      "p99_us": 540.672,
+      "p999_us": 598.016
+    },
+    "busy_vs_eventfd_gain_pct": 9.172112493813621
+  },
+  {
+    "case": "65536B-small",
+    "bytes": 65536,
+    "profile": "small",
+    "minimum": 1,
+    "maximum": 8,
+    "shm-eventfd": {
+      "rpc_s": 57354.658,
+      "payload_mib_s": 3584.666125,
+      "rpc_range": [
+        57328.928,
+        58043.804
+      ],
+      "mean_batch": 4.508917751607992,
+      "min_samples": 286647,
+      "p50_us": 47.104,
+      "p99_us": 82.944,
+      "p999_us": 106.496,
+      "paired_rpc_gain_pct": 40.603787941291515,
+      "paired_p50_reduction_pct": 47.72727272727273
+    },
+    "shm-busy": {
+      "rpc_s": 69581.196,
+      "payload_mib_s": 4348.82475,
+      "rpc_range": [
+        69322.84,
+        71413.659
+      ],
+      "mean_batch": 4.504589888004143,
+      "min_samples": 346617,
+      "p50_us": 40.96,
+      "p99_us": 78.848,
+      "p999_us": 98.304,
+      "paired_rpc_gain_pct": 70.65345661243553,
+      "paired_p50_reduction_pct": 54.54545454545454
+    },
+    "socket": {
+      "rpc_s": 40773.388,
+      "payload_mib_s": 2548.33675,
+      "rpc_range": [
+        40748.889,
+        40796.688
+      ],
+      "mean_batch": 4.510325918719321,
+      "min_samples": 203746,
+      "p50_us": 90.112,
+      "p99_us": 174.08,
+      "p999_us": 198.656
+    },
+    "busy_vs_eventfd_gain_pct": 21.371877039110167
+  },
+  {
+    "case": "65536B-burst",
+    "bytes": 65536,
+    "profile": "burst",
+    "minimum": 1,
+    "maximum": 32,
+    "shm-eventfd": {
+      "rpc_s": 78223.353,
+      "payload_mib_s": 4888.9595625,
+      "rpc_range": [
+        77841.318,
+        80656.692
+      ],
+      "mean_batch": 16.5384778012685,
+      "min_samples": 389208,
+      "p50_us": 128.0,
+      "p99_us": 217.088,
+      "p999_us": 249.856,
+      "paired_rpc_gain_pct": 81.05934480667698,
+      "paired_p50_reduction_pct": 59.09090909090908
+    },
+    "shm-busy": {
+      "rpc_s": 86537.316,
+      "payload_mib_s": 5408.58225,
+      "rpc_range": [
+        84164.68,
+        89163.945
+      ],
+      "mean_batch": 16.54512729162028,
+      "min_samples": 420835,
+      "p50_us": 123.904,
+      "p99_us": 217.088,
+      "p999_us": 249.856,
+      "paired_rpc_gain_pct": 100.30322321121119,
+      "paired_p50_reduction_pct": 60.19736842105263
+    },
+    "socket": {
+      "rpc_s": 43516.617,
+      "payload_mib_s": 2719.7885625,
+      "rpc_range": [
+        43203.157,
+        43560.687
+      ],
+      "mean_batch": 16.560717571297147,
+      "min_samples": 216018,
+      "p50_us": 315.392,
+      "p99_us": 614.4,
+      "p999_us": 671.744
+    },
+    "busy_vs_eventfd_gain_pct": 10.547485632066355
+  },
+  {
+    "case": "131072B-small",
+    "bytes": 131072,
+    "profile": "small",
+    "minimum": 1,
+    "maximum": 8,
+    "shm-eventfd": {
+      "rpc_s": 33749.161,
+      "payload_mib_s": 4218.645125,
+      "rpc_range": [
+        32740.338,
+        34085.729
+      ],
+      "mean_batch": 4.495226037875192,
+      "min_samples": 163703,
+      "p50_us": 83.968,
+      "p99_us": 133.12,
+      "p999_us": 172.032,
+      "paired_rpc_gain_pct": 53.171335906463966,
+      "paired_p50_reduction_pct": 54.94505494505495
+    },
+    "shm-busy": {
+      "rpc_s": 38344.614,
+      "payload_mib_s": 4793.07675,
+      "rpc_range": [
+        37407.082,
+        39443.15
+      ],
+      "mean_batch": 4.4938932689240305,
+      "min_samples": 187038,
+      "p50_us": 76.8,
+      "p99_us": 122.88,
+      "p999_us": 159.744,
+      "paired_rpc_gain_pct": 74.02790401804955,
+      "paired_p50_reduction_pct": 58.791208791208796
+    },
+    "socket": {
+      "rpc_s": 22128.911,
+      "payload_mib_s": 2766.113875,
+      "rpc_range": [
+        22033.601,
+        22145.892
+      ],
+      "mean_batch": 4.498897419144071,
+      "min_samples": 110169,
+      "p50_us": 186.368,
+      "p99_us": 319.488,
+      "p999_us": 364.544
+    },
+    "busy_vs_eventfd_gain_pct": 14.253805198956716
+  },
+  {
+    "case": "131072B-burst",
+    "bytes": 131072,
+    "profile": "burst",
+    "minimum": 1,
+    "maximum": 16,
+    "shm-eventfd": {
+      "rpc_s": 37250.841,
+      "payload_mib_s": 4656.355125,
+      "rpc_range": [
+        37192.276,
+        40341.767
+      ],
+      "mean_batch": 8.521735456888175,
+      "min_samples": 185966,
+      "p50_us": 139.264,
+      "p99_us": 223.232,
+      "p999_us": 278.528,
+      "paired_rpc_gain_pct": 63.37342945760369,
+      "paired_p50_reduction_pct": 57.49999999999999
+    },
+    "shm-busy": {
+      "rpc_s": 40670.995,
+      "payload_mib_s": 5083.874375,
+      "rpc_range": [
+        40627.535,
+        41328.206
+      ],
+      "mean_batch": 8.527151935297516,
+      "min_samples": 203138,
+      "p50_us": 133.12,
+      "p99_us": 223.232,
+      "p999_us": 270.336,
+      "paired_rpc_gain_pct": 78.37342068607398,
+      "paired_p50_reduction_pct": 59.375
+    },
+    "socket": {
+      "rpc_s": 22801.04,
+      "payload_mib_s": 2850.13,
+      "rpc_range": [
+        22698.763,
+        22820.854
+      ],
+      "mean_batch": 8.514817315627578,
+      "min_samples": 113494,
+      "p50_us": 327.68,
+      "p99_us": 598.016,
+      "p999_us": 671.744
+    },
+    "busy_vs_eventfd_gain_pct": 9.181414186058245
+  },
+  {
+    "case": "524288B-small",
+    "bytes": 524288,
+    "profile": "small",
+    "minimum": 1,
+    "maximum": 2,
+    "shm-eventfd": {
+      "rpc_s": 5321.882,
+      "payload_mib_s": 2660.941,
+      "rpc_range": [
+        5295.824,
+        5496.57
+      ],
+      "mean_batch": 1.498936460321789,
+      "min_samples": 26480,
+      "p50_us": 233.472,
+      "p99_us": 319.488,
+      "p999_us": 503.808,
+      "paired_rpc_gain_pct": 57.68385079494036,
+      "paired_p50_reduction_pct": 31.32530120481928
+    },
+    "shm-busy": {
+      "rpc_s": 5775.786,
+      "payload_mib_s": 2887.893,
+      "rpc_range": [
+        5638.71,
+        5926.04
+      ],
+      "mean_batch": 1.4986507524649715,
+      "min_samples": 28194,
+      "p50_us": 212.992,
+      "p99_us": 282.624,
+      "p999_us": 487.424,
+      "paired_rpc_gain_pct": 69.04935774376308,
+      "paired_p50_reduction_pct": 37.34939759036144
+    },
+    "socket": {
+      "rpc_s": 3387.854,
+      "payload_mib_s": 1693.927,
+      "rpc_range": [
+        3375.033,
+        3416.627
+      ],
+      "mean_batch": 1.5000442752147347,
+      "min_samples": 16877,
+      "p50_us": 339.968,
+      "p99_us": 573.44,
+      "p999_us": 835.584
+    },
+    "busy_vs_eventfd_gain_pct": 7.813418186250698
+  },
+  {
+    "case": "524288B-burst",
+    "bytes": 524288,
+    "profile": "burst",
+    "minimum": 1,
+    "maximum": 4,
+    "shm-eventfd": {
+      "rpc_s": 6532.7,
+      "payload_mib_s": 3266.35,
+      "rpc_range": [
+        6370.186,
+        7178.549
+      ],
+      "mean_batch": 2.487973937755597,
+      "min_samples": 31853,
+      "p50_us": 266.24,
+      "p99_us": 499.712,
+      "p999_us": 589.824,
+      "paired_rpc_gain_pct": 79.07389899307766,
+      "paired_p50_reduction_pct": 51.49253731343284
+    },
+    "shm-busy": {
+      "rpc_s": 6931.603,
+      "payload_mib_s": 3465.8015,
+      "rpc_range": [
+        6724.052,
+        7573.466
+      ],
+      "mean_batch": 2.489186879642411,
+      "min_samples": 33622,
+      "p50_us": 251.904,
+      "p99_us": 487.424,
+      "p999_us": 565.248,
+      "paired_rpc_gain_pct": 90.008599121667,
+      "paired_p50_reduction_pct": 54.104477611940304
+    },
+    "socket": {
+      "rpc_s": 3648.047,
+      "payload_mib_s": 1824.0235,
+      "rpc_range": [
+        3638.92,
+        3655.467
+      ],
+      "mean_batch": 2.4823465507876152,
+      "min_samples": 18195,
+      "p50_us": 548.864,
+      "p99_us": 1032.192,
+      "p999_us": 1310.72
+    },
+    "busy_vs_eventfd_gain_pct": 5.555034028833705
+  },
+  {
+    "case": "1048576B-small",
+    "bytes": 1048576,
+    "profile": "small",
+    "minimum": 1,
+    "maximum": 2,
+    "shm-eventfd": {
+      "rpc_s": 1129.712,
+      "payload_mib_s": 1129.712,
+      "rpc_range": [
+        1117.361,
+        1133.445
+      ],
+      "mean_batch": 1.495049504950495,
+      "min_samples": 5587,
+      "p50_us": 1261.568,
+      "p99_us": 1441.792,
+      "p999_us": 1982.464,
+      "paired_rpc_gain_pct": 27.485270569011377,
+      "paired_p50_reduction_pct": 0.0
+    },
+    "shm-busy": {
+      "rpc_s": 1141.686,
+      "payload_mib_s": 1141.686,
+      "rpc_range": [
+        1139.823,
+        1142.202
+      ],
+      "mean_batch": 1.495285489785228,
+      "min_samples": 5700,
+      "p50_us": 1228.8,
+      "p99_us": 1425.408,
+      "p999_us": 1835.008,
+      "paired_rpc_gain_pct": 28.894398325492542,
+      "paired_p50_reduction_pct": 1.3157894736842146
+    },
+    "socket": {
+      "rpc_s": 885.753,
+      "payload_mib_s": 885.753,
+      "rpc_range": [
+        885.593,
+        886.151
+      ],
+      "mean_batch": 1.4919191919191919,
+      "min_samples": 4428,
+      "p50_us": 1261.568,
+      "p99_us": 2359.296,
+      "p999_us": 2850.816
+    },
+    "busy_vs_eventfd_gain_pct": 0.895006869007342
+  },
+  {
+    "case": "1048576B-burst",
+    "bytes": 1048576,
+    "profile": "burst",
+    "minimum": 1,
+    "maximum": 4,
+    "shm-eventfd": {
+      "rpc_s": 1597.4,
+      "payload_mib_s": 1597.4,
+      "rpc_range": [
+        1585.375,
+        1629.011
+      ],
+      "mean_batch": 2.493710691823899,
+      "min_samples": 7930,
+      "p50_us": 1261.568,
+      "p99_us": 1900.544,
+      "p999_us": 1998.848,
+      "paired_rpc_gain_pct": 103.73804598199597,
+      "paired_p50_reduction_pct": 50.0
+    },
+    "shm-busy": {
+      "rpc_s": 1624.964,
+      "payload_mib_s": 1624.964,
+      "rpc_range": [
+        1602.763,
+        1625.56
+      ],
+      "mean_batch": 2.4975077881619936,
+      "min_samples": 8017,
+      "p50_us": 1245.184,
+      "p99_us": 1884.16,
+      "p999_us": 1982.464,
+      "paired_rpc_gain_pct": 107.32967198353154,
+      "paired_p50_reduction_pct": 50.64935064935065
+    },
+    "socket": {
+      "rpc_s": 784.046,
+      "payload_mib_s": 784.046,
+      "rpc_range": [
+        698.909,
+        898.601
+      ],
+      "mean_batch": 2.510614525139665,
+      "min_samples": 3495,
+      "p50_us": 2523.136,
+      "p99_us": 4915.2,
+      "p999_us": 5439.488
+    },
+    "busy_vs_eventfd_gain_pct": 1.0967752109122486
+  }
+]

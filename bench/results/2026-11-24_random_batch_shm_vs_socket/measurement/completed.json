@@ -1,0 +1,1 @@
+{"completed": true, "smoke": false, "records": 270, "rounds": 3, "seconds": 5, "modes": ["shm-eventfd", "shm-busy", "socket"], "sizes": [16, 128, 256, 512, 1024, 2048, 3072, 4096, 8192, 16384, 32768, 65536, 131072, 524288, 1048576], "server_cpu": 1, "client_cpu": 3, "distribution": "uniform_batches", "seed_reset_after_warmup": true, "prefix_length": 256, "socket_coalesced": true}

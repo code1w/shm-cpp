@@ -66,7 +66,9 @@ class ShmConnection : public comm::ITcpConnection,
      */
     ShmConnection(EventLoop* loop, uint64_t id, UniqueFd socket_fd, DefaultRingChannel channel)
         : loop_(loop), id_(id), socket_fd_(std::move(socket_fd)), channel_(std::move(channel)), encode_buf_(128 * 1024)
-    {}
+    {
+        if (loop_ && loop_->BusyPolling()) channel_.SetReaderPolling();
+    }
 
     ~ShmConnection() override
     {
@@ -461,7 +463,7 @@ class ShmConnection : public comm::ITcpConnection,
                 {
                     break;
                 }
-                if (channel_.PrepareWait(seen))
+                if ((loop_ && loop_->BusyPolling()) || channel_.PrepareWait(seen))
                 {
                     break;
                 }

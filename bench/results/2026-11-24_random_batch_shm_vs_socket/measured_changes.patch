@@ -1,0 +1,942 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index c6c8c34..b423377 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -152,3 +152,9 @@ if(Protobuf_FOUND)
+ else()
+     message(STATUS "Protobuf not found, skipping proto targets")
+ endif()
++
++# Random-batch benchmark helper has no exception or allocation dependency.
++add_executable(test_random_batch test/test_random_batch.cpp)
++if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
++    target_compile_options(test_random_batch PRIVATE -fno-exceptions)
++endif()
+diff --git a/bench/bench_acceptance.cpp b/bench/bench_acceptance.cpp
+index 17324d9..9d17a03 100644
+--- a/bench/bench_acceptance.cpp
++++ b/bench/bench_acceptance.cpp
+@@ -2,6 +2,7 @@
+ // Sampled per-request RTT, fixed-size histogram, deterministic content checks.
+ #include <shm_ipc/shm_server.hpp>
+ #include "socket_peer.hpp"
++#include "random_batch.hpp"
+ #include <shm_ipc/shm_async_client.hpp>
+ #include <shm_ipc/simple_pod_codec.hpp>
+ #include <algorithm>
+@@ -58,7 +59,7 @@ struct Histogram {
+         return max;
+     }
+ };
+-struct Options { std::string role,path,transport="shm";int bytes=16,batch=64,gap_us=0,sessions=1,stride=64,reconnect=0;double seconds=10,warmup=1;uint64_t messages=0;bool single_type=false; };
++struct Options { std::string role,path,transport="shm";int bytes=16,batch=64,batch_min=0,gap_us=0,sessions=1,stride=64,reconnect=0;double seconds=10,warmup=1;uint64_t messages=0,seed=1;bool single_type=false,busy_poll=false; };
+ template<class T> std::any Make() { T p{};for(size_t i=0;i<sizeof(p.data);++i)p.data[i]=static_cast<unsigned char>(i*131+17);return p; }
+ template<class T> void SetSeq(std::any& a,uint64_t seq) { std::any_cast<T&>(a).seq=seq; }
+ template<class T> uint64_t Verify(const std::any& a,bool full) {
+@@ -105,7 +106,7 @@ static int Run(const Options& o) {
+     if(o.role=="server") {
+         uint64_t replies=0,opened=0,closed=0,send_failures=0;int active=0;
+         {
+-            shm::EventLoop loop;Server server(&loop,o.path,"acceptance");
++            shm::EventLoop loop;REQUIRE(loop.SetBusyPolling(o.busy_poll)==shm::ErrorCode::kOk);Server server(&loop,o.path,"acceptance");
+             server.SetCodecFactory([]{return std::make_shared<shm::codec::SimplePodCodec>();});
+             server.SetConnectionCallback([&](const comm::TcpConnPtr&){++opened;++active;});
+             server.SetCloseCallback([&](const comm::TcpConnPtr&){++closed;--active;REQUIRE(active>=0);std::printf("{\"role\":\"server_close\",\"time_ns\":%llu}\n",(unsigned long long)Now());std::fflush(stdout);});
+@@ -123,20 +124,32 @@ static int Run(const Options& o) {
+     REQUIRE(o.role=="client");
+     bool completed=false,failed=false,closing=false,measuring=false,need_reconnect=false;
+     int session=0,close_events=0;uint64_t sent=0,received=0,measured=0,start=0,end=0,phase_end=0,last_tick=0,full_checks=0;
+-    Histogram hist;std::vector<uint64_t> stamps(o.batch);
++    Histogram hist;std::array<uint64_t,256> stamps{};
++    acceptance_bench::RandomBatch schedule(o.batch_min ? o.batch_min : o.batch,o.batch,o.seed);
++    std::array<uint64_t,257> batch_counts{};
++    uint64_t measured_batches=0, batch_messages=0, prefix_count=0, prefix_hash=UINT64_C(14695981039346656037);
++    auto reset_schedule=[&](bool formal) {
++        schedule.Reset(formal ? o.seed : (o.seed ^ UINT64_C(0xd1b54a32d192ed03)));
++        batch_counts.fill(0);measured_batches=batch_messages=prefix_count=0;
++        prefix_hash=UINT64_C(14695981039346656037);
++    };
+     std::any request=payload.make();
+     {
+-        shm::EventLoop loop;Client client(&loop);
++        shm::EventLoop loop;REQUIRE(loop.SetBusyPolling(o.busy_poll)==shm::ErrorCode::kOk);Client client(&loop);
+         client.SetCodecFactory([]{return std::make_shared<shm::codec::SimplePodCodec>();});
+         auto batch=[&](const comm::TcpConnPtr& c) {
+-            uint64_t amount=o.batch;if(o.messages)amount=std::min<uint64_t>(amount,o.messages-sent);
++            uint64_t amount=o.batch_min ? schedule.Next() : o.batch;if(o.messages)amount=std::min<uint64_t>(amount,o.messages-sent);
++            if (measuring && o.batch_min) {
++                ++batch_counts[amount];++measured_batches;batch_messages+=amount;
++                if (prefix_count<256) {prefix_hash=(prefix_hash^amount)*UINT64_C(1099511628211);++prefix_count;}
++            }
+             for(uint64_t i=0;i<amount;++i) {
+                 payload.set_seq(request,sent);
+                 if(measuring&&Sample(sent,o.stride))stamps[sent%o.batch]=Now();
+                 REQUIRE(c->SendCmd(request));++sent;
+             }
+         };
+-        client.SetConnectionCallback([&](const comm::TcpConnPtr& c){++session;need_reconnect=false;sent=received=measured=full_checks=0;hist=Histogram{};closing=false;measuring=o.warmup==0;start=Now();phase_end=start+uint64_t((measuring?o.seconds:o.warmup)*1e9);last_tick=start;std::printf("{\"role\":\"client_connected\",\"session\":%d,\"time_ns\":%llu}\n",session,(unsigned long long)Now());std::fflush(stdout);batch(c);});
++        client.SetConnectionCallback([&](const comm::TcpConnPtr& c){++session;need_reconnect=false;sent=received=measured=full_checks=0;hist=Histogram{};closing=false;measuring=o.warmup==0;reset_schedule(measuring);start=Now();phase_end=start+uint64_t((measuring?o.seconds:o.warmup)*1e9);last_tick=start;std::printf("{\"role\":\"client_connected\",\"session\":%d,\"time_ns\":%llu}\n",session,(unsigned long long)Now());std::fflush(stdout);batch(c);});
+         client.SetMessageCallback([&](const comm::TcpConnPtr& c,const std::any& p){
+             uint64_t arrival=0;if(measuring&&Sample(received,o.stride))arrival=Now();
+             bool full=Sample(received,64);
+@@ -151,9 +164,15 @@ static int Run(const Options& o) {
+                 end=now;completed=true;closing=true;
+                 double seconds=double(end-start)/1e9;
+                 std::printf("{\"role\":\"result\",\"session\":%d,\"bytes\":%d,\"batch\":%d,\"gap_us\":%d,\"messages\":%llu,\"seconds\":%.9f,\"msg_s\":%.3f,\"samples\":%llu,\"p50_ns\":%llu,\"p99_ns\":%llu,\"p999_ns\":%llu,\"max_ns\":%llu,\"full_checks\":%llu,\"errors\":0}\n",session,o.bytes,o.batch,o.gap_us,(unsigned long long)measured,seconds,measured/seconds,(unsigned long long)hist.samples,(unsigned long long)hist.Percentile(.5),(unsigned long long)hist.Percentile(.99),(unsigned long long)hist.Percentile(.999),(unsigned long long)hist.max,(unsigned long long)full_checks);std::fflush(stdout);
++                if (o.batch_min) {
++                    REQUIRE(batch_messages==measured);
++                    std::printf("{\"role\":\"batch_stats\",\"minimum\":%d,\"maximum\":%d,\"seed\":%llu,\"batches\":%llu,\"messages\":%llu,\"prefix_count\":%llu,\"prefix_hash\":%llu,\"counts\":[",o.batch_min,o.batch,(unsigned long long)o.seed,(unsigned long long)measured_batches,(unsigned long long)batch_messages,(unsigned long long)prefix_count,(unsigned long long)prefix_hash);
++                    for(int i=0;i<=o.batch;++i)std::printf("%s%llu",i?",":"",(unsigned long long)batch_counts[i]);
++                    std::puts("]}");
++                }
+                 client.Close();return;
+             }
+-            if(!measuring&&now>=phase_end){measuring=true;start=now;phase_end=now+uint64_t(o.seconds*1e9);}
++            if(!measuring&&now>=phase_end){measuring=true;reset_schedule(true);start=now;phase_end=now+uint64_t(o.seconds*1e9);}
+             if(o.gap_us)std::this_thread::sleep_for(std::chrono::microseconds(o.gap_us));
+             batch(c);
+         });
+@@ -175,11 +194,13 @@ int main(int argc,char** argv) {
+     Options o;
+     REQUIRE(argc>=3);o.role=argv[1];o.path=argv[2];
+     for(int i=3;i<argc;++i) { REQUIRE(i+1<argc);std::string k=argv[i];const char* v=argv[++i];
+-        if(k=="--transport")o.transport=v;else if(k=="--socket-buffer")socket_bench::buffer_bytes=std::atoi(v);else if(k=="--socket-coalesce")socket_bench::coalesce=std::atoi(v)!=0;else if(k=="--single-type")o.single_type=std::atoi(v)!=0;else if(k=="--bytes")o.bytes=std::atoi(v);else if(k=="--batch")o.batch=std::atoi(v);
++        if(k=="--busy-poll")o.busy_poll=std::atoi(v)!=0;else if(k=="--transport")o.transport=v;else if(k=="--socket-buffer")socket_bench::buffer_bytes=std::atoi(v);else if(k=="--socket-coalesce")socket_bench::coalesce=std::atoi(v)!=0;else if(k=="--single-type")o.single_type=std::atoi(v)!=0;else if(k=="--bytes")o.bytes=std::atoi(v);else if(k=="--batch")o.batch=std::atoi(v);else if(k=="--batch-min")o.batch_min=std::atoi(v);else if(k=="--seed")o.seed=std::strtoull(v,nullptr,10);
+         else if(k=="--seconds")o.seconds=std::atof(v);else if(k=="--warmup")o.warmup=std::atof(v);
+         else if(k=="--gap-us")o.gap_us=std::atoi(v);else if(k=="--sessions")o.sessions=std::atoi(v);
+         else if(k=="--messages")o.messages=std::strtoull(v,nullptr,10);else if(k=="--stride")o.stride=std::atoi(v);else if(k=="--reconnect")o.reconnect=std::atoi(v);else REQUIRE(false);
+     }
++    REQUIRE(o.batch_min>=0&&o.batch_min<=o.batch);
++    REQUIRE(!o.busy_poll || o.transport=="shm");
+     REQUIRE(o.batch>0&&o.batch<=256&&o.sessions>0&&o.stride>0&&o.gap_us>=0&&o.seconds>0&&o.warmup>=0);
+     REQUIRE(o.bytes!=1048576||o.batch<=4);
+     const PayloadOps payload=SelectPayload(o.bytes);
+diff --git a/include/shm_ipc/event_loop.hpp b/include/shm_ipc/event_loop.hpp
+index 499748f..f1f2020 100644
+--- a/include/shm_ipc/event_loop.hpp
++++ b/include/shm_ipc/event_loop.hpp
+@@ -30,6 +30,7 @@
+ #include <new>
+ #include <limits>
+ #include <utility>
++#include <type_traits>
+ #include <vector>
+ 
+ #include "common.hpp"
+@@ -46,7 +47,15 @@ class EventLoop
+     using HookId   = uint64_t;
+ 
+     EventLoop() { wake_error_ = CreateEventfd(&wake_fd_, &wake_errno_); }
+-    ~EventLoop() = default;
++    ~EventLoop()
++    {
++        while (busy_head_)
++        {
++            BusyEntry* old = busy_head_;
++            busy_head_ = old->next;
++            delete old;
++        }
++    }
+ 
+     // 禁止复制和移动（回调可能引用外部局部状态）
+     EventLoop(const EventLoop&)            = delete;
+@@ -64,6 +73,40 @@ class EventLoop
+      */
+     void AddFd(int fd, Callback cb, short events = POLLIN) { entries_.push_back({fd, events, false, std::move(cb)}); }
+ 
++    /// Configure on the owner thread before registering fds/connecting/Run.
++    /// Control fds are checked every control_interval spin iterations, not a time bound.
++    [[nodiscard]]
++    ErrorCode SetBusyPolling(bool enabled, uint32_t control_interval = 256) noexcept
++    {
++        if (run_active_.load(std::memory_order_relaxed) || !entries_.empty() || busy_head_ || !control_interval)
++            return ErrorCode::kInvalidArgument;
++        busy_polling_ = enabled;
++        control_interval_ = control_interval;
++        return ErrorCode::kOk;
++    }
++    bool BusyPolling() const noexcept { return busy_polling_; }
++    using PollCallback = ErrorCode (*)(int, short);
++    /// Callback must not throw; failures propagate from Run as an ErrorCode.
++    /// Same removal rules as AddFd; receives -1, 0 (no fd read).
++    template<class F>
++    [[nodiscard]]
++    ErrorCode AddBusyPollFd(int fd, F&& cb) noexcept
++    {
++        using Stored = std::decay_t<F>;
++        static_assert(std::is_nothrow_constructible_v<Stored, F&&>, "callback storage must not throw");
++        static_assert(std::is_invocable_r_v<ErrorCode, Stored&, int, short>, "callback must return ErrorCode");
++        if (!busy_polling_ || fd < 0) return ErrorCode::kInvalidArgument;
++        if constexpr (std::is_pointer_v<Stored>)
++            if (!cb) return ErrorCode::kInvalidArgument;
++        // Store the callable directly; no std::function/container allocation.
++        BusyEntry* entry = new (std::nothrow) BusyNode<Stored>(fd, std::forward<F>(cb));
++        if (!entry) return ErrorCode::kNoMemory;
++        if (busy_tail_) busy_tail_->next = entry;
++        else busy_head_ = entry;
++        busy_tail_ = entry;
++        return ErrorCode::kOk;
++    }
++
+     /**
+      * @brief 注册"本轮分发结束后"钩子（用于合并通知等延迟动作）
+      *
+@@ -120,6 +163,9 @@ class EventLoop
+      */
+     void RemoveFd(int fd)
+     {
++        for (BusyEntry* e = busy_head_; e; e = e->next)
++            if (e->fd == fd) e->dead = true;
++
+         for (auto& e : entries_)
+         {
+             if (e.fd == fd)
+@@ -292,8 +338,33 @@ class EventLoop
+             return wake_error_;
+         }
+         running_.store(true, std::memory_order_relaxed);
++        uint32_t spins = 0;
+         while (running_.load(std::memory_order_relaxed))
+         {
++            if (busy_polling_)
++            {
++                BusyEntry* end = busy_tail_; // additions become active next spin
++                ErrorCode result = ErrorCode::kOk;
++                for (BusyEntry* e = busy_head_; e && running_.load(std::memory_order_relaxed); e = e->next)
++                {
++                    if (!e->dead) result = e->invoke(e, -1, 0);
++                    if (result != ErrorCode::kOk || e == end) break;
++                }
++                RunPostDispatchHooksNoThrow();
++                CompactDead();
++                if (result != ErrorCode::kOk) return result;
++                if (!running_.load(std::memory_order_relaxed)) break;
++                if (++spins < control_interval_)
++                {
++#if defined(__i386__) || defined(__x86_64__)
++                    __builtin_ia32_pause();
++#elif defined(__aarch64__)
++                    asm volatile("yield");
++#endif
++                    continue;
++                }
++                spins = 0;
++            }
+             // 构建 pollfd 数组（跳过墓碑条目；idx 记录 pfds → entries 下标映射）
+             std::vector<pollfd> pfds;
+             std::vector<std::size_t> idx;
+@@ -318,7 +389,7 @@ class EventLoop
+                 return ErrorCode::kNoMemory;
+             }
+ 
+-            const int ret = ::poll(pfds.data(), static_cast<nfds_t>(pfds.size()), poll_timeout_ms);
++            const int ret = ::poll(pfds.data(), static_cast<nfds_t>(pfds.size()), busy_polling_ ? 0 : poll_timeout_ms);
+             if (ret < 0)
+             {
+                 if (errno == EINTR)
+@@ -469,6 +540,27 @@ class EventLoop
+     }
+ 
+     /** @brief fd 监听条目 */
++    struct BusyEntry
++    {
++        int fd;
++        bool dead = false;
++        BusyEntry* next = nullptr;
++        ErrorCode (*invoke)(BusyEntry*, int, short);
++        BusyEntry(int descriptor, ErrorCode (*dispatch)(BusyEntry*, int, short)) noexcept
++            : fd(descriptor), invoke(dispatch) {}
++        virtual ~BusyEntry() = default;
++    };
++    template<class F>
++    struct BusyNode final : BusyEntry
++    {
++        F cb;
++        template<class T>
++        BusyNode(int fd, T&& callback) noexcept : BusyEntry(fd, Dispatch), cb(std::forward<T>(callback)) {}
++        static ErrorCode Dispatch(BusyEntry* entry, int fd, short events)
++        {
++            return static_cast<BusyNode*>(entry)->cb(fd, events);
++        }
++    };
+     struct Entry
+     {
+         int fd;        ///< 文件描述符
+@@ -521,6 +613,23 @@ class EventLoop
+     /** @brief 回收所有墓碑条目（仅在非分发阶段调用） */
+     void CompactDead()
+     {
++        BusyEntry** link = &busy_head_;
++        busy_tail_ = nullptr;
++        while (*link)
++        {
++            BusyEntry* e = *link;
++            if (e->dead)
++            {
++                *link = e->next;
++                delete e;
++            }
++            else
++            {
++                busy_tail_ = e;
++                link = &e->next;
++            }
++        }
++
+         entries_.erase(std::remove_if(entries_.begin(), entries_.end(), [](const Entry& e) { return e.dead; }),
+                        entries_.end());
+     }
+@@ -530,6 +639,10 @@ class EventLoop
+     std::deque<Entry> entries_;                        ///< fd 监听条目列表
+     std::vector<OwnedTimer> owned_timerfds_;             ///< EventLoop 持有的 timerfd 列表
+     std::vector<std::pair<HookId, Hook>> post_hooks_;  ///< 分发批次结束钩子
++    BusyEntry* busy_head_ = nullptr;
++    BusyEntry* busy_tail_ = nullptr;
++    bool busy_polling_ = false;
++    uint32_t control_interval_ = 256;
+     UniqueFd wake_fd_;
+     ErrorCode wake_error_ = ErrorCode::kOk;
+     int wake_errno_ = 0;
+diff --git a/include/shm_ipc/ring_channel.hpp b/include/shm_ipc/ring_channel.hpp
+index 94785b0..57263ff 100644
+--- a/include/shm_ipc/ring_channel.hpp
++++ b/include/shm_ipc/ring_channel.hpp
+@@ -470,6 +470,11 @@ class RingChannel
+         return Ring::ArmReaderWait(read_region_.Get(), seen_write);
+     }
+ 
++    void SetReaderPolling()
++    {
++        if (read_region_) Ring::SetReaderPolling(read_region_.Get());
++    }
++
+     /** @brief 读环当前 write_pos（通道未初始化时为 0） */
+     [[nodiscard]]
+     uint64_t WritePos() const
+diff --git a/include/shm_ipc/ringbuf.hpp b/include/shm_ipc/ringbuf.hpp
+index 399f85e..5e405f3 100644
+--- a/include/shm_ipc/ringbuf.hpp
++++ b/include/shm_ipc/ringbuf.hpp
+@@ -850,6 +850,13 @@ class RingBuf
+ 
+     // ---- 按需通知（reader_wait）----
+ 
++    /// Dedicated polling reader never sleeps; enable on the sole reader thread.
++    static void SetReaderPolling(void* shm)
++    {
++        auto* hdr = detail::RingHdr(shm);
++        hdr->reader_wait.store(kReaderAwake, std::memory_order_relaxed);
++    }
++
+     /**
+      * @brief 读方：声明即将睡眠，并复查是否有新数据（读方调用）
+      *
+diff --git a/include/shm_ipc/shm_async_client.hpp b/include/shm_ipc/shm_async_client.hpp
+index 4a78c7a..8cb388b 100644
+--- a/include/shm_ipc/shm_async_client.hpp
++++ b/include/shm_ipc/shm_async_client.hpp
+@@ -166,7 +166,8 @@ class ShmAsyncClient : public comm::ITcpAsyncClient
+                 FailConnect(uri, ErrorCode::kInvalidArgument);
+                 return;
+             }
+-            InstallConnection(std::move(sock), std::move(channel), std::move(codec));
++            ec = InstallConnection(std::move(sock), std::move(channel), std::move(codec));
++            if (ec != ErrorCode::kOk) FailConnect(uri, ec);
+         }
+         catch (const std::bad_alloc&)
+         {
+@@ -257,7 +258,7 @@ class ShmAsyncClient : public comm::ITcpAsyncClient
+ 
+  private:
+     /// @brief 创建连接对象、装配回调/codec 并注册 fd，最后触发 connection 回调
+-    void InstallConnection(UniqueFd sock, DefaultRingChannel channel, comm::codec::CodecPtr codec)
++    ErrorCode InstallConnection(UniqueFd sock, DefaultRingChannel channel, comm::codec::CodecPtr codec)
+     {
+         const uint64_t id = 1;
+         auto conn         = std::make_shared<ShmConnection>(loop_, id, std::move(sock), std::move(channel));
+@@ -275,11 +276,25 @@ class ShmAsyncClient : public comm::ITcpAsyncClient
+         }
+         conn_ = conn;
+ 
+-        loop_->AddFd(conn->NotifyFd(), [this](int fd, short revents) { OnNotify(fd, revents); });
++        if (loop_->BusyPolling())
++        {
++            const auto ec = loop_->AddBusyPollFd(conn->NotifyFd(), [this](int fd, short revents) {
++                OnNotify(fd, revents);
++                return ErrorCode::kOk;
++            });
++            if (ec != ErrorCode::kOk)
++            {
++                conn->Close();
++                conn_.reset();
++                return ec;
++            }
++        }
++        else loop_->AddFd(conn->NotifyFd(), [this](int fd, short revents) { OnNotify(fd, revents); });
+         loop_->AddFd(conn->SocketFd(), [this](int fd, short revents) { OnSocket(fd, revents); });
+ 
+         state_ = comm::TcpClientStates::established;
+         conn->OnConnection();
++        return ErrorCode::kOk;
+     }
+ 
+     /// @brief 连接失败收尾：记录错误码并触发 error 回调
+@@ -304,7 +319,7 @@ class ShmAsyncClient : public comm::ITcpAsyncClient
+     /// @brief eventfd 回调：对端写入新数据，立即消费并解码分发
+     void OnNotify(int efd, short /*revents*/)
+     {
+-        DefaultRingChannel::DrainNotify(efd);
++        if (efd >= 0) DefaultRingChannel::DrainNotify(efd);
+         // 持有本地拷贝：消息回调内可能调用 Close() 触发 Teardown()，
+         // 若直接用 conn_ 访问会在 DrainRing 返回后踩空
+         auto conn = conn_;
+diff --git a/include/shm_ipc/shm_connection.hpp b/include/shm_ipc/shm_connection.hpp
+index 6248fca..b8d6f7f 100644
+--- a/include/shm_ipc/shm_connection.hpp
++++ b/include/shm_ipc/shm_connection.hpp
+@@ -66,7 +66,9 @@ class ShmConnection : public comm::ITcpConnection,
+      */
+     ShmConnection(EventLoop* loop, uint64_t id, UniqueFd socket_fd, DefaultRingChannel channel)
+         : loop_(loop), id_(id), socket_fd_(std::move(socket_fd)), channel_(std::move(channel)), encode_buf_(128 * 1024)
+-    {}
++    {
++        if (loop_ && loop_->BusyPolling()) channel_.SetReaderPolling();
++    }
+ 
+     ~ShmConnection() override
+     {
+@@ -461,7 +463,7 @@ class ShmConnection : public comm::ITcpConnection,
+                 {
+                     break;
+                 }
+-                if (channel_.PrepareWait(seen))
++                if ((loop_ && loop_->BusyPolling()) || channel_.PrepareWait(seen))
+                 {
+                     break;
+                 }
+diff --git a/include/shm_ipc/shm_server.hpp b/include/shm_ipc/shm_server.hpp
+index b7110b6..18791fd 100644
+--- a/include/shm_ipc/shm_server.hpp
++++ b/include/shm_ipc/shm_server.hpp
+@@ -498,7 +498,20 @@ class ShmServer : public comm::ITcpServer
+             conns_[id] = conn;
+ 
+             // eventfd：对端写入新数据，实时读取
+-            loop_->AddFd(conn->NotifyFd(), [this, id](int fd, short revents) { OnConnNotify(fd, revents, id); });
++            if (loop_->BusyPolling())
++            {
++                const auto ec = loop_->AddBusyPollFd(conn->NotifyFd(), [this, id](int fd, short revents) {
++                    OnConnNotify(fd, revents, id);
++                    return ErrorCode::kOk;
++                });
++                if (ec != ErrorCode::kOk)
++                {
++                    conns_.erase(id);
++                    conn->Close();
++                    return;
++                }
++            }
++            else loop_->AddFd(conn->NotifyFd(), [this, id](int fd, short revents) { OnConnNotify(fd, revents, id); });
+             // socket：仅用于断连检测
+             loop_->AddFd(conn->SocketFd(), [this, id](int fd, short revents) { OnConnSocket(fd, revents, id); });
+         }
+@@ -521,7 +534,7 @@ class ShmServer : public comm::ITcpServer
+     /// @brief eventfd 回调：对端写入新数据，立即消费并解码分发
+     void OnConnNotify(int efd, short /*revents*/, uint64_t conn_id)
+     {
+-        DefaultRingChannel::DrainNotify(efd);
++        if (efd >= 0) DefaultRingChannel::DrainNotify(efd);
+         // 持有本地拷贝：消息回调内可能调用 Close()/CloseConn() 移除连接
+         auto conn = FindConn(conn_id);
+         if (!conn)
+diff --git a/test/test_eventloop.cpp b/test/test_eventloop.cpp
+index 15bc0c0..4228609 100644
+--- a/test/test_eventloop.cpp
++++ b/test/test_eventloop.cpp
+@@ -275,6 +275,73 @@ static void TestConcurrentRunRejected()
+     std::printf("  PASS: concurrent Run rejected before accessing loop state\n\n");
+ }
+ 
++static void TestBusyPolling()
++{
++    using E = shm::ErrorCode;
++    shm::EventLoop loop;
++    CHECK(loop.SetBusyPolling(true, 0) == E::kInvalidArgument, "zero control interval");
++    CHECK(!loop.BusyPolling(), "invalid configuration leaves mode unchanged");
++    CHECK(loop.SetBusyPolling(true, 4) == E::kOk, "configure busy mode");
++    shm::EventLoop default_loop;
++    CHECK(default_loop.AddBusyPollFd(10000, [](int, short) { return E::kOk; }) == E::kInvalidArgument,
++          "busy registration requires opt-in");
++    CHECK(loop.AddBusyPollFd(10000, static_cast<shm::EventLoop::PollCallback>(nullptr)) == E::kInvalidArgument,
++          "null callback rejected");
++    CHECK(loop.AddBusyPollFd(-1, [](int, short) { return E::kOk; }) == E::kInvalidArgument,
++          "negative identity rejected");
++    int first = 0, replacement = 0, removed = 0;
++    CHECK(loop.AddBusyPollFd(10001, [&](int fd, short events) {
++        CHECK(fd == -1 && events == 0, "poll callback must not read fd");
++        CHECK(loop.SetBusyPolling(false) == E::kInvalidArgument, "no mode change during Run");
++        ++first;
++        loop.RemoveFd(10001);
++        loop.RemoveFd(10002);
++        return loop.AddBusyPollFd(10001, [&](int, short) {
++            ++replacement;
++            loop.Stop();
++            return E::kOk;
++        });
++    }) == E::kOk, "register first callback");
++    CHECK(loop.AddBusyPollFd(10002, [&](int, short) { ++removed; return E::kOk; }) == E::kOk, "register removed callback");
++    CHECK(loop.Run(-1) == E::kOk, "busy Run");
++    CHECK(first == 1 && replacement == 1 && removed == 0, "busy snapshot and tombstones");
++    loop.RemoveFd(10001);
++    int ticks = 0;
++    CHECK(loop.AddBusyPollFd(10003, [&](int, short) { ++ticks; return E::kOk; }) == E::kOk, "register timer observer");
++    int timer;
++    CHECK(loop.AddOneShotTimer(2, [&](int, short) { loop.Stop(); }, &timer) == E::kOk, "busy timer");
++    CHECK(loop.Run(-1) == E::kOk && ticks > 0, "busy control fds and restart");
++    loop.RemoveFd(10003);
++    for (E error : {E::kProtocol, E::kNoMemory})
++    {
++        CHECK(loop.AddBusyPollFd(10004, [&](int, short) {
++            loop.RemoveFd(10004);
++            return error;
++        }) == E::kOk, "register failing callback");
++        CHECK(loop.Run() == error, "busy callback error propagated");
++        CHECK(loop.AddBusyPollFd(10005, [&](int, short) {
++            loop.RemoveFd(10005);
++            loop.Stop();
++            return E::kOk;
++        }) == E::kOk, "register recovery callback");
++        CHECK(loop.Run() == E::kOk, "callback error releases Run ownership");
++    }
++    shm::EventLoop threaded;
++    CHECK(threaded.SetBusyPolling(true) == E::kOk, "configure threaded loop");
++    std::atomic<bool> entered{false};
++    CHECK(threaded.AddBusyPollFd(10006, [&](int, short) {
++        entered.store(true, std::memory_order_release);
++        return E::kOk;
++    }) == E::kOk, "register stop observer");
++    std::thread stopper([&] {
++        while (!entered.load(std::memory_order_acquire)) std::this_thread::yield();
++        threaded.Stop();
++    });
++    CHECK(threaded.Run(-1) == E::kOk, "cross-thread stop while polling");
++    stopper.join();
++    std::printf("  PASS: busy polling lifecycle, timers, removal, error returns\n");
++}
++
+ int main()
+ {
+     TestFdReuseOrdering();
+@@ -282,6 +349,7 @@ int main()
+     TestCancelledTimerSilenced();
+     TestRunReentryAndRecovery();
+     TestConcurrentRunRejected();
++    TestBusyPolling();
+ 
+     std::printf("=== TEST PASSED ===\n");
+     return 0;
+diff --git a/test/test_ringbuf_boundary.cpp b/test/test_ringbuf_boundary.cpp
+index d5f341d..50d4c5b 100644
+--- a/test/test_ringbuf_boundary.cpp
++++ b/test/test_ringbuf_boundary.cpp
+@@ -865,6 +865,10 @@ void TestReaderWaitStateMachine()
+     CHECK(SmallRing::ShouldNotify(shm), "default notifies (1)");
+     CHECK(SmallRing::ShouldNotify(shm), "default notifies (2)");
+ 
++    SmallRing::SetReaderPolling(shm);
++    CHECK(!SmallRing::ShouldNotify(shm), "polling reader needs no notification");
++    CHECK(!SmallRing::ShouldNotify(shm), "polling remains awake");
++
+     // 读空后武装：可睡眠；写方只通知一次
+     CHECK(SmallRing::ArmReaderWait(shm, SmallRing::WritePos(shm)), "arm on empty ring -> may sleep");
+     CHECK(SmallRing::ShouldNotify(shm), "waiting reader gets a notify");
+diff --git a/test/test_shm_app.cpp b/test/test_shm_app.cpp
+index 154496d..dd0cc10 100644
+--- a/test/test_shm_app.cpp
++++ b/test/test_shm_app.cpp
+@@ -55,8 +55,15 @@ bool WaitFor(Pred pred, int timeout_ms)
+ 
+ }  // anonymous namespace
+ 
+-int main()
++int main(int argc, char** argv)
+ {
++    bool busy_server = false, busy_client = false;
++    for (int i = 1; i < argc; ++i)
++    {
++        if (std::strcmp(argv[i], "--busy-server") == 0) busy_server = true;
++        else if (std::strcmp(argv[i], "--busy-client") == 0) busy_client = true;
++        else return 2;
++    }
+     ::signal(SIGPIPE, SIG_IGN);
+ 
+     shm::codec::SimplePodCodec::RegisterPod<Heartbeat>();
+@@ -88,6 +95,7 @@ int main()
+     // 服务端：echo Heartbeat
+     // ------------------------------------------------------------------
+     shm::EventLoop server_loop;
++    assert(server_loop.SetBusyPolling(busy_server)==shm::ErrorCode::kOk);
+     shm::ShmServer server(&server_loop, kTestSock, "test_server");
+ 
+     std::atomic<int> conn_count{0};
+@@ -182,6 +190,7 @@ int main()
+     // ------------------------------------------------------------------
+     {
+         shm::EventLoop client_loop;
++        assert(client_loop.SetBusyPolling(busy_client)==shm::ErrorCode::kOk);
+         shm::ShmAsyncClient async_client(&client_loop);
+ 
+         std::atomic<int> client_msgs{0};
+@@ -233,6 +242,7 @@ int main()
+     // ------------------------------------------------------------------
+     {
+         shm::EventLoop client_loop;
++        assert(client_loop.SetBusyPolling(busy_client)==shm::ErrorCode::kOk);
+         std::atomic<bool> verify_started{false};
+         std::atomic<bool> timer_fired{false};
+         {
+diff --git a/bench/random_batch.hpp b/bench/random_batch.hpp
+new file mode 100644
+index 0000000..3a1b61c
+--- /dev/null
++++ b/bench/random_batch.hpp
+@@ -0,0 +1,25 @@
++#pragma once
++#include <cstdint>
++
++namespace acceptance_bench {
++// One PRNG step per batch, no allocation and no per-message random generation.
++// Synthetic uniform batch counts; requests therefore weight larger batches more.
++class RandomBatch {
++    uint64_t state_;
++    uint32_t minimum_, span_, mask_;
++    bool power_of_two_;
++ public:
++    RandomBatch(uint32_t minimum, uint32_t maximum, uint64_t seed) noexcept
++        : state_(seed ? seed : 1), minimum_(minimum), span_(maximum - minimum + 1),
++          mask_(span_ - 1), power_of_two_((span_ & mask_) == 0) {}
++    void Reset(uint64_t seed) noexcept { state_ = seed ? seed : 1; }
++    uint32_t Next() noexcept {
++        uint64_t x = state_;
++        x ^= x >> 12; x ^= x << 25; x ^= x >> 27;
++        state_ = x;
++        x *= UINT64_C(2685821657736338717);
++        // General spans have modulo bias at most (span-1)/2^64 per outcome.
++        return minimum_ + static_cast<uint32_t>(power_of_two_ ? (x & mask_) : (x % span_));
++    }
++};
++}
+diff --git a/bench/compare_random_batch.py b/bench/compare_random_batch.py
+new file mode 100644
+index 0000000..7fadfaa
+--- /dev/null
++++ b/bench/compare_random_batch.py
+@@ -0,0 +1,172 @@
++#!/usr/bin/env python3
++"""Serial, paired three-transport comparison with reproducible variable batches."""
++import argparse
++import hashlib
++import json
++from pathlib import Path
++import signal
++import subprocess
++import sys
++import tempfile
++import time
++
++SIZES = [16, 128, 256, 512, 1024, 2048, 3072, 4096, 8192, 16384, 32768, 65536, 131072, 524288, 1048576]
++MODES = ['shm-eventfd', 'shm-busy', 'socket']
++interrupted = False
++
++
++def stop_requested(signum, frame):
++    global interrupted
++    interrupted = True
++
++
++def records(path):
++    return [json.loads(line) for line in path.read_text().splitlines(keepends=True)
++            if line.startswith('{') and line.endswith('\n')]
++
++
++def wait_child(process, deadline):
++    while process.poll() is None and not interrupted and time.monotonic() < deadline:
++        time.sleep(.02)
++    if process.poll() is None:
++        process.kill()
++        process.wait()
++        return False
++    return process.returncode == 0
++
++
++def run_case(args, out, size, low, high, profile, mode, repeat, position, seed):
++    directory = Path(tempfile.mkdtemp(prefix='shm-random-ab-'))
++    path = str(directory / 'ipc.sock')
++    label = f'{size}B-{profile}-r{repeat}-{mode}'
++    handles, children = [], []
++    flags = ['--transport', 'socket' if mode == 'socket' else 'shm', '--busy-poll', int(mode == 'shm-busy'),
++             '--bytes', size, '--batch', high, '--batch-min', low, '--seed', seed, '--single-type', 1]
++
++    def launch(role, extra):
++        logfile = out / (label + '-' + role + '.jsonl')
++        log = logfile.open('w')
++        err = (out / (label + '-' + role + '.stderr')).open('w')
++        handles.extend([log, err])
++        command = ['taskset', '-c', str(args.server_cpu if role == 'server' else args.client_cpu),
++                   args.binary, role, path] + list(map(str, flags + extra))
++        (out / (label + '-' + role + '.command.json')).write_text(json.dumps(command) + '\n')
++        process = subprocess.Popen(command, stdout=log, stderr=err)
++        children.append(process)
++        return process, logfile
++
++    server, server_log = launch('server', [])
++    deadline = time.monotonic() + 8
++    ready = False
++    while server.poll() is None and not interrupted and time.monotonic() < deadline:
++        if any(x['role'] == 'ready' for x in records(server_log)):
++            ready = True
++            break
++        time.sleep(.02)
++    valid, result = False, None
++    if ready:
++        stride = 64 if size <= 4096 else 16 if size < 65536 else 1
++        client, client_log = launch('client', ['--stride', stride, '--warmup', 0 if args.smoke else 1,
++                                              '--seconds', .3 if args.smoke else args.seconds])
++        valid = wait_child(client, time.monotonic() + args.seconds + 20)
++        if valid:
++            data = records(client_log)
++            metrics = [x for x in data if x['role'] == 'result']
++            batches = [x for x in data if x['role'] == 'batch_stats']
++            valid = bool(metrics and batches and data[-1]['role'] == 'client_final')
++            if valid:
++                metric, stats, final = metrics[0], batches[0], data[-1]
++                counts = stats['counts']
++                valid = (final['completed'] and not final['failed'] and final['base_fds'] == final['final_fds']
++                         and final['ring_maps'] == 0 and metric['errors'] == 0 and metric['samples'] > 0
++                         and sum(counts) == stats['batches']
++                         and sum(i * n for i, n in enumerate(counts)) == metric['messages'] == stats['messages']
++                         and all(n == 0 for i, n in enumerate(counts) if i < low or i > high))
++                result = dict(metric, batch_stats=stats, mode=mode, case=f'{size}B-{profile}', profile=profile,
++                              round=repeat, position=position, minimum=low, maximum=high, seed=seed)
++        if server.poll() is None:
++            server.send_signal(signal.SIGTERM)
++        valid = wait_child(server, time.monotonic() + 5) and valid
++        if valid:
++            data = records(server_log)
++            final = data[-1]
++            valid = (final['role'] == 'server_final' and final['opened'] == final['closed']
++                     and final['base_fds'] == final['final_fds']
++                     and all(x.get('send_failures', 0) == 0 for x in data))
++    for child in children:
++        if child.poll() is None:
++            child.kill()
++            child.wait()
++    for handle in handles:
++        handle.close()
++    if Path(path).exists():
++        Path(path).unlink()
++    directory.rmdir()
++    if not valid:
++        print('FAILED', label, file=sys.stderr, flush=True)
++        return None
++    print(label, f"batch={low}..{high}", 'RPC/s', round(result['msg_s']),
++          'P50 us', result['p50_ns'] / 1000, flush=True)
++    return result
++
++
++def main():
++    p = argparse.ArgumentParser()
++    p.add_argument('binary'); p.add_argument('output')
++    p.add_argument('--smoke', action='store_true')
++    p.add_argument('--seconds', type=float, default=5)
++    p.add_argument('--rounds', type=int, default=3)
++    p.add_argument('--server-cpu', type=int, default=1)
++    p.add_argument('--client-cpu', type=int, default=3)
++    p.add_argument('--sizes', type=int, nargs='+', default=SIZES)
++    args = p.parse_args()
++    if args.server_cpu == args.client_cpu or args.seconds <= 0 or args.rounds <= 0 or any(s not in SIZES for s in args.sizes):
++        print('Invalid options', file=sys.stderr)
++        return 2
++    args.binary = str(Path(args.binary).resolve())
++    out = Path(args.output).resolve()
++    out.mkdir(parents=True, exist_ok=True)
++    if (out / 'samples.json').exists():
++        print('Output already contains samples; choose a new directory', file=sys.stderr)
++        return 2
++    signal.signal(signal.SIGINT, stop_requested); signal.signal(signal.SIGTERM, stop_requested)
++    cases = []
++    for size in args.sizes:
++        cap = 64 if size <= 32768 else 32 if size <= 65536 else 16 if size <= 131072 else 4
++        cap = min(cap, 1 << ((5 * 1024 * 1024 // (size + 4)).bit_length() - 1))
++        for profile, high in [('small', min(8, cap // 2)), ('burst', cap)]:
++            cases.append((size, 1, high, profile))
++    samples = []
++    total = len(cases) * len(MODES) * (1 if args.smoke else args.rounds)
++    (out / 'binary.sha256').write_text(hashlib.sha256(Path(args.binary).read_bytes()).hexdigest() + '  ' + args.binary + '\n')
++    for repeat in range(1 if args.smoke else args.rounds):
++        order = list(enumerate(cases))
++        if repeat % 2:
++            order.reverse()
++        for index, (size, low, high, profile) in order:
++            seed = 0x13579BDF + index * 4099 + repeat * 65537
++            block = []
++            for position in range(3):
++                mode = MODES[(index + repeat + position) % 3]
++                result = run_case(args, out, size, low, high, profile, mode, repeat + 1, position, seed)
++                if result is None:
++                    (out / 'status.json').write_text(json.dumps(dict(state='failed', completed=len(samples), total=total)) + '\n')
++                    return 1
++                samples.append(result); block.append(result)
++                (out / 'samples.json').write_text(json.dumps(samples, indent=2) + '\n')
++                (out / 'status.json').write_text(json.dumps(dict(state='running', completed=len(samples), total=total, latest=result['case'])) + '\n')
++            # Formal runs must start from an identical measured random prefix.
++            if not args.smoke and (any(x['batch_stats']['prefix_count'] != 256 for x in block)
++                                   or len({x['batch_stats']['prefix_hash'] for x in block}) != 1):
++                print('Random prefix mismatch', block[0]['case'], file=sys.stderr)
++                return 1
++    (out / 'completed.json').write_text(json.dumps(dict(completed=True, smoke=args.smoke, records=len(samples),
++        rounds=1 if args.smoke else args.rounds, seconds=.3 if args.smoke else args.seconds, modes=MODES,
++        sizes=args.sizes, server_cpu=args.server_cpu, client_cpu=args.client_cpu, distribution='uniform_batches',
++        seed_reset_after_warmup=True, prefix_length=256, socket_coalesced=True)) + '\n')
++    (out / 'status.json').write_text(json.dumps(dict(state='passed', completed=len(samples), total=total)) + '\n')
++    return 0
++
++
++if __name__ == '__main__':
++    sys.exit(main())
+diff --git a/bench/analyze_random_batch.py b/bench/analyze_random_batch.py
+new file mode 100644
+index 0000000..4f2f1d6
+--- /dev/null
++++ b/bench/analyze_random_batch.py
+@@ -0,0 +1,58 @@
++#!/usr/bin/env python3
++"""Analyze paired random-batch runs; preserve gains and losses for both SHM modes."""
++import json
++from pathlib import Path
++import statistics as st
++import sys
++
++
++def main():
++    out = Path(sys.argv[1])
++    meta = json.loads((out / 'completed.json').read_text())
++    samples = json.loads((out / 'samples.json').read_text())
++    if not meta['completed'] or meta['smoke'] or len(samples) != meta['records']:
++        return 2
++    summary = []
++    for case in dict.fromkeys(x['case'] for x in samples):
++        pairs = []
++        for repeat in range(1, meta['rounds'] + 1):
++            entries = [x for x in samples if x['case'] == case and x['round'] == repeat]
++            pair = {x['mode']: x for x in entries}
++            if len(entries) != 3 or set(pair) != set(meta['modes']) or len({x['seed'] for x in entries}) != 1:
++                return 2
++            if len({x['batch_stats']['prefix_hash'] for x in entries}) != 1:
++                return 2
++            pairs.append(pair)
++        first = pairs[0]['socket']
++        row = dict(case=case, bytes=first['bytes'], profile=first['profile'], minimum=first['minimum'], maximum=first['maximum'])
++        for mode in meta['modes']:
++            runs = [p[mode] for p in pairs]
++            row[mode] = dict(rpc_s=st.median(x['msg_s'] for x in runs),
++                payload_mib_s=st.median(x['msg_s'] * x['bytes'] / 1048576 for x in runs),
++                rpc_range=[min(x['msg_s'] for x in runs), max(x['msg_s'] for x in runs)],
++                mean_batch=st.median(x['batch_stats']['messages'] / x['batch_stats']['batches'] for x in runs),
++                min_samples=min(x['samples'] for x in runs),
++                **{k + '_us': st.median(x[k + '_ns'] / 1000 for x in runs) for k in ['p50', 'p99', 'p999']})
++        for mode in ['shm-eventfd', 'shm-busy']:
++            row[mode]['paired_rpc_gain_pct'] = st.median((p[mode]['msg_s'] / p['socket']['msg_s'] - 1) * 100 for p in pairs)
++            row[mode]['paired_p50_reduction_pct'] = st.median((1 - p[mode]['p50_ns'] / p['socket']['p50_ns']) * 100 for p in pairs)
++        row['busy_vs_eventfd_gain_pct'] = st.median((p['shm-busy']['msg_s'] / p['shm-eventfd']['msg_s'] - 1) * 100 for p in pairs)
++        summary.append(row)
++    (out / 'summary.json').write_text(json.dumps(summary, indent=2) + '\n')
++    throughput = ['| 消息体 / 随机batch | Socket RPC/s | SHM eventfd RPC/s | eventfd提升 | SHM busy RPC/s | busy提升 |',
++                  '|---|---:|---:|---:|---:|---:|']
++    rtt = ['| 消息体 / 随机batch | Socket P50/P99.9 µs | SHM eventfd P50/P99.9 µs | SHM busy P50/P99.9 µs |',
++           '|---|---:|---:|---:|']
++    for row in summary:
++        a, b, c = row['socket'], row['shm-eventfd'], row['shm-busy']
++        label = f"{row['bytes']}B / {row['minimum']}–{row['maximum']}"
++        throughput.append(f"| {label} | {a['rpc_s']:,.0f} | {b['rpc_s']:,.0f} | {b['paired_rpc_gain_pct']:+.1f}% | {c['rpc_s']:,.0f} | {c['paired_rpc_gain_pct']:+.1f}% |")
++        rtt.append(f"| {label} | {a['p50_us']:.2f}/{a['p999_us']:.2f} | {b['p50_us']:.2f}/{b['p999_us']:.2f} | {c['p50_us']:.2f}/{c['p999_us']:.2f} |")
++    (out / 'throughput_table.md').write_text('\n'.join(throughput) + '\n')
++    (out / 'rtt_table.md').write_text('\n'.join(rtt) + '\n')
++    print('\n'.join(throughput))
++    return 0
++
++
++if __name__ == '__main__':
++    sys.exit(main())
+diff --git a/bench/plot_random_batch.py b/bench/plot_random_batch.py
+new file mode 100644
+index 0000000..d4fe7e2
+--- /dev/null
++++ b/bench/plot_random_batch.py
+@@ -0,0 +1,30 @@
++#!/usr/bin/env python3
++"""Standalone random-batch size curves; shaded ranges are observations, not CIs."""
++import json
++from pathlib import Path
++import sys
++import matplotlib
++matplotlib.use('Agg')
++import matplotlib.pyplot as plt
++
++out = Path(sys.argv[1])
++data = json.loads((out / 'summary.json').read_text())
++fig, axes = plt.subplots(2, 2, figsize=(14, 9), constrained_layout=True)
++colors = {'shm-eventfd': '#2563eb', 'shm-busy': '#16a34a', 'socket': '#ea580c'}
++for row, profile in enumerate(['small', 'burst']):
++    points = sorted((x for x in data if x['profile'] == profile), key=lambda x: x['bytes'])
++    sizes = [x['bytes'] for x in points]
++    for mode, color in colors.items():
++        axes[row, 0].plot(sizes, [x[mode]['rpc_s'] for x in points], marker='o', ms=3, label=mode, color=color)
++        axes[row, 0].fill_between(sizes, [x[mode]['rpc_range'][0] for x in points],
++                               [x[mode]['rpc_range'][1] for x in points], color=color, alpha=.12)
++        axes[row, 1].plot(sizes, [x[mode]['p50_us'] for x in points], marker='o', ms=3, label=mode, color=color)
++        axes[row, 1].plot(sizes, [x[mode]['p999_us'] for x in points], linestyle='--', color=color, alpha=.65)
++    axes[row, 0].set_title(profile + ': completed RPC/s (observed three-run ranges)')
++    axes[row, 1].set_title(profile + ': RTT P50 solid / P99.9 dashed')
++    axes[row, 0].set_ylabel('RPC/s'); axes[row, 1].set_ylabel('microseconds')
++    for ax in axes[row]:
++        ax.set_xscale('log', base=2); ax.set_yscale('log')
++        ax.set_xlabel('Message body bytes'); ax.grid(True, which='both', alpha=.2); ax.legend()
++fig.suptitle('Variable batch: SHM/eventfd vs SHM/busy vs Unix socket\nUniform batches; ranges reduce for large messages; busy uses dedicated CPU cores')
++fig.savefig(out / 'size_curves.png', dpi=160)
+diff --git a/test/test_random_batch.cpp b/test/test_random_batch.cpp
+new file mode 100644
+index 0000000..c3f3bee
+--- /dev/null
++++ b/test/test_random_batch.cpp
+@@ -0,0 +1,30 @@
++#include "../bench/random_batch.hpp"
++#include <array>
++#include <cstdio>
++
++int main() {
++    using acceptance_bench::RandomBatch;
++    RandomBatch golden(1,8,1);
++    for (auto expected : {6u,6u,8u,6u,1u,2u,2u,6u}) {
++        if(golden.Next()!=expected) {std::fputs("FAIL: golden stream\n",stderr);return 1;}
++    }
++    for(auto bounds : {std::array<unsigned,2>{1,2},{1,4},{1,8},{1,64},{3,17},{7,7}}) {
++        RandomBatch a(bounds[0],bounds[1],12345),b(bounds[0],bounds[1],12345);
++        std::array<unsigned,65> counts{};
++        for(unsigned i=0;i<200000;++i) {
++            const auto x=a.Next();
++            if(x<bounds[0]||x>bounds[1]||x!=b.Next()) {std::fputs("FAIL: bounds/replay\n",stderr);return 1;}
++            ++counts[x];
++        }
++        const auto expected=200000/(bounds[1]-bounds[0]+1);
++        for(unsigned i=bounds[0];i<=bounds[1];++i)
++            if(counts[i]<expected*8/10||counts[i]>expected*12/10+1) {
++                std::fputs("FAIL: deterministic distribution sanity\n",stderr);return 1;
++            }
++        a.Reset(999);b.Reset(999);
++        for(unsigned i=0;i<257;++i)
++            if(a.Next()!=b.Next()) {std::fputs("FAIL: phase reset\n",stderr);return 1;}
++    }
++    std::puts("PASS: golden random stream, bounds, replay, phase reset and distribution sanity");
++    return 0;
++}

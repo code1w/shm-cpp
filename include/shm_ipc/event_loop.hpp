@@ -30,6 +30,7 @@
 #include <new>
 #include <limits>
 #include <utility>
+#include <type_traits>
 #include <vector>
 
 #include "common.hpp"
@@ -46,7 +47,15 @@ class EventLoop
     using HookId   = uint64_t;
 
     EventLoop() { wake_error_ = CreateEventfd(&wake_fd_, &wake_errno_); }
-    ~EventLoop() = default;
+    ~EventLoop()
+    {
+        while (busy_head_)
+        {
+            BusyEntry* old = busy_head_;
+            busy_head_ = old->next;
+            delete old;
+        }
+    }
 
     // 禁止复制和移动（回调可能引用外部局部状态）
     EventLoop(const EventLoop&)            = delete;
@@ -63,6 +72,40 @@ class EventLoop
      * 可在回调内安全调用：新条目自下一轮 poll 生效。
      */
     void AddFd(int fd, Callback cb, short events = POLLIN) { entries_.push_back({fd, events, false, std::move(cb)}); }
+
+    /// Configure on the owner thread before registering fds/connecting/Run.
+    /// Control fds are checked every control_interval spin iterations, not a time bound.
+    [[nodiscard]]
+    ErrorCode SetBusyPolling(bool enabled, uint32_t control_interval = 256) noexcept
+    {
+        if (run_active_.load(std::memory_order_relaxed) || !entries_.empty() || busy_head_ || !control_interval)
+            return ErrorCode::kInvalidArgument;
+        busy_polling_ = enabled;
+        control_interval_ = control_interval;
+        return ErrorCode::kOk;
+    }
+    bool BusyPolling() const noexcept { return busy_polling_; }
+    using PollCallback = ErrorCode (*)(int, short);
+    /// Callback must not throw; failures propagate from Run as an ErrorCode.
+    /// Same removal rules as AddFd; receives -1, 0 (no fd read).
+    template<class F>
+    [[nodiscard]]
+    ErrorCode AddBusyPollFd(int fd, F&& cb) noexcept
+    {
+        using Stored = std::decay_t<F>;
+        static_assert(std::is_nothrow_constructible_v<Stored, F&&>, "callback storage must not throw");
+        static_assert(std::is_invocable_r_v<ErrorCode, Stored&, int, short>, "callback must return ErrorCode");
+        if (!busy_polling_ || fd < 0) return ErrorCode::kInvalidArgument;
+        if constexpr (std::is_pointer_v<Stored>)
+            if (!cb) return ErrorCode::kInvalidArgument;
+        // Store the callable directly; no std::function/container allocation.
+        BusyEntry* entry = new (std::nothrow) BusyNode<Stored>(fd, std::forward<F>(cb));
+        if (!entry) return ErrorCode::kNoMemory;
+        if (busy_tail_) busy_tail_->next = entry;
+        else busy_head_ = entry;
+        busy_tail_ = entry;
+        return ErrorCode::kOk;
+    }
 
     /**
      * @brief 注册"本轮分发结束后"钩子（用于合并通知等延迟动作）
@@ -120,6 +163,9 @@ class EventLoop
      */
     void RemoveFd(int fd)
     {
+        for (BusyEntry* e = busy_head_; e; e = e->next)
+            if (e->fd == fd) e->dead = true;
+
         for (auto& e : entries_)
         {
             if (e.fd == fd)
@@ -292,8 +338,33 @@ class EventLoop
             return wake_error_;
         }
         running_.store(true, std::memory_order_relaxed);
+        uint32_t spins = 0;
         while (running_.load(std::memory_order_relaxed))
         {
+            if (busy_polling_)
+            {
+                BusyEntry* end = busy_tail_; // additions become active next spin
+                ErrorCode result = ErrorCode::kOk;
+                for (BusyEntry* e = busy_head_; e && running_.load(std::memory_order_relaxed); e = e->next)
+                {
+                    if (!e->dead) result = e->invoke(e, -1, 0);
+                    if (result != ErrorCode::kOk || e == end) break;
+                }
+                RunPostDispatchHooksNoThrow();
+                CompactDead();
+                if (result != ErrorCode::kOk) return result;
+                if (!running_.load(std::memory_order_relaxed)) break;
+                if (++spins < control_interval_)
+                {
+#if defined(__i386__) || defined(__x86_64__)
+                    __builtin_ia32_pause();
+#elif defined(__aarch64__)
+                    asm volatile("yield");
+#endif
+                    continue;
+                }
+                spins = 0;
+            }
             // 构建 pollfd 数组（跳过墓碑条目；idx 记录 pfds → entries 下标映射）
             std::vector<pollfd> pfds;
             std::vector<std::size_t> idx;
@@ -318,7 +389,7 @@ class EventLoop
                 return ErrorCode::kNoMemory;
             }
 
-            const int ret = ::poll(pfds.data(), static_cast<nfds_t>(pfds.size()), poll_timeout_ms);
+            const int ret = ::poll(pfds.data(), static_cast<nfds_t>(pfds.size()), busy_polling_ ? 0 : poll_timeout_ms);
             if (ret < 0)
             {
                 if (errno == EINTR)
@@ -469,6 +540,27 @@ class EventLoop
     }
 
     /** @brief fd 监听条目 */
+    struct BusyEntry
+    {
+        int fd;
+        bool dead = false;
+        BusyEntry* next = nullptr;
+        ErrorCode (*invoke)(BusyEntry*, int, short);
+        BusyEntry(int descriptor, ErrorCode (*dispatch)(BusyEntry*, int, short)) noexcept
+            : fd(descriptor), invoke(dispatch) {}
+        virtual ~BusyEntry() = default;
+    };
+    template<class F>
+    struct BusyNode final : BusyEntry
+    {
+        F cb;
+        template<class T>
+        BusyNode(int fd, T&& callback) noexcept : BusyEntry(fd, Dispatch), cb(std::forward<T>(callback)) {}
+        static ErrorCode Dispatch(BusyEntry* entry, int fd, short events)
+        {
+            return static_cast<BusyNode*>(entry)->cb(fd, events);
+        }
+    };
     struct Entry
     {
         int fd;        ///< 文件描述符
@@ -521,6 +613,23 @@ class EventLoop
     /** @brief 回收所有墓碑条目（仅在非分发阶段调用） */
     void CompactDead()
     {
+        BusyEntry** link = &busy_head_;
+        busy_tail_ = nullptr;
+        while (*link)
+        {
+            BusyEntry* e = *link;
+            if (e->dead)
+            {
+                *link = e->next;
+                delete e;
+            }
+            else
+            {
+                busy_tail_ = e;
+                link = &e->next;
+            }
+        }
+
         entries_.erase(std::remove_if(entries_.begin(), entries_.end(), [](const Entry& e) { return e.dead; }),
                        entries_.end());
     }
@@ -530,6 +639,10 @@ class EventLoop
     std::deque<Entry> entries_;                        ///< fd 监听条目列表
     std::vector<OwnedTimer> owned_timerfds_;             ///< EventLoop 持有的 timerfd 列表
     std::vector<std::pair<HookId, Hook>> post_hooks_;  ///< 分发批次结束钩子
+    BusyEntry* busy_head_ = nullptr;
+    BusyEntry* busy_tail_ = nullptr;
+    bool busy_polling_ = false;
+    uint32_t control_interval_ = 256;
     UniqueFd wake_fd_;
     ErrorCode wake_error_ = ErrorCode::kOk;
     int wake_errno_ = 0;

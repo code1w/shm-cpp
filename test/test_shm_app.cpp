@@ -55,8 +55,15 @@ bool WaitFor(Pred pred, int timeout_ms)
 
 }  // anonymous namespace
 
-int main()
+int main(int argc, char** argv)
 {
+    bool busy_server = false, busy_client = false;
+    for (int i = 1; i < argc; ++i)
+    {
+        if (std::strcmp(argv[i], "--busy-server") == 0) busy_server = true;
+        else if (std::strcmp(argv[i], "--busy-client") == 0) busy_client = true;
+        else return 2;
+    }
     ::signal(SIGPIPE, SIG_IGN);
 
     shm::codec::SimplePodCodec::RegisterPod<Heartbeat>();
@@ -88,6 +95,7 @@ int main()
     // 服务端：echo Heartbeat
     // ------------------------------------------------------------------
     shm::EventLoop server_loop;
+    assert(server_loop.SetBusyPolling(busy_server)==shm::ErrorCode::kOk);
     shm::ShmServer server(&server_loop, kTestSock, "test_server");
 
     std::atomic<int> conn_count{0};
@@ -182,6 +190,7 @@ int main()
     // ------------------------------------------------------------------
     {
         shm::EventLoop client_loop;
+        assert(client_loop.SetBusyPolling(busy_client)==shm::ErrorCode::kOk);
         shm::ShmAsyncClient async_client(&client_loop);
 
         std::atomic<int> client_msgs{0};
@@ -233,6 +242,7 @@ int main()
     // ------------------------------------------------------------------
     {
         shm::EventLoop client_loop;
+        assert(client_loop.SetBusyPolling(busy_client)==shm::ErrorCode::kOk);
         std::atomic<bool> verify_started{false};
         std::atomic<bool> timer_fired{false};
         {

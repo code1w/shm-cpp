@@ -63,3 +63,9 @@ SHM benchmark 采用两项优化：
 - **中等消息（4KB ~ 64KB）**：共享内存仍有 **1.8 ~ 5.8 倍** 优势。
 - **大消息（512KB）**：socket 更快（约 2.5x）。内核 socket 对大块数据传输有页面级优化，而 ring buffer 的 `memcpy` 在大消息下 cache 压力大。该场景下 memcpy 本身成为绝对瓶颈，非算法层面可优化。
 - **适用场景**：共享内存方案在低延迟、小消息高频场景（金融交易、实时控制、游戏服务器内部通信）优势显著；大消息批量传输场景下 socket 仍具竞争力。
+
+## 应用层忙轮询模式
+
+当前 `ShmServer`/`ShmAsyncClient` 可通过 `EventLoop::SetBusyPolling(true)` 启用直接轮询接收，`bench_acceptance` 双方使用 `--busy-poll 1`。调用方式、CPU代价及控制fd检查契约见 [shm_busy_poll.md](../docs/shm_busy_poll.md)。应用层codec/事件循环对照与上面的裸ring历史结果分别解读。
+
+随机范围batch的三传输全尺寸对照使用 [compare_random_batch.py](compare_random_batch.py)，方法和调用契约见 [random_batch.md](random_batch.md)。

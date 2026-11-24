@@ -1,0 +1,10 @@
+{"role":"client_connected","session":1,"time_ns":101577501979042558}
+{"role":"client_tick","session":1,"replies":804333}
+{"role":"client_tick","session":1,"replies":1609805}
+{"role":"client_tick","session":1,"replies":2433754}
+{"role":"client_tick","session":1,"replies":3268417}
+{"role":"client_tick","session":1,"replies":4083683}
+{"role":"result","session":1,"bytes":4096,"batch":64,"gap_us":0,"messages":4117562,"seconds":5.000000179,"msg_s":823512.371,"samples":64100,"p50_ns":21760,"p99_ns":42496,"p999_ns":53248,"max_ns":165046,"full_checks":76622,"errors":0}
+{"role":"batch_stats","minimum":1,"maximum":64,"seed":324701198,"batches":126697,"messages":4117562,"prefix_count":256,"prefix_hash":1475184761152141028,"counts":[0,1957,1987,1969,1994,2013,1941,1996,1987,1950,2069,2012,1954,1979,2033,1918,1986,2008,1966,1935,1965,2039,2001,1963,1948,2006,1999,1989,1945,1950,1922,1950,2009,1974,1927,2025,1977,1986,1945,1977,1946,2000,2002,1977,1935,1975,1949,2005,2052,1911,2008,1933,1978,1997,2055,1999,1981,2010,1997,1916,2007,1995,1969,2028,1921]}
+{"role":"client_close","unexpected":false,"time_ns":101577507979124098}
+{"role":"client_final","completed":true,"failed":false,"sessions":1,"close_events":1,"received":4921895,"base_fds":4,"final_fds":4,"ring_maps":0}

@@ -2,6 +2,7 @@
 // Sampled per-request RTT, fixed-size histogram, deterministic content checks.
 #include <shm_ipc/shm_server.hpp>
 #include "socket_peer.hpp"
+#include "random_batch.hpp"
 #include <shm_ipc/shm_async_client.hpp>
 #include <shm_ipc/simple_pod_codec.hpp>
 #include <algorithm>
@@ -58,7 +59,7 @@ struct Histogram {
         return max;
     }
 };
-struct Options { std::string role,path,transport="shm";int bytes=16,batch=64,gap_us=0,sessions=1,stride=64,reconnect=0;double seconds=10,warmup=1;uint64_t messages=0;bool single_type=false; };
+struct Options { std::string role,path,transport="shm";int bytes=16,batch=64,batch_min=0,gap_us=0,sessions=1,stride=64,reconnect=0;double seconds=10,warmup=1;uint64_t messages=0,seed=1;bool single_type=false,busy_poll=false; };
 template<class T> std::any Make() { T p{};for(size_t i=0;i<sizeof(p.data);++i)p.data[i]=static_cast<unsigned char>(i*131+17);return p; }
 template<class T> void SetSeq(std::any& a,uint64_t seq) { std::any_cast<T&>(a).seq=seq; }
 template<class T> uint64_t Verify(const std::any& a,bool full) {
@@ -105,7 +106,7 @@ static int Run(const Options& o) {
     if(o.role=="server") {
         uint64_t replies=0,opened=0,closed=0,send_failures=0;int active=0;
         {
-            shm::EventLoop loop;Server server(&loop,o.path,"acceptance");
+            shm::EventLoop loop;REQUIRE(loop.SetBusyPolling(o.busy_poll)==shm::ErrorCode::kOk);Server server(&loop,o.path,"acceptance");
             server.SetCodecFactory([]{return std::make_shared<shm::codec::SimplePodCodec>();});
             server.SetConnectionCallback([&](const comm::TcpConnPtr&){++opened;++active;});
             server.SetCloseCallback([&](const comm::TcpConnPtr&){++closed;--active;REQUIRE(active>=0);std::printf("{\"role\":\"server_close\",\"time_ns\":%llu}\n",(unsigned long long)Now());std::fflush(stdout);});
@@ -123,20 +124,32 @@ static int Run(const Options& o) {
     REQUIRE(o.role=="client");
     bool completed=false,failed=false,closing=false,measuring=false,need_reconnect=false;
     int session=0,close_events=0;uint64_t sent=0,received=0,measured=0,start=0,end=0,phase_end=0,last_tick=0,full_checks=0;
-    Histogram hist;std::vector<uint64_t> stamps(o.batch);
+    Histogram hist;std::array<uint64_t,256> stamps{};
+    acceptance_bench::RandomBatch schedule(o.batch_min ? o.batch_min : o.batch,o.batch,o.seed);
+    std::array<uint64_t,257> batch_counts{};
+    uint64_t measured_batches=0, batch_messages=0, prefix_count=0, prefix_hash=UINT64_C(14695981039346656037);
+    auto reset_schedule=[&](bool formal) {
+        schedule.Reset(formal ? o.seed : (o.seed ^ UINT64_C(0xd1b54a32d192ed03)));
+        batch_counts.fill(0);measured_batches=batch_messages=prefix_count=0;
+        prefix_hash=UINT64_C(14695981039346656037);
+    };
     std::any request=payload.make();
     {
-        shm::EventLoop loop;Client client(&loop);
+        shm::EventLoop loop;REQUIRE(loop.SetBusyPolling(o.busy_poll)==shm::ErrorCode::kOk);Client client(&loop);
         client.SetCodecFactory([]{return std::make_shared<shm::codec::SimplePodCodec>();});
         auto batch=[&](const comm::TcpConnPtr& c) {
-            uint64_t amount=o.batch;if(o.messages)amount=std::min<uint64_t>(amount,o.messages-sent);
+            uint64_t amount=o.batch_min ? schedule.Next() : o.batch;if(o.messages)amount=std::min<uint64_t>(amount,o.messages-sent);
+            if (measuring && o.batch_min) {
+                ++batch_counts[amount];++measured_batches;batch_messages+=amount;
+                if (prefix_count<256) {prefix_hash=(prefix_hash^amount)*UINT64_C(1099511628211);++prefix_count;}
+            }
             for(uint64_t i=0;i<amount;++i) {
                 payload.set_seq(request,sent);
                 if(measuring&&Sample(sent,o.stride))stamps[sent%o.batch]=Now();
                 REQUIRE(c->SendCmd(request));++sent;
             }
         };
-        client.SetConnectionCallback([&](const comm::TcpConnPtr& c){++session;need_reconnect=false;sent=received=measured=full_checks=0;hist=Histogram{};closing=false;measuring=o.warmup==0;start=Now();phase_end=start+uint64_t((measuring?o.seconds:o.warmup)*1e9);last_tick=start;std::printf("{\"role\":\"client_connected\",\"session\":%d,\"time_ns\":%llu}\n",session,(unsigned long long)Now());std::fflush(stdout);batch(c);});
+        client.SetConnectionCallback([&](const comm::TcpConnPtr& c){++session;need_reconnect=false;sent=received=measured=full_checks=0;hist=Histogram{};closing=false;measuring=o.warmup==0;reset_schedule(measuring);start=Now();phase_end=start+uint64_t((measuring?o.seconds:o.warmup)*1e9);last_tick=start;std::printf("{\"role\":\"client_connected\",\"session\":%d,\"time_ns\":%llu}\n",session,(unsigned long long)Now());std::fflush(stdout);batch(c);});
         client.SetMessageCallback([&](const comm::TcpConnPtr& c,const std::any& p){
             uint64_t arrival=0;if(measuring&&Sample(received,o.stride))arrival=Now();
             bool full=Sample(received,64);
@@ -151,9 +164,15 @@ static int Run(const Options& o) {
                 end=now;completed=true;closing=true;
                 double seconds=double(end-start)/1e9;
                 std::printf("{\"role\":\"result\",\"session\":%d,\"bytes\":%d,\"batch\":%d,\"gap_us\":%d,\"messages\":%llu,\"seconds\":%.9f,\"msg_s\":%.3f,\"samples\":%llu,\"p50_ns\":%llu,\"p99_ns\":%llu,\"p999_ns\":%llu,\"max_ns\":%llu,\"full_checks\":%llu,\"errors\":0}\n",session,o.bytes,o.batch,o.gap_us,(unsigned long long)measured,seconds,measured/seconds,(unsigned long long)hist.samples,(unsigned long long)hist.Percentile(.5),(unsigned long long)hist.Percentile(.99),(unsigned long long)hist.Percentile(.999),(unsigned long long)hist.max,(unsigned long long)full_checks);std::fflush(stdout);
+                if (o.batch_min) {
+                    REQUIRE(batch_messages==measured);
+                    std::printf("{\"role\":\"batch_stats\",\"minimum\":%d,\"maximum\":%d,\"seed\":%llu,\"batches\":%llu,\"messages\":%llu,\"prefix_count\":%llu,\"prefix_hash\":%llu,\"counts\":[",o.batch_min,o.batch,(unsigned long long)o.seed,(unsigned long long)measured_batches,(unsigned long long)batch_messages,(unsigned long long)prefix_count,(unsigned long long)prefix_hash);
+                    for(int i=0;i<=o.batch;++i)std::printf("%s%llu",i?",":"",(unsigned long long)batch_counts[i]);
+                    std::puts("]}");
+                }
                 client.Close();return;
             }
-            if(!measuring&&now>=phase_end){measuring=true;start=now;phase_end=now+uint64_t(o.seconds*1e9);}
+            if(!measuring&&now>=phase_end){measuring=true;reset_schedule(true);start=now;phase_end=now+uint64_t(o.seconds*1e9);}
             if(o.gap_us)std::this_thread::sleep_for(std::chrono::microseconds(o.gap_us));
             batch(c);
         });
@@ -175,11 +194,13 @@ int main(int argc,char** argv) {
     Options o;
     REQUIRE(argc>=3);o.role=argv[1];o.path=argv[2];
     for(int i=3;i<argc;++i) { REQUIRE(i+1<argc);std::string k=argv[i];const char* v=argv[++i];
-        if(k=="--transport")o.transport=v;else if(k=="--socket-buffer")socket_bench::buffer_bytes=std::atoi(v);else if(k=="--socket-coalesce")socket_bench::coalesce=std::atoi(v)!=0;else if(k=="--single-type")o.single_type=std::atoi(v)!=0;else if(k=="--bytes")o.bytes=std::atoi(v);else if(k=="--batch")o.batch=std::atoi(v);
+        if(k=="--busy-poll")o.busy_poll=std::atoi(v)!=0;else if(k=="--transport")o.transport=v;else if(k=="--socket-buffer")socket_bench::buffer_bytes=std::atoi(v);else if(k=="--socket-coalesce")socket_bench::coalesce=std::atoi(v)!=0;else if(k=="--single-type")o.single_type=std::atoi(v)!=0;else if(k=="--bytes")o.bytes=std::atoi(v);else if(k=="--batch")o.batch=std::atoi(v);else if(k=="--batch-min")o.batch_min=std::atoi(v);else if(k=="--seed")o.seed=std::strtoull(v,nullptr,10);
         else if(k=="--seconds")o.seconds=std::atof(v);else if(k=="--warmup")o.warmup=std::atof(v);
         else if(k=="--gap-us")o.gap_us=std::atoi(v);else if(k=="--sessions")o.sessions=std::atoi(v);
         else if(k=="--messages")o.messages=std::strtoull(v,nullptr,10);else if(k=="--stride")o.stride=std::atoi(v);else if(k=="--reconnect")o.reconnect=std::atoi(v);else REQUIRE(false);
     }
+    REQUIRE(o.batch_min>=0&&o.batch_min<=o.batch);
+    REQUIRE(!o.busy_poll || o.transport=="shm");
     REQUIRE(o.batch>0&&o.batch<=256&&o.sessions>0&&o.stride>0&&o.gap_us>=0&&o.seconds>0&&o.warmup>=0);
     REQUIRE(o.bytes!=1048576||o.batch<=4);
     const PayloadOps payload=SelectPayload(o.bytes);

@@ -1,0 +1,14 @@
+{
+  "state": "running",
+  "started_utc": "2026-11-21T13:54:47.306375+00:00",
+  "seconds_requested": 604800,
+  "warmup_seconds": 5,
+  "output": "/home/dev/github/shm-cpp/bench/results/shm_soak_7d_20261121_215441_26138",
+  "bytes": 16,
+  "batch": 256,
+  "server_cpu": 2,
+  "client_cpu": 4,
+  "elapsed_s": 219146.3,
+  "latest_replies": 2646370472448,
+  "progress_age_s": 0.8
+}

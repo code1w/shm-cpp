@@ -166,7 +166,8 @@ class ShmAsyncClient : public comm::ITcpAsyncClient
                 FailConnect(uri, ErrorCode::kInvalidArgument);
                 return;
             }
-            InstallConnection(std::move(sock), std::move(channel), std::move(codec));
+            ec = InstallConnection(std::move(sock), std::move(channel), std::move(codec));
+            if (ec != ErrorCode::kOk) FailConnect(uri, ec);
         }
         catch (const std::bad_alloc&)
         {
@@ -257,7 +258,7 @@ class ShmAsyncClient : public comm::ITcpAsyncClient
 
  private:
     /// @brief 创建连接对象、装配回调/codec 并注册 fd，最后触发 connection 回调
-    void InstallConnection(UniqueFd sock, DefaultRingChannel channel, comm::codec::CodecPtr codec)
+    ErrorCode InstallConnection(UniqueFd sock, DefaultRingChannel channel, comm::codec::CodecPtr codec)
     {
         const uint64_t id = 1;
         auto conn         = std::make_shared<ShmConnection>(loop_, id, std::move(sock), std::move(channel));
@@ -275,11 +276,25 @@ class ShmAsyncClient : public comm::ITcpAsyncClient
         }
         conn_ = conn;
 
-        loop_->AddFd(conn->NotifyFd(), [this](int fd, short revents) { OnNotify(fd, revents); });
+        if (loop_->BusyPolling())
+        {
+            const auto ec = loop_->AddBusyPollFd(conn->NotifyFd(), [this](int fd, short revents) {
+                OnNotify(fd, revents);
+                return ErrorCode::kOk;
+            });
+            if (ec != ErrorCode::kOk)
+            {
+                conn->Close();
+                conn_.reset();
+                return ec;
+            }
+        }
+        else loop_->AddFd(conn->NotifyFd(), [this](int fd, short revents) { OnNotify(fd, revents); });
         loop_->AddFd(conn->SocketFd(), [this](int fd, short revents) { OnSocket(fd, revents); });
 
         state_ = comm::TcpClientStates::established;
         conn->OnConnection();
+        return ErrorCode::kOk;
     }
 
     /// @brief 连接失败收尾：记录错误码并触发 error 回调
@@ -304,7 +319,7 @@ class ShmAsyncClient : public comm::ITcpAsyncClient
     /// @brief eventfd 回调：对端写入新数据，立即消费并解码分发
     void OnNotify(int efd, short /*revents*/)
     {
-        DefaultRingChannel::DrainNotify(efd);
+        if (efd >= 0) DefaultRingChannel::DrainNotify(efd);
         // 持有本地拷贝：消息回调内可能调用 Close() 触发 Teardown()，
         // 若直接用 conn_ 访问会在 DrainRing 返回后踩空
         auto conn = conn_;

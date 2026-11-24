@@ -1,0 +1,12 @@
+{"role":"socket_buffers","send":425984,"receive":425984,"coalesce":true}
+{"role":"client_connected","session":1,"time_ns":101576720712504693}
+{"role":"client_tick","session":1,"replies":94434}
+{"role":"client_tick","session":1,"replies":192155}
+{"role":"client_tick","session":1,"replies":287689}
+{"role":"client_tick","session":1,"replies":385412}
+{"role":"client_tick","session":1,"replies":481364}
+{"role":"result","session":1,"bytes":32768,"batch":64,"gap_us":0,"messages":484820,"seconds":5.000015460,"msg_s":96963.700,"samples":30292,"p50_ns":274432,"p99_ns":540672,"p999_ns":598016,"max_ns":1647265,"full_checks":9051,"errors":0}
+{"role":"batch_stats","minimum":1,"maximum":64,"seed":324660255,"batches":14952,"messages":484820,"prefix_count":256,"prefix_hash":5437161270029116116,"counts":[0,258,225,231,233,239,221,254,262,213,251,218,226,230,256,252,208,247,227,217,221,236,232,254,214,230,247,230,211,235,219,250,235,227,226,241,202,222,222,240,255,243,242,250,262,238,236,235,240,266,227,191,239,247,224,237,200,226,244,215,243,227,232,215,256]}
+{"role":"socket_io","send_calls":160359,"short_writes":70914,"write_eagain":71588,"recv_calls":237033}
+{"role":"client_close","unexpected":false,"time_ns":101576726712776336}
+{"role":"client_final","completed":true,"failed":false,"sessions":1,"close_events":1,"received":579254,"base_fds":4,"final_fds":4,"ring_maps":0}

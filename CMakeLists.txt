@@ -152,3 +152,9 @@ if(Protobuf_FOUND)
 else()
     message(STATUS "Protobuf not found, skipping proto targets")
 endif()
+
+# Random-batch benchmark helper has no exception or allocation dependency.
+add_executable(test_random_batch test/test_random_batch.cpp)
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(test_random_batch PRIVATE -fno-exceptions)
+endif()

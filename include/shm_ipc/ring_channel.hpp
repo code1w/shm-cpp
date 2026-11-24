@@ -470,6 +470,11 @@ class RingChannel
         return Ring::ArmReaderWait(read_region_.Get(), seen_write);
     }
 
+    void SetReaderPolling()
+    {
+        if (read_region_) Ring::SetReaderPolling(read_region_.Get());
+    }
+
     /** @brief 读环当前 write_pos（通道未初始化时为 0） */
     [[nodiscard]]
     uint64_t WritePos() const

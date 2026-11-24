@@ -1,0 +1,48 @@
+['/tmp/shm-busy-poll-asan/test_eventloop']
+=== EventLoop fd-reuse ordering test ===
+  PASS: fd reused during dispatch, new entry survives
+
+=== EventLoop same-batch add+remove test ===
+  PASS: same-batch add+remove entry actually removed
+
+=== EventLoop cancelled one-shot timer test ===
+  PASS: cancelled timer does not fire
+
+  PASS: Run rejects reentry and recovers after all exit paths
+
+  PASS: concurrent Run rejected before accessing loop state
+
+  PASS: busy polling lifecycle, timers, removal, error returns
+=== TEST PASSED ===
+['taskset', '-c', '1,3', '/tmp/shm-busy-poll-asan/test_shm_app']
+part0: big-pod any reuse OK
+part1b: zero-copy peek/commit OK
+part1: sync client echo OK
+part2: async client echo OK
+part3: pending verify timer removed on client dtor
+part4: double Start() is a no-op
+=== TEST PASSED ===
+['taskset', '-c', '1,3', '/tmp/shm-busy-poll-asan/test_shm_app', '--busy-server']
+part0: big-pod any reuse OK
+part1b: zero-copy peek/commit OK
+part1: sync client echo OK
+part2: async client echo OK
+part3: pending verify timer removed on client dtor
+part4: double Start() is a no-op
+=== TEST PASSED ===
+['taskset', '-c', '1,3', '/tmp/shm-busy-poll-asan/test_shm_app', '--busy-client']
+part0: big-pod any reuse OK
+part1b: zero-copy peek/commit OK
+part1: sync client echo OK
+part2: async client echo OK
+part3: pending verify timer removed on client dtor
+part4: double Start() is a no-op
+=== TEST PASSED ===
+['taskset', '-c', '1,3', '/tmp/shm-busy-poll-asan/test_shm_app', '--busy-server', '--busy-client']
+part0: big-pod any reuse OK
+part1b: zero-copy peek/commit OK
+part1: sync client echo OK
+part2: async client echo OK
+part3: pending verify timer removed on client dtor
+part4: double Start() is a no-op
+=== TEST PASSED ===

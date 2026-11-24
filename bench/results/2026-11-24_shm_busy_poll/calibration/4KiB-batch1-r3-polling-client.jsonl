@@ -1,0 +1,7 @@
+{"role":"client_connected","session":1,"time_ns":101573779260721347}
+{"role":"client_tick","session":1,"replies":330852}
+{"role":"client_tick","session":1,"replies":676749}
+{"role":"client_tick","session":1,"replies":1016579}
+{"role":"result","session":1,"bytes":4096,"batch":1,"gap_us":0,"messages":1026207,"seconds":3.000000568,"msg_s":342068.935,"samples":1026207,"p50_ns":2752,"p99_ns":3968,"p999_ns":10240,"max_ns":152178,"full_checks":21095,"errors":0}
+{"role":"client_close","unexpected":false,"time_ns":101573783260785004}
+{"role":"client_final","completed":true,"failed":false,"sessions":1,"close_events":1,"received":1357059,"base_fds":4,"final_fds":4,"ring_maps":0}

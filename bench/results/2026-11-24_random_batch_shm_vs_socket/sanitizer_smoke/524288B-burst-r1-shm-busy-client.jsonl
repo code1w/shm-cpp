@@ -1,0 +1,5 @@
+{"role":"client_connected","session":1,"time_ns":101575880611055053}
+{"role":"result","session":1,"bytes":524288,"batch":4,"gap_us":0,"messages":518,"seconds":0.300169651,"msg_s":1725.691,"samples":518,"p50_ns":1212416,"p99_ns":3538944,"p999_ns":3833856,"max_ns":3804748,"full_checks":9,"errors":0}
+{"role":"batch_stats","minimum":1,"maximum":4,"seed":324619312,"batches":209,"messages":518,"prefix_count":209,"prefix_hash":13283912997827080761,"counts":[0,52,59,44,54]}
+{"role":"client_close","unexpected":false,"time_ns":101575880911380853}
+{"role":"client_final","completed":true,"failed":false,"sessions":1,"close_events":1,"received":518,"base_fds":4,"final_fds":4,"ring_maps":0}

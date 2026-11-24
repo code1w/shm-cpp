@@ -1,0 +1,8 @@
+{
+  "formal_runs": 270,
+  "sanitizer_runs": 90,
+  "measured_rpc": 1195079347,
+  "all_batch_values_covered": true,
+  "paired_prefix_groups": 90,
+  "source_and_binary_hashes_match": true
+}
