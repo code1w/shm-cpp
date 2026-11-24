@@ -1,0 +1,5 @@
+108 paired-side measurements validated (18 configurations x 3 pairs).
+All 12 requested sizes covered; 36 ASan/UBSan+leak expanded smoke measurements passed.
+7 legacy SHM smoke scenarios passed with original three-type registration.
+All source fingerprints match. Core include/ files unchanged.
+Existing 7-day soak remained running on CPU2/4; comparison used CPU1/3 NUMA1.

@@ -1,0 +1,4 @@
+{"role":"ready"}
+{"role":"server_close","time_ns":101530924317396746}
+{"role":"server_tick","active":0,"opened":1,"closed":1,"replies":1113,"send_failures":0,"fds":8,"ring_maps":0}
+{"role":"server_final","opened":1,"closed":1,"base_fds":4,"final_fds":4,"ring_maps":0}

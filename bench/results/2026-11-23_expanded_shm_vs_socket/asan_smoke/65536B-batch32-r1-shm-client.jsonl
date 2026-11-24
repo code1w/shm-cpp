@@ -1,0 +1,4 @@
+{"role":"client_connected","session":1,"time_ns":101528482588746084}
+{"role":"result","session":1,"bytes":65536,"batch":32,"gap_us":0,"messages":14176,"seconds":0.300254963,"msg_s":47213.208,"samples":14176,"p50_ns":274432,"p99_ns":1015808,"p999_ns":1703936,"max_ns":2043396,"full_checks":219,"errors":0}
+{"role":"client_close","unexpected":false,"time_ns":101528482889132357}
+{"role":"client_final","completed":true,"failed":false,"sessions":1,"close_events":1,"received":14176,"base_fds":4,"final_fds":4,"ring_maps":0}

@@ -1,0 +1,1 @@
+["taskset", "-c", "4", "/home/dev/github/shm-cpp/build/soak7d/bench_acceptance", "client", "/tmp/shm-soak-9q6mrmp6/ipc.sock", "--seconds", "604800", "--warmup", "5", "--bytes", "16", "--batch", "256", "--stride", "64"]

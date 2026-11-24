@@ -1,5 +1,9 @@
 # Echo Benchmark: Unix Socket vs Shared Memory
 
+最新固定batch1结果见 [2026-11-23 Batch1 15尺寸对比](results/2026-11-23_batch1_shm_vs_socket/README.md)，逐请求全量记录RTT。
+
+最新扩展尺寸结果见 [2026-11-23 15尺寸对比](results/2026-11-23_expanded_shm_vs_socket/README.md)，覆盖128B至512KiB新增点并重测锚点。该轮使用CPU1/3 NUMA1，参数和范围以报告为准。
+
 最新的应用层吞吐与逐请求 RTT 对比见 [2026-11-21 SHM vs Unix socket](results/2026-11-21_latest_shm_vs_socket/README.md)，两端使用共同 codec 和 EventLoop。下方为历史传输层 busy-poll 测量，两类路径应分别解读。
 
 ## 测试环境

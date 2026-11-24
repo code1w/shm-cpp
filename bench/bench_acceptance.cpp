@@ -19,7 +19,8 @@
 #include <thread>
 #include <vector>
 
-template<size_t N> struct AcceptancePod { uint64_t seq; unsigned char data[N-8]; };
+template<size_t N> struct AcceptancePod { static_assert(N>=16 && N%8==0); uint64_t seq; unsigned char data[N-8]; };
+namespace shm { template<size_t N> struct TypeTag<AcceptancePod<N>> { static constexpr uint32_t value=0xAB000000u | static_cast<uint32_t>(N); }; }
 using Small=AcceptancePod<16>;
 using Big=AcceptancePod<4096>;
 using Huge=AcceptancePod<1048576>;
@@ -57,7 +58,7 @@ struct Histogram {
         return max;
     }
 };
-struct Options { std::string role,path,transport="shm";int bytes=16,batch=64,gap_us=0,sessions=1,stride=64,reconnect=0;double seconds=10,warmup=1;uint64_t messages=0; };
+struct Options { std::string role,path,transport="shm";int bytes=16,batch=64,gap_us=0,sessions=1,stride=64,reconnect=0;double seconds=10,warmup=1;uint64_t messages=0;bool single_type=false; };
 template<class T> std::any Make() { T p{};for(size_t i=0;i<sizeof(p.data);++i)p.data[i]=static_cast<unsigned char>(i*131+17);return p; }
 template<class T> void SetSeq(std::any& a,uint64_t seq) { std::any_cast<T&>(a).seq=seq; }
 template<class T> uint64_t Verify(const std::any& a,bool full) {
@@ -66,8 +67,40 @@ template<class T> uint64_t Verify(const std::any& a,bool full) {
     else { REQUIRE(p->data[0]==17);REQUIRE(p->data[sizeof(p->data)-1]==static_cast<unsigned char>((sizeof(p->data)-1)*131+17)); }
     return p->seq;
 }
+struct PayloadOps {
+    std::any (*make)();
+    void (*set_seq)(std::any&,uint64_t);
+    uint64_t (*verify)(const std::any&,bool);
+    void (*register_type)();
+};
+template<class T> static void RegisterPayload() { shm::codec::SimplePodCodec::RegisterPod<T>(); }
+template<size_t N> static PayloadOps Ops() {
+    using T=AcceptancePod<N>;
+    return {Make<T>,SetSeq<T>,Verify<T>,RegisterPayload<T>};
+}
+static PayloadOps SelectPayload(int bytes) {
+    switch(bytes) {
+        case 16:return Ops<16>();
+        case 128:return Ops<128>();
+        case 256:return Ops<256>();
+        case 512:return Ops<512>();
+        case 1024:return Ops<1024>();
+        case 2048:return Ops<2048>();
+        case 3072:return Ops<3072>();
+        case 4096:return Ops<4096>();
+        case 8192:return Ops<8192>();
+        case 16384:return Ops<16384>();
+        case 32768:return Ops<32768>();
+        case 65536:return Ops<65536>();
+        case 131072:return Ops<131072>();
+        case 524288:return Ops<524288>();
+        case 1048576:return Ops<1048576>();
+        default:std::fprintf(stderr,"Unsupported POD message size: %d\n",bytes);std::exit(3);
+    }
+}
 template<class Server,class Client>
 static int Run(const Options& o) {
+    const PayloadOps payload=SelectPayload(o.bytes);
     const size_t base_fds=Fds(),base_maps=Maps();
     if(o.role=="server") {
         uint64_t replies=0,opened=0,closed=0,send_failures=0;int active=0;
@@ -91,14 +124,14 @@ static int Run(const Options& o) {
     bool completed=false,failed=false,closing=false,measuring=false,need_reconnect=false;
     int session=0,close_events=0;uint64_t sent=0,received=0,measured=0,start=0,end=0,phase_end=0,last_tick=0,full_checks=0;
     Histogram hist;std::vector<uint64_t> stamps(o.batch);
-    std::any request=o.bytes==16?Make<Small>():o.bytes==4096?Make<Big>():Make<Huge>();
+    std::any request=payload.make();
     {
         shm::EventLoop loop;Client client(&loop);
         client.SetCodecFactory([]{return std::make_shared<shm::codec::SimplePodCodec>();});
         auto batch=[&](const comm::TcpConnPtr& c) {
             uint64_t amount=o.batch;if(o.messages)amount=std::min<uint64_t>(amount,o.messages-sent);
             for(uint64_t i=0;i<amount;++i) {
-                if(o.bytes==16)SetSeq<Small>(request,sent);else if(o.bytes==4096)SetSeq<Big>(request,sent);else SetSeq<Huge>(request,sent);
+                payload.set_seq(request,sent);
                 if(measuring&&Sample(sent,o.stride))stamps[sent%o.batch]=Now();
                 REQUIRE(c->SendCmd(request));++sent;
             }
@@ -107,7 +140,7 @@ static int Run(const Options& o) {
         client.SetMessageCallback([&](const comm::TcpConnPtr& c,const std::any& p){
             uint64_t arrival=0;if(measuring&&Sample(received,o.stride))arrival=Now();
             bool full=Sample(received,64);
-            uint64_t seq=o.bytes==16?Verify<Small>(p,full):o.bytes==4096?Verify<Big>(p,full):Verify<Huge>(p,full);
+            uint64_t seq=payload.verify(p,full);
             REQUIRE(seq==received);if(full)++full_checks;
             if(measuring){++measured;if(arrival)hist.Add(arrival-stamps[received%o.batch]);}
             ++received;
@@ -142,14 +175,21 @@ int main(int argc,char** argv) {
     Options o;
     REQUIRE(argc>=3);o.role=argv[1];o.path=argv[2];
     for(int i=3;i<argc;++i) { REQUIRE(i+1<argc);std::string k=argv[i];const char* v=argv[++i];
-        if(k=="--transport")o.transport=v;else if(k=="--socket-buffer")socket_bench::buffer_bytes=std::atoi(v);else if(k=="--socket-coalesce")socket_bench::coalesce=std::atoi(v)!=0;else if(k=="--bytes")o.bytes=std::atoi(v);else if(k=="--batch")o.batch=std::atoi(v);
+        if(k=="--transport")o.transport=v;else if(k=="--socket-buffer")socket_bench::buffer_bytes=std::atoi(v);else if(k=="--socket-coalesce")socket_bench::coalesce=std::atoi(v)!=0;else if(k=="--single-type")o.single_type=std::atoi(v)!=0;else if(k=="--bytes")o.bytes=std::atoi(v);else if(k=="--batch")o.batch=std::atoi(v);
         else if(k=="--seconds")o.seconds=std::atof(v);else if(k=="--warmup")o.warmup=std::atof(v);
         else if(k=="--gap-us")o.gap_us=std::atoi(v);else if(k=="--sessions")o.sessions=std::atoi(v);
         else if(k=="--messages")o.messages=std::strtoull(v,nullptr,10);else if(k=="--stride")o.stride=std::atoi(v);else if(k=="--reconnect")o.reconnect=std::atoi(v);else REQUIRE(false);
     }
-    REQUIRE((o.bytes==16||o.bytes==4096||o.bytes==1048576)&&o.batch>0&&o.batch<=256&&o.sessions>0&&o.stride>0&&o.gap_us>=0&&o.seconds>0&&o.warmup>=0);
+    REQUIRE(o.batch>0&&o.batch<=256&&o.sessions>0&&o.stride>0&&o.gap_us>=0&&o.seconds>0&&o.warmup>=0);
     REQUIRE(o.bytes!=1048576||o.batch<=4);
-    shm::codec::SimplePodCodec::RegisterPod<Small>();shm::codec::SimplePodCodec::RegisterPod<Big>();shm::codec::SimplePodCodec::RegisterPod<Huge>();
+    const PayloadOps payload=SelectPayload(o.bytes);
+    REQUIRE(uint64_t(o.bytes+4)*uint64_t(o.batch)<=5*1024*1024);
+    if(o.single_type)payload.register_type();
+    else {
+        // Preserve legacy three-type scenarios and older supervisor commands.
+        shm::codec::SimplePodCodec::RegisterPod<Small>();shm::codec::SimplePodCodec::RegisterPod<Big>();shm::codec::SimplePodCodec::RegisterPod<Huge>();
+        if(o.bytes!=16&&o.bytes!=4096&&o.bytes!=1048576)payload.register_type();
+    }
     REQUIRE(o.transport=="shm"||o.transport=="socket");
     REQUIRE(socket_bench::buffer_bytes>0);
     if(o.transport=="socket")return Run<socket_bench::Server,socket_bench::Client>(o);

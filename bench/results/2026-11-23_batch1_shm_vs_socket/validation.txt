@@ -1,0 +1,5 @@
+90 formal measurements passed, 15 sizes x 3 paired runs.
+All runs batch1 and samples==messages (full RTT observations).
+30 serial smoke measurements passed.
+Source fingerprints match; binary identical to expanded-size run.
+Seven-day soak remained active on CPU2/4; comparison used CPU1/3.

@@ -1,0 +1,1 @@
+["taskset", "-c", "2", "/home/dev/github/shm-cpp/build/soak7d/bench_acceptance", "server", "/tmp/shm-soak-9q6mrmp6/ipc.sock"]

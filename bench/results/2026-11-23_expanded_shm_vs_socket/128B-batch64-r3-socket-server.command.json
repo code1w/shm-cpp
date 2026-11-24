@@ -1,0 +1,1 @@
+["taskset", "-c", "1", "/tmp/shm-size-matrix/bench_acceptance", "server", "/tmp/shm-socket-ab-8t9lu_e3/ipc.sock", "--transport", "socket", "--bytes", "128", "--batch", "64", "--single-type", "1"]

@@ -1,0 +1,14 @@
+[
+  {
+    "case": "16B-full",
+    "shm": 89710.905,
+    "socket": 81965.031,
+    "paired_gain_pct": 9.374939988227826
+  },
+  {
+    "case": "16B-sparse",
+    "shm": 89847.787,
+    "socket": 81926.676,
+    "paired_gain_pct": 9.668537022056146
+  }
+]
