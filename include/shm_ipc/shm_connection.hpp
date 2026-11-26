@@ -118,7 +118,7 @@ class ShmConnection : public comm::ITcpConnection,
             // 空间并编码，把 "any → encode_buf_ → ring" 两次拷贝降为一次。
             // 小消息继续走 encode_buf_（缓存命中，避免 Reserve/Commit 开销）。
             const int32_t need = CallCodec([&] { return codec->EncodedSize(pkg); });
-            if (need >= static_cast<int32_t>(kDirectEncodeMinBytes) &&
+            if (need >= static_cast<int32_t>(direct_encode_min_bytes_) &&
                 static_cast<uint32_t>(need) <= DefaultRingChannel::kMaxWriteSize)
             {
                 DefaultRingChannel::ChannelBatchWriter batch;
@@ -300,6 +300,18 @@ class ShmConnection : public comm::ITcpConnection,
     // ------------------------------------------------------------------
     // shm 扩展接口（非接口方法）
     // ------------------------------------------------------------------
+
+    /// Owner-thread configuration outside send/receive. Default is 256; 0 allows small direct frames.
+    /// Reserve failure still falls back to buffering and must be checked by direct-only benchmarks.
+    [[nodiscard]]
+    ErrorCode SetDirectEncodeMinimumBytes(uint32_t bytes) noexcept
+    {
+        if (bytes > DefaultRingChannel::kMaxWriteSize) return ErrorCode::kInvalidArgument;
+        AssertOperationIdle();
+        direct_encode_min_bytes_ = bytes;
+        return ErrorCode::kOk;
+    }
+    uint32_t DirectEncodeMinimumBytes() const noexcept { return direct_encode_min_bytes_; }
 
     void SetCodec(comm::codec::CodecPtr codec) { AssertOperationIdle(); codec_ = std::move(codec); }
     void SetConnType(comm::TcpConnType type) { conntype_ = type; }
@@ -763,6 +775,7 @@ class ShmConnection : public comm::ITcpConnection,
     comm::TimerID verify_timer_ = -1;                          ///< 验证超时定时器
     comm::CloseType close_type_{comm::CloseType::Passive};    ///< 关闭类型
     comm::TcpConnType conntype_{comm::TcpConnType::Unknown};  ///< 连接类型
+    uint32_t direct_encode_min_bytes_ = kDirectEncodeMinBytes;
     bool sending_{false};    // 以下标志仅在Debug检查中使用，Release不更新
     bool draining_{false};
     bool codec_active_{false};

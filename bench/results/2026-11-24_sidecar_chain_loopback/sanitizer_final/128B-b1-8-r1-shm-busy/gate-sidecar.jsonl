@@ -1,0 +1,3 @@
+{"role":"stream_config","tcp":true,"busy_tcp_poll":true,"send_buffer":2626560,"receive_buffer":1061296,"nodelay":true}
+{"role":"ready","actor":"gate-sidecar","mode":"shm-busy","tcp_port":0,"control_interval":256}
+{"role":"chain_final","actor":"gate-sidecar","mode":"shm-busy","completed":false,"error":"ok","base_fds":4,"final_fds":4,"sent":0,"received":0,"local_rx":257,"local_tx":257,"tcp_rx_frames":257,"tcp_tx_frames":257,"tcp_tx_bytes":37008,"tcp_rx_bytes":37008,"tcp_send_calls":53,"tcp_eagain":0}

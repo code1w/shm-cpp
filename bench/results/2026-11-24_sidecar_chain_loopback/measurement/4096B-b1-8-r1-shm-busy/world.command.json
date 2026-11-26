@@ -1,0 +1,1 @@
+["taskset", "-c", "7", "/tmp/shm-chain/bench_chain", "world", "--mode", "shm-busy", "--local", "/tmp/chain-ial3fe5z/world.sock"]

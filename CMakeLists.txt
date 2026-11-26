@@ -158,3 +158,36 @@ add_executable(test_random_batch test/test_random_batch.cpp)
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(test_random_batch PRIVATE -fno-exceptions)
 endif()
+
+# End-to-end four-process benchmark: local IPC / TCP / local IPC.
+add_executable(bench_chain bench/bench_chain.cpp)
+target_link_libraries(bench_chain PRIVATE shm_ipc)
+
+add_executable(test_chain_wire test/test_chain_wire.cpp)
+target_link_libraries(test_chain_wire PRIVATE shm_ipc)
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(test_chain_wire PRIVATE -fno-exceptions)
+endif()
+add_executable(test_chain_stream test/test_chain_stream.cpp)
+target_link_libraries(test_chain_stream PRIVATE shm_ipc)
+
+if(Protobuf_FOUND)
+    set(CHAIN_PROTO_CC ${CMAKE_CURRENT_BINARY_DIR}/chain_bench.pb.cc)
+    set(CHAIN_PROTO_H ${CMAKE_CURRENT_BINARY_DIR}/chain_bench.pb.h)
+    add_custom_command(OUTPUT ${CHAIN_PROTO_CC} ${CHAIN_PROTO_H}
+        COMMAND protobuf::protoc --cpp_out=${CMAKE_CURRENT_BINARY_DIR}
+                --proto_path=${CMAKE_CURRENT_SOURCE_DIR}/proto
+                ${CMAKE_CURRENT_SOURCE_DIR}/proto/chain_bench.proto
+        DEPENDS proto/chain_bench.proto protobuf::protoc
+        VERBATIM)
+    add_library(chain_proto STATIC ${CHAIN_PROTO_CC})
+    target_include_directories(chain_proto PUBLIC ${CMAKE_CURRENT_BINARY_DIR})
+    target_link_libraries(chain_proto PUBLIC protobuf::libprotobuf)
+    add_executable(bench_chain_protobuf bench/bench_chain.cpp)
+    target_compile_definitions(bench_chain_protobuf PRIVATE SHM_CHAIN_PROTOBUF=1)
+    target_link_libraries(bench_chain_protobuf PRIVATE shm_ipc chain_proto)
+    add_executable(test_chain_protobuf test/test_chain_protobuf.cpp)
+    target_compile_definitions(test_chain_protobuf PRIVATE SHM_CHAIN_PROTOBUF=1)
+    target_link_libraries(test_chain_protobuf PRIVATE shm_ipc chain_proto)
+    target_compile_options(test_chain_protobuf PRIVATE -fno-exceptions)
+endif()

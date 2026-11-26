@@ -1,0 +1,3 @@
+{"role":"ready","actor":"world-sidecar","mode":"shm-eventfd","tcp_port":45469,"control_interval":256}
+{"role":"stream_config","tcp":true,"busy_tcp_poll":false,"send_buffer":2626560,"receive_buffer":1061488,"nodelay":true}
+{"role":"chain_final","actor":"world-sidecar","mode":"shm-eventfd","completed":false,"error":"ok","base_fds":4,"final_fds":4,"sent":0,"received":0,"local_rx":440059,"local_tx":440059,"tcp_rx_frames":440059,"tcp_tx_frames":440059,"tcp_tx_bytes":1809522608,"tcp_rx_bytes":1809522608,"tcp_send_calls":98824,"tcp_eagain":0}

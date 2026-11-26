@@ -1,0 +1,48 @@
+{
+  "formal_runs": 252,
+  "sizes": [
+    16,
+    128,
+    256,
+    512,
+    1024,
+    2048,
+    3072,
+    4096,
+    8192,
+    16384,
+    32768,
+    65536,
+    131072,
+    524288,
+    1048576
+  ],
+  "unique_random_batch_cases": 28,
+  "rounds": 3,
+  "measured_rpc": 215802422,
+  "all_direct_encoding_audits_passed": true,
+  "all_frame_count_payload_fd_checks_passed": true,
+  "parser_payload_address_changes": 0,
+  "asan_ubsan_four_process_runs": {
+    "state": "passed",
+    "completed": 84,
+    "total": 84
+  },
+  "unit_tests": [
+    "test_chain_protobuf",
+    "test_chain_wire",
+    "test_chain_stream",
+    "test_shm_app",
+    "test_eventloop",
+    "test_proto_codec",
+    "test_proto_wrap"
+  ],
+  "exception_syntax_added": false,
+  "topology": "single-host-tcp-loopback",
+  "no_remote_deployment": true,
+  "raw_chain_regression": {
+    "state": "passed",
+    "completed": 9,
+    "total": 9
+  }
+}

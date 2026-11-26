@@ -1,0 +1,4 @@
+{"role":"ready","actor":"world-sidecar","mode":"shm-eventfd","tcp_port":39920,"control_interval":256}
+{"role":"stream_config","tcp":true,"busy_tcp_poll":false,"send_buffer":2626560,"receive_buffer":1061488,"nodelay":true}
+{"role":"encoding_stats","actor":"world-sidecar","serialize_shared":0,"serialize_buffered":0,"raw_shared":58827,"raw_buffered":0,"parse_calls":0,"payload_address_changes":0}
+{"role":"chain_final","actor":"world-sidecar","mode":"shm-eventfd","completed":false,"error":"ok","base_fds":4,"final_fds":4,"sent":0,"received":0,"local_rx":58827,"local_tx":58827,"tcp_rx_frames":58827,"tcp_tx_frames":58827,"tcp_tx_bytes":7711513776,"tcp_rx_bytes":7711513776,"tcp_send_calls":23735,"tcp_eagain":0}

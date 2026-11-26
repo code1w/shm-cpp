@@ -1,0 +1,4 @@
+{"role":"stream_config","tcp":true,"busy_tcp_poll":true,"send_buffer":2626560,"receive_buffer":1061296,"nodelay":true}
+{"role":"ready","actor":"gate-sidecar","mode":"shm-busy","tcp_port":0,"control_interval":256}
+{"role":"encoding_stats","actor":"gate-sidecar","serialize_shared":0,"serialize_buffered":0,"raw_shared":338714,"raw_buffered":0,"parse_calls":0,"payload_address_changes":0}
+{"role":"chain_final","actor":"gate-sidecar","mode":"shm-busy","completed":false,"error":"ok","base_fds":4,"final_fds":4,"sent":0,"received":0,"local_rx":338714,"local_tx":338714,"tcp_rx_frames":338714,"tcp_tx_frames":338714,"tcp_tx_bytes":5554909600,"tcp_rx_bytes":5554909600,"tcp_send_calls":161879,"tcp_eagain":0}

@@ -1,0 +1,3 @@
+{"role":"ready","actor":"world","mode":"shm-busy","tcp_port":0,"control_interval":256}
+{"role":"encoding_stats","actor":"world","serialize_shared":1752804,"serialize_buffered":0,"raw_shared":0,"raw_buffered":0,"parse_calls":1752804,"payload_address_changes":0}
+{"role":"chain_final","actor":"world","mode":"shm-busy","completed":false,"error":"ok","base_fds":4,"final_fds":4,"sent":0,"received":0,"local_rx":1752804,"local_tx":1752804,"tcp_rx_frames":0,"tcp_tx_frames":0,"tcp_tx_bytes":0,"tcp_rx_bytes":0,"tcp_send_calls":0,"tcp_eagain":0}

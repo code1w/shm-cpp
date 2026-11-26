@@ -1,0 +1,5 @@
+{"role":"ready","actor":"gate","mode":"shm-busy","tcp_port":0,"control_interval":256}
+{"role":"result","bytes":512,"batch_min":1,"batch_max":8,"seed":124101427,"messages":1102016,"seconds":5.000021260,"rpc_s":220402.263,"payload_mib_s":105.095989,"duplex_payload_mib_s":210.191977,"duplex_tcp_framed_mib_s":221.962728,"samples":17041,"p50_ns":19712,"p99_ns":28928,"p999_ns":35840,"max_ns":200919,"batches":244777,"batch_messages":1102016,"prefix_count":64,"prefix_hash":4303582379820172540}
+{"role":"protobuf_metrics","codec":"protobuf","protobuf_bytes":512,"application_payload_bytes":500,"wire_frame_bytes":528,"duplex_protobuf_mib_s":215.236585,"direct_minimum_bytes":0}
+{"role":"encoding_stats","actor":"gate","serialize_shared":1317715,"serialize_buffered":0,"raw_shared":0,"raw_buffered":0,"parse_calls":1317715,"payload_address_changes":0}
+{"role":"chain_final","actor":"gate","mode":"shm-busy","completed":true,"error":"ok","base_fds":4,"final_fds":4,"sent":1317715,"received":1317715,"local_rx":1317715,"local_tx":1317715,"tcp_rx_frames":0,"tcp_tx_frames":0,"tcp_tx_bytes":0,"tcp_rx_bytes":0,"tcp_send_calls":0,"tcp_eagain":0}

@@ -1,0 +1,6 @@
+{"role":"stream_config","tcp":false,"busy_tcp_poll":false,"send_buffer":425984,"receive_buffer":425984,"nodelay":false}
+{"role":"ready","actor":"gate","mode":"uds","tcp_port":0,"control_interval":256}
+{"role":"result","bytes":3072,"batch_min":1,"batch_max":64,"seed":124261194,"messages":1048318,"seconds":5.000129513,"rpc_s":209658.169,"payload_mib_s":611.833571,"duplex_payload_mib_s":1223.667141,"duplex_tcp_framed_mib_s":1234.864095,"samples":16188,"p50_ns":186368,"p99_ns":274432,"p999_ns":475136,"max_ns":2816942,"batches":32249,"batch_messages":1048318,"prefix_count":64,"prefix_hash":3290671983805217026}
+{"role":"protobuf_metrics","codec":"protobuf","protobuf_bytes":3072,"application_payload_bytes":3060,"wire_frame_bytes":3088,"duplex_protobuf_mib_s":1228.465836,"direct_minimum_bytes":0}
+{"role":"encoding_stats","actor":"gate","serialize_shared":0,"serialize_buffered":1250897,"raw_shared":0,"raw_buffered":0,"parse_calls":1250897,"payload_address_changes":0}
+{"role":"chain_final","actor":"gate","mode":"uds","completed":true,"error":"ok","base_fds":4,"final_fds":4,"sent":1250897,"received":1250897,"local_rx":1250897,"local_tx":1250897,"tcp_rx_frames":0,"tcp_tx_frames":0,"tcp_tx_bytes":0,"tcp_rx_bytes":0,"tcp_send_calls":0,"tcp_eagain":0}

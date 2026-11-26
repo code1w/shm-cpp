@@ -1,0 +1,1 @@
+["taskset", "-c", "5", "/tmp/shm-chain-proto-asan/bench_chain_protobuf", "world-sidecar", "--mode", "shm-eventfd", "--local", "/tmp/chain-qavys90u/world.sock", "--tcp-address", "127.0.0.1", "--tcp-port", "0"]

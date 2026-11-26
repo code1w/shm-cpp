@@ -1,0 +1,1 @@
+["taskset", "-c", "5", "/tmp/shm-chain-asan/bench_chain", "world-sidecar", "--mode", "uds", "--local", "/tmp/chain-5a65_vrl/world.sock", "--tcp-address", "127.0.0.1", "--tcp-port", "0"]

@@ -1,0 +1,1 @@
+["taskset", "-c", "1", "/tmp/shm-chain-proto/bench_chain_protobuf", "gate", "--mode", "shm-eventfd", "--local", "/tmp/chain-_gf_6rk_/gate.sock", "--bytes", "8192", "--batch-min", "1", "--batch-max", "8", "--seed", "124142417", "--stride", "64", "--seconds", "5.0", "--warmup", "1", "--messages", "0"]

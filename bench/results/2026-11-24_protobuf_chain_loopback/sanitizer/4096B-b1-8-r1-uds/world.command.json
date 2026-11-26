@@ -1,0 +1,1 @@
+["taskset", "-c", "7", "/tmp/shm-chain-proto-asan/bench_chain_protobuf", "world", "--mode", "uds", "--local", "/tmp/chain-azpnxxlv/world.sock"]

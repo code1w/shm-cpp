@@ -1,0 +1,1 @@
+["taskset", "-c", "1", "/tmp/shm-chain/bench_chain", "gate", "--mode", "shm-busy", "--local", "/tmp/chain-k69bi7ps/gate.sock", "--bytes", "65536", "--batch-min", "1", "--batch-max", "8", "--seed", "124093229", "--stride", "1", "--seconds", "5.0", "--warmup", "1", "--messages", "0"]

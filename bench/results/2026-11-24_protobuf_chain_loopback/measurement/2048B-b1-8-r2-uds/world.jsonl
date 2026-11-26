@@ -1,0 +1,4 @@
+{"role":"ready","actor":"world","mode":"uds","tcp_port":0,"control_interval":256}
+{"role":"stream_config","tcp":false,"busy_tcp_poll":false,"send_buffer":425984,"receive_buffer":425984,"nodelay":false}
+{"role":"encoding_stats","actor":"world","serialize_shared":0,"serialize_buffered":230669,"raw_shared":0,"raw_buffered":0,"parse_calls":230669,"payload_address_changes":0}
+{"role":"chain_final","actor":"world","mode":"uds","completed":false,"error":"ok","base_fds":4,"final_fds":4,"sent":0,"received":0,"local_rx":230669,"local_tx":230669,"tcp_rx_frames":0,"tcp_tx_frames":0,"tcp_tx_bytes":0,"tcp_rx_bytes":0,"tcp_send_calls":0,"tcp_eagain":0}

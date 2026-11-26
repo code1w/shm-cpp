@@ -1,0 +1,1906 @@
+[
+  {
+    "case": "16B-b1-8",
+    "bytes": 16,
+    "batch_min": 1,
+    "batch_max": 8,
+    "codec": "protobuf",
+    "application_payload_bytes": 5,
+    "rounds": 3,
+    "topology": [
+      "single-host-tcp-loopback"
+    ],
+    "shm-busy": {
+      "rpc_s": 257209.775,
+      "duplex_payload_mib_s": 2.452944,
+      "duplex_tcp_framed_mib_s": 15.698839,
+      "rpc_range": [
+        253387.62,
+        325066.047
+      ],
+      "min_samples": 19551,
+      "p50_us": 14.72,
+      "p99_us": 31.744,
+      "p999_us": 42.496,
+      "duplex_protobuf_mib_s": 7.849419,
+      "rpc_gain_range_pct": [
+        246.38394188547258,
+        448.2401324287463
+      ],
+      "negative_rpc_pairs": 0,
+      "rpc_gain_pct": 418.22564790653655,
+      "p50_reduction_pct": 79.72972972972973
+    },
+    "shm-eventfd": {
+      "rpc_s": 60563.514,
+      "duplex_payload_mib_s": 0.577579,
+      "duplex_tcp_framed_mib_s": 3.696504,
+      "rpc_range": [
+        56015.544,
+        104279.688
+      ],
+      "min_samples": 4400,
+      "p50_us": 62.464,
+      "p99_us": 178.176,
+      "p999_us": 2490.368,
+      "duplex_protobuf_mib_s": 1.848252,
+      "rpc_gain_range_pct": [
+        11.118370316993476,
+        22.023225136550906
+      ],
+      "negative_rpc_pairs": 0,
+      "rpc_gain_pct": 21.197591502806112,
+      "p50_reduction_pct": 17.567567567567565
+    },
+    "uds": {
+      "rpc_s": 49632.776,
+      "duplex_payload_mib_s": 0.473335,
+      "duplex_tcp_framed_mib_s": 3.029344,
+      "rpc_range": [
+        46218.364,
+        93845.588
+      ],
+      "min_samples": 3622,
+      "p50_us": 75.776,
+      "p99_us": 200.704,
+      "p999_us": 4259.84,
+      "duplex_protobuf_mib_s": 1.514672
+    }
+  },
+  {
+    "case": "16B-b1-64",
+    "bytes": 16,
+    "batch_min": 1,
+    "batch_max": 64,
+    "codec": "protobuf",
+    "application_payload_bytes": 5,
+    "rounds": 3,
+    "topology": [
+      "single-host-tcp-loopback"
+    ],
+    "shm-busy": {
+      "rpc_s": 1017563.572,
+      "duplex_payload_mib_s": 9.704242,
+      "duplex_tcp_framed_mib_s": 62.107152,
+      "rpc_range": [
+        965620.157,
+        1145618.677
+      ],
+      "min_samples": 75082,
+      "p50_us": 28.928,
+      "p99_us": 45.568,
+      "p999_us": 54.272,
+      "duplex_protobuf_mib_s": 31.053576,
+      "rpc_gain_range_pct": [
+        92.29630118941729,
+        187.65163357644678
+      ],
+      "negative_rpc_pairs": 0,
+      "rpc_gain_pct": 114.72564708088689,
+      "p50_reduction_pct": 56.53846153846154
+    },
+    "shm-eventfd": {
+      "rpc_s": 441497.874,
+      "duplex_payload_mib_s": 4.210452,
+      "duplex_tcp_framed_mib_s": 26.946892,
+      "rpc_range": [
+        400565.229,
+        696713.908
+      ],
+      "min_samples": 30916,
+      "p50_us": 58.88,
+      "p99_us": 151.552,
+      "p999_us": 1523.712,
+      "duplex_protobuf_mib_s": 13.473446,
+      "rpc_gain_range_pct": [
+        -10.926022648128464,
+        24.805553354290353
+      ],
+      "negative_rpc_pairs": 1,
+      "rpc_gain_pct": 16.945987513456018,
+      "p50_reduction_pct": 26.60550458715596
+    },
+    "uds": {
+      "rpc_s": 449699.498,
+      "duplex_payload_mib_s": 4.288669,
+      "duplex_tcp_framed_mib_s": 27.447479,
+      "rpc_range": [
+        353748.581,
+        595757.001
+      ],
+      "min_samples": 27330,
+      "p50_us": 66.56,
+      "p99_us": 139.264,
+      "p999_us": 1245.184,
+      "duplex_protobuf_mib_s": 13.72374
+    }
+  },
+  {
+    "case": "128B-b1-8",
+    "bytes": 128,
+    "batch_min": 1,
+    "batch_max": 8,
+    "codec": "protobuf",
+    "application_payload_bytes": 117,
+    "rounds": 3,
+    "topology": [
+      "single-host-tcp-loopback"
+    ],
+    "shm-busy": {
+      "rpc_s": 246897.267,
+      "duplex_payload_mib_s": 55.097542,
+      "duplex_tcp_framed_mib_s": 67.81236,
+      "rpc_range": [
+        215439.36,
+        291083.145
+      ],
+      "min_samples": 16647,
+      "p50_us": 15.36,
+      "p99_us": 31.744,
+      "p999_us": 43.008,
+      "duplex_protobuf_mib_s": 60.277653,
+      "rpc_gain_range_pct": [
+        209.49552593580742,
+        329.91793938905334
+      ],
+      "negative_rpc_pairs": 0,
+      "rpc_gain_pct": 232.18299112769637,
+      "p50_reduction_pct": 72.04301075268818
+    },
+    "shm-eventfd": {
+      "rpc_s": 84736.103,
+      "duplex_payload_mib_s": 18.909691,
+      "duplex_tcp_framed_mib_s": 23.273466,
+      "rpc_range": [
+        63943.983,
+        104001.533
+      ],
+      "min_samples": 5012,
+      "p50_us": 46.08,
+      "p99_us": 111.616,
+      "p999_us": 737.28,
+      "duplex_protobuf_mib_s": 20.687525,
+      "rpc_gain_range_pct": [
+        10.580120171386875,
+        27.60279926420437
+      ],
+      "negative_rpc_pairs": 0,
+      "rpc_gain_pct": 14.006495466977231,
+      "p50_reduction_pct": 15.053763440860212
+    },
+    "uds": {
+      "rpc_s": 74325.68,
+      "duplex_payload_mib_s": 16.586503,
+      "duplex_tcp_framed_mib_s": 20.414158,
+      "rpc_range": [
+        50111.74,
+        94050.841
+      ],
+      "min_samples": 3914,
+      "p50_us": 53.248,
+      "p99_us": 137.216,
+      "p999_us": 1785.856,
+      "duplex_protobuf_mib_s": 18.145918
+    }
+  },
+  {
+    "case": "128B-b1-64",
+    "bytes": 128,
+    "batch_min": 1,
+    "batch_max": 64,
+    "codec": "protobuf",
+    "application_payload_bytes": 117,
+    "rounds": 3,
+    "topology": [
+      "single-host-tcp-loopback"
+    ],
+    "shm-busy": {
+      "rpc_s": 951890.598,
+      "duplex_payload_mib_s": 212.423706,
+      "duplex_tcp_framed_mib_s": 261.444561,
+      "rpc_range": [
+        831301.052,
+        1040152.976
+      ],
+      "min_samples": 64698,
+      "p50_us": 31.488,
+      "p99_us": 45.568,
+      "p999_us": 53.248,
+      "duplex_protobuf_mib_s": 232.395165,
+      "rpc_gain_range_pct": [
+        89.19609103859578,
+        179.5891808615088
+      ],
+      "negative_rpc_pairs": 0,
+      "rpc_gain_pct": 105.10197748851806,
+      "p50_reduction_pct": 53.40909090909092
+    },
+    "shm-eventfd": {
+      "rpc_s": 539117.489,
+      "duplex_payload_mib_s": 120.309346,
+      "duplex_tcp_framed_mib_s": 148.073041,
+      "rpc_range": [
+        342037.379,
+        640287.129
+      ],
+      "min_samples": 26435,
+      "p50_us": 50.176,
+      "p99_us": 128.0,
+      "p999_us": 1507.328,
+      "duplex_protobuf_mib_s": 131.620481,
+      "rpc_gain_range_pct": [
+        15.036484542578732,
+        16.46346714786029
+      ],
+      "negative_rpc_pairs": 0,
+      "rpc_gain_pct": 16.162575116163058,
+      "p50_reduction_pct": 26.446280991735538
+    },
+    "uds": {
+      "rpc_s": 464106.007,
+      "duplex_payload_mib_s": 103.569799,
+      "duplex_tcp_framed_mib_s": 127.470522,
+      "rpc_range": [
+        297329.478,
+        549775.088
+      ],
+      "min_samples": 22943,
+      "p50_us": 67.584,
+      "p99_us": 157.696,
+      "p999_us": 1114.112,
+      "duplex_protobuf_mib_s": 113.307131
+    }
+  },
+  {
+    "case": "256B-b1-8",
+    "bytes": 256,
+    "batch_min": 1,
+    "batch_max": 8,
+    "codec": "protobuf",
+    "application_payload_bytes": 244,
+    "rounds": 3,
+    "topology": [
+      "single-host-tcp-loopback"
+    ],
+    "shm-busy": {
+      "rpc_s": 245369.305,
+      "duplex_payload_mib_s": 114.193173,
+      "duplex_tcp_framed_mib_s": 127.297308,
+      "rpc_range": [
+        207280.849,
+        249013.098
+      ],
+      "min_samples": 15985,
+      "p50_us": 14.848,
+      "p99_us": 27.904,
+      "p999_us": 32.768,
+      "duplex_protobuf_mib_s": 119.809231,
+      "rpc_gain_range_pct": [
+        172.9108085944935,
+        312.7599923780699
+      ],
+      "negative_rpc_pairs": 0,
+      "rpc_gain_pct": 211.4348917476056,
+      "p50_reduction_pct": 71.84466019417476
+    },
+    "shm-eventfd": {
+      "rpc_s": 90167.926,
+      "duplex_payload_mib_s": 41.963527,
+      "duplex_tcp_framed_mib_s": 46.779014,
+      "rpc_range": [
+        53492.998,
+        102484.722
+      ],
+      "min_samples": 4195,
+      "p50_us": 44.032,
+      "p99_us": 92.16,
+      "p999_us": 425.984,
+      "duplex_protobuf_mib_s": 44.027307,
+      "rpc_gain_range_pct": [
+        6.52102957548244,
+        14.445603833438403
+      ],
+      "negative_rpc_pairs": 0,
+      "rpc_gain_pct": 12.320149318418071,
+      "p50_reduction_pct": 15.625
+    },
+    "uds": {
+      "rpc_s": 78786.71,
+      "duplex_payload_mib_s": 36.666788,
+      "duplex_tcp_framed_mib_s": 40.874453,
+      "rpc_range": [
+        50218.251,
+        91243.399
+      ],
+      "min_samples": 3935,
+      "p50_us": 52.736,
+      "p99_us": 108.544,
+      "p999_us": 1851.392,
+      "duplex_protobuf_mib_s": 38.470073
+    }
+  },
+  {
+    "case": "256B-b1-64",
+    "bytes": 256,
+    "batch_min": 1,
+    "batch_max": 64,
+    "codec": "protobuf",
+    "application_payload_bytes": 244,
+    "rounds": 3,
+    "topology": [
+      "single-host-tcp-loopback"
+    ],
+    "shm-busy": {
+      "rpc_s": 953804.463,
+      "duplex_payload_mib_s": 443.893984,
+      "duplex_tcp_framed_mib_s": 494.832637,
+      "rpc_range": [
+        790574.852,
+        954910.326
+      ],
+      "min_samples": 61412,
+      "p50_us": 31.744,
+      "p99_us": 44.032,
+      "p999_us": 50.688,
+      "duplex_protobuf_mib_s": 465.724835,
+      "rpc_gain_range_pct": [
+        89.80000934221759,
+        181.50307612426073
+      ],
+      "negative_rpc_pairs": 0,
+      "rpc_gain_pct": 90.79183636477266,
+      "p50_reduction_pct": 54.41176470588236
+    },
+    "shm-eventfd": {
+      "rpc_s": 603267.337,
+      "duplex_payload_mib_s": 280.756436,
+      "duplex_tcp_framed_mib_s": 312.974387,
+      "rpc_range": [
+        326577.604,
+        608406.248
+      ],
+      "min_samples": 25240,
+      "p50_us": 47.616,
+      "p99_us": 62.976,
+      "p999_us": 82.944,
+      "duplex_protobuf_mib_s": 294.564129,
+      "rpc_gain_range_pct": [
+        16.28576331098712,
+        21.700987796406746
+      ],
+      "negative_rpc_pairs": 0,
+      "rpc_gain_pct": 19.906700221874797,
+      "p50_reduction_pct": 31.61764705882353
+    },
+    "uds": {
+      "rpc_s": 499918.907,
+      "duplex_payload_mib_s": 232.658793,
+      "duplex_tcp_framed_mib_s": 259.357343,
+      "rpc_range": [
+        280840.573,
+        503113.951
+      ],
+      "min_samples": 21659,
+      "p50_us": 69.632,
+      "p99_us": 86.016,
+      "p999_us": 112.64,
+      "duplex_protobuf_mib_s": 244.101029
+    }
+  },
+  {
+    "case": "512B-b1-8",
+    "bytes": 512,
+    "batch_min": 1,
+    "batch_max": 8,
+    "codec": "protobuf",
+    "application_payload_bytes": 500,
+    "rounds": 3,
+    "topology": [
+      "single-host-tcp-loopback"
+    ],
+    "shm-busy": {
+      "rpc_s": 220402.263,
+      "duplex_payload_mib_s": 210.191977,
+      "duplex_tcp_framed_mib_s": 221.962728,
+      "rpc_range": [
+        189351.703,
+        221235.675
+      ],
+      "min_samples": 14620,
+      "p50_us": 20.736,
+      "p99_us": 29.44,
+      "p999_us": 36.352,
+      "duplex_protobuf_mib_s": 215.236585,
+      "rpc_gain_range_pct": [
+        148.1554713428668,
+        199.44640472318648
+      ],
+      "negative_rpc_pairs": 0,
+      "rpc_gain_pct": 148.29316032930234,
+      "p50_reduction_pct": 61.111111111111114
+    },
+    "shm-eventfd": {
+      "rpc_s": 100529.601,
+      "duplex_payload_mib_s": 95.872499,
+      "duplex_tcp_framed_mib_s": 101.241358,
+      "rpc_range": [
+        70744.032,
+        100683.212
+      ],
+      "min_samples": 5505,
+      "p50_us": 42.496,
+      "p99_us": 54.272,
+      "p999_us": 176.128,
+      "duplex_protobuf_mib_s": 98.173439,
+      "rpc_gain_range_pct": [
+        11.876712500558062,
+        13.251161758415297
+      ],
+      "negative_rpc_pairs": 0,
+      "rpc_gain_pct": 12.934272151965477,
+      "p50_reduction_pct": 16.161616161616166
+    },
+    "uds": {
+      "rpc_s": 88766.949,
+      "duplex_payload_mib_s": 84.654759,
+      "duplex_tcp_framed_mib_s": 89.395426,
+      "rpc_range": [
+        63233.921,
+        89152.044
+      ],
+      "min_samples": 4940,
+      "p50_us": 50.688,
+      "p99_us": 63.488,
+      "p999_us": 100.352,
+      "duplex_protobuf_mib_s": 86.686473
+    }
+  },
+  {
+    "case": "512B-b1-64",
+    "bytes": 512,
+    "batch_min": 1,
+    "batch_max": 64,
+    "codec": "protobuf",
+    "application_payload_bytes": 500,
+    "rounds": 3,
+    "topology": [
+      "single-host-tcp-loopback"
+    ],
+    "shm-busy": {
+      "rpc_s": 842391.528,
+      "duplex_payload_mib_s": 803.367164,
+      "duplex_tcp_framed_mib_s": 848.355725,
+      "rpc_range": [
+        722501.133,
+        843180.475
+      ],
+      "min_samples": 55985,
+      "p50_us": 36.864,
+      "p99_us": 51.712,
+      "p999_us": 58.88,
+      "duplex_protobuf_mib_s": 822.647976,
+      "rpc_gain_range_pct": [
+        88.73901853491417,
+        911.8244108019152
+      ],
+      "negative_rpc_pairs": 0,
+      "rpc_gain_pct": 94.10249759200113,
+      "p50_reduction_pct": 55.00000000000001
+    },
+    "shm-eventfd": {
+      "rpc_s": 557168.98,
+      "duplex_payload_mib_s": 531.357746,
+      "duplex_tcp_framed_mib_s": 561.11378,
+      "rpc_range": [
+        470071.835,
+        558168.808
+      ],
+      "min_samples": 36410,
+      "p50_us": 52.224,
+      "p99_us": 70.656,
+      "p999_us": 113.664,
+      "duplex_protobuf_mib_s": 544.110332,
+      "rpc_gain_range_pct": [
+        24.94149962227594,
+        558.3106043149279
+      ],
+      "negative_rpc_pairs": 0,
+      "rpc_gain_pct": 28.38197798065667,
+      "p50_reduction_pct": 36.25000000000001
+    },
+    "uds": {
+      "rpc_s": 433993.142,
+      "duplex_payload_mib_s": 413.888113,
+      "duplex_tcp_framed_mib_s": 437.065847,
+      "rpc_range": [
+        71405.782,
+        446744.124
+      ],
+      "min_samples": 5498,
+      "p50_us": 81.92,
+      "p99_us": 106.496,
+      "p999_us": 159.744,
+      "duplex_protobuf_mib_s": 423.821428
+    }
+  },
+  {
+    "case": "1024B-b1-8",
+    "bytes": 1024,
+    "batch_min": 1,
+    "batch_max": 8,
+    "codec": "protobuf",
+    "application_payload_bytes": 1012,
+    "rounds": 3,
+    "topology": [
+      "single-host-tcp-loopback"
+    ],
+    "shm-busy": {
+      "rpc_s": 208006.991,
+      "duplex_payload_mib_s": 401.502751,
+      "duplex_tcp_framed_mib_s": 412.611523,
+      "rpc_range": [
+        166147.752,
+        208691.213
+      ],
+      "min_samples": 12910,
+      "p50_us": 21.248,
+      "p99_us": 32.0,
+      "p999_us": 41.984,
+      "duplex_protobuf_mib_s": 406.263653,
+      "rpc_gain_range_pct": [
+        149.78101485761624,
+        278.0867640648643
+      ],
+      "negative_rpc_pairs": 0,
+      "rpc_gain_pct": 149.80783079615287,
+      "p50_reduction_pct": 62.84403669724771
+    },
+    "shm-eventfd": {
+      "rpc_s": 96171.91,
+      "duplex_payload_mib_s": 185.63456,
+      "duplex_tcp_framed_mib_s": 190.770695,
+      "rpc_range": [
+        61424.809,
+        96629.916
+      ],
+      "min_samples": 4802,
+      "p50_us": 44.544,
+      "p99_us": 57.856,
+      "p999_us": 91.136,
+      "duplex_protobuf_mib_s": 187.835761,
+      "rpc_gain_range_pct": [
+        15.486105371310966,
+        39.778642735487345
+      ],
+      "negative_rpc_pairs": 0,
+      "rpc_gain_pct": 15.668069388117779,
+      "p50_reduction_pct": 21.100917431192656
+    },
+    "uds": {
+      "rpc_s": 83275.741,
+      "duplex_payload_mib_s": 160.7419,
+      "duplex_tcp_framed_mib_s": 165.189305,
+      "rpc_range": [
+        43944.345,
+        83540.701
+      ],
+      "min_samples": 3457,
+      "p50_us": 55.808,
+      "p99_us": 71.68,
+      "p999_us": 111.616,
+      "duplex_protobuf_mib_s": 162.647931
+    }
+  },
+  {
+    "case": "1024B-b1-64",
+    "bytes": 1024,
+    "batch_min": 1,
+    "batch_max": 64,
+    "codec": "protobuf",
+    "application_payload_bytes": 1012,
+    "rounds": 3,
+    "topology": [
+      "single-host-tcp-loopback"
+    ],
+    "shm-busy": {
+      "rpc_s": 551831.17,
+      "duplex_payload_mib_s": 1065.164841,
+      "duplex_tcp_framed_mib_s": 1094.635805,
+      "rpc_range": [
+        545541.595,
+        658548.984
+      ],
+      "min_samples": 42220,
+      "p50_us": 58.368,
+      "p99_us": 88.064,
+      "p999_us": 102.4,
+      "duplex_protobuf_mib_s": 1077.795254,
+      "rpc_gain_range_pct": [
+        77.53033223156618,
+        216.96521604339048
+      ],
+      "negative_rpc_pairs": 0,
+      "rpc_gain_pct": 129.64933998739446,
+      "p50_reduction_pct": 56.71641791044777
+    },
+    "shm-eventfd": {
+      "rpc_s": 265037.525,
+      "duplex_payload_mib_s": 511.585189,
+      "duplex_tcp_framed_mib_s": 525.73972,
+      "rpc_range": [
+        230549.305,
+        459245.11
+      ],
+      "min_samples": 17824,
+      "p50_us": 100.352,
+      "p99_us": 253.952,
+      "p999_us": 4194.304,
+      "duplex_protobuf_mib_s": 517.651417,
+      "rpc_gain_range_pct": [
+        -2.9487463228124677,
+        52.23438061904062
+      ],
+      "negative_rpc_pairs": 1,
+      "rpc_gain_pct": 23.80238818198852,
+      "p50_reduction_pct": 31.63265306122449
+    },
+    "uds": {
+      "rpc_s": 237554.175,
+      "duplex_payload_mib_s": 458.535814,
+      "duplex_tcp_framed_mib_s": 471.222576,
+      "rpc_range": [
+        174098.337,
+        370950.122
+      ],
+      "min_samples": 13430,
+      "p50_us": 137.216,
+      "p99_us": 278.528,
+      "p999_us": 598.016,
+      "duplex_protobuf_mib_s": 463.972998
+    }
+  },
+  {
+    "case": "2048B-b1-8",
+    "bytes": 2048,
+    "batch_min": 1,
+    "batch_max": 8,
+    "codec": "protobuf",
+    "application_payload_bytes": 2036,
+    "rounds": 3,
+    "topology": [
+      "single-host-tcp-loopback"
+    ],
+    "shm-busy": {
+      "rpc_s": 141637.909,
+      "duplex_payload_mib_s": 550.031248,
+      "duplex_tcp_framed_mib_s": 557.595528,
+      "rpc_range": [
+        137729.751,
+        166009.848
+      ],
+      "min_samples": 10676,
+      "p50_us": 32.256,
+      "p99_us": 46.592,
+      "p999_us": 59.392,
+      "duplex_protobuf_mib_s": 553.273082,
+      "rpc_gain_range_pct": [
+        119.29615025724685,
+        271.02951496395605
+      ],
+      "negative_rpc_pairs": 0,
+      "rpc_gain_pct": 233.75307428138453,
+      "p50_reduction_pct": 68.62745098039215
+    },
+    "shm-eventfd": {
+      "rpc_s": 51407.173,
+      "duplex_payload_mib_s": 199.632652,
+      "duplex_tcp_framed_mib_s": 202.378091,
+      "rpc_range": [
+        50292.515,
+        90029.491
+      ],
+      "min_samples": 3929,
+      "p50_us": 72.704,
+      "p99_us": 180.224,
+      "p999_us": 3997.696,
+      "duplex_protobuf_mib_s": 200.809269,
+      "rpc_gain_range_pct": [
+        18.927407161528453,
+        31.74444312622182
+      ],
+      "negative_rpc_pairs": 0,
+      "rpc_gain_pct": 24.572228616495394,
+      "p50_reduction_pct": 27.450980392156865
+    },
+    "uds": {
+      "rpc_s": 41266.961,
+      "duplex_payload_mib_s": 160.254542,
+      "duplex_tcp_framed_mib_s": 162.458436,
+      "rpc_range": [
+        38174.297,
+        75701.214
+      ],
+      "min_samples": 3069,
+      "p50_us": 104.448,
+      "p99_us": 227.328,
+      "p999_us": 860.16,
+      "duplex_protobuf_mib_s": 161.199068
+    }
+  },
+  {
+    "case": "2048B-b1-64",
+    "bytes": 2048,
+    "batch_min": 1,
+    "batch_max": 64,
+    "codec": "protobuf",
+    "application_payload_bytes": 2036,
+    "rounds": 3,
+    "topology": [
+      "single-host-tcp-loopback"
+    ],
+    "shm-busy": {
+      "rpc_s": 383250.394,
+      "duplex_payload_mib_s": 1488.299946,
+      "duplex_tcp_framed_mib_s": 1508.767725,
+      "rpc_range": [
+        342340.283,
+        431992.06
+      ],
+      "min_samples": 26458,
+      "p50_us": 81.92,
+      "p99_us": 131.072,
+      "p999_us": 145.408,
+      "duplex_protobuf_mib_s": 1497.071852,
+      "rpc_gain_range_pct": [
+        61.91581564661015,
+        174.63920141076858
+      ],
+      "negative_rpc_pairs": 0,
+      "rpc_gain_pct": 116.13437107125426,
+      "p50_reduction_pct": 53.333333333333336
+    },
+    "shm-eventfd": {
+      "rpc_s": 249443.712,
+      "duplex_payload_mib_s": 968.680188,
+      "duplex_tcp_framed_mib_s": 982.00192,
+      "rpc_range": [
+        201829.28,
+        337036.998
+      ],
+      "min_samples": 15574,
+      "p50_us": 111.616,
+      "p99_us": 339.968,
+      "p999_us": 3112.96,
+      "duplex_protobuf_mib_s": 974.389502,
+      "rpc_gain_range_pct": [
+        26.32551726588428,
+        61.91559986678639
+      ],
+      "negative_rpc_pairs": 0,
+      "rpc_gain_pct": 40.67398404500815,
+      "p50_reduction_pct": 39.44444444444445
+    },
+    "uds": {
+      "rpc_s": 177320.429,
+      "duplex_payload_mib_s": 688.599384,
+      "duplex_tcp_framed_mib_s": 698.069316,
+      "rpc_range": [
+        124650.917,
+        266800.41
+      ],
+      "min_samples": 9642,
+      "p50_us": 184.32,
+      "p99_us": 483.328,
+      "p999_us": 3604.48,
+      "duplex_protobuf_mib_s": 692.657926
+    }
+  },
+  {
+    "case": "3072B-b1-8",
+    "bytes": 3072,
+    "batch_min": 1,
+    "batch_max": 8,
+    "codec": "protobuf",
+    "application_payload_bytes": 3060,
+    "rounds": 3,
+    "topology": [
+      "single-host-tcp-loopback"
+    ],
+    "shm-busy": {
+      "rpc_s": 127723.302,
+      "duplex_payload_mib_s": 745.455369,
+      "duplex_tcp_framed_mib_s": 752.27653,
+      "rpc_range": [
+        123767.175,
+        144166.557
+      ],
+      "min_samples": 9595,
+      "p50_us": 33.792,
+      "p99_us": 46.592,
+      "p999_us": 68.608,
+      "duplex_protobuf_mib_s": 748.378724,
+      "rpc_gain_range_pct": [
+        110.1070552856354,
+        266.9041167866126
+      ],
+      "negative_rpc_pairs": 0,
+      "rpc_gain_pct": 223.68098277669895,
+      "p50_reduction_pct": 68.57142857142857
+    },
+    "shm-eventfd": {
+      "rpc_s": 71796.974,
+      "duplex_payload_mib_s": 419.042094,
+      "duplex_tcp_framed_mib_s": 422.876466,
+      "rpc_range": [
+        41489.174,
+        82867.02
+      ],
+      "min_samples": 3318,
+      "p50_us": 55.808,
+      "p99_us": 101.376,
+      "p999_us": 663.552,
+      "duplex_protobuf_mib_s": 420.685396,
+      "rpc_gain_range_pct": [
+        20.769656394692525,
+        81.95047215983426
+      ],
+      "negative_rpc_pairs": 0,
+      "rpc_gain_pct": 22.99342489376599,
+      "p50_reduction_pct": 34.92063492063492
+    },
+    "uds": {
+      "rpc_s": 39459.625,
+      "duplex_payload_mib_s": 230.305579,
+      "duplex_tcp_framed_mib_s": 232.41295,
+      "rpc_range": [
+        33732.839,
+        68615.762
+      ],
+      "min_samples": 2724,
+      "p50_us": 107.52,
+      "p99_us": 282.624,
+      "p999_us": 3014.656,
+      "duplex_protobuf_mib_s": 231.208738
+    }
+  },
+  {
+    "case": "3072B-b1-64",
+    "bytes": 3072,
+    "batch_min": 1,
+    "batch_max": 64,
+    "codec": "protobuf",
+    "application_payload_bytes": 3060,
+    "rounds": 3,
+    "topology": [
+      "single-host-tcp-loopback"
+    ],
+    "shm-busy": {
+      "rpc_s": 298103.684,
+      "duplex_payload_mib_s": 1739.878219,
+      "duplex_tcp_framed_mib_s": 1755.798673,
+      "rpc_range": [
+        295878.56,
+        347916.897
+      ],
+      "min_samples": 22769,
+      "p50_us": 107.52,
+      "p99_us": 169.984,
+      "p999_us": 190.464,
+      "duplex_protobuf_mib_s": 1746.701271,
+      "rpc_gain_range_pct": [
+        65.94483232370499,
+        231.42892949312554
+      ],
+      "negative_rpc_pairs": 0,
+      "rpc_gain_pct": 69.14526038141314,
+      "p50_reduction_pct": 51.098901098901095
+    },
+    "shm-eventfd": {
+      "rpc_s": 193223.669,
+      "duplex_payload_mib_s": 1127.747398,
+      "duplex_tcp_framed_mib_s": 1138.066656,
+      "rpc_range": [
+        151783.111,
+        269699.968
+      ],
+      "min_samples": 11727,
+      "p50_us": 118.784,
+      "p99_us": 278.528,
+      "p999_us": 2981.888,
+      "duplex_protobuf_mib_s": 1132.169937,
+      "rpc_gain_range_pct": [
+        -13.87763650852455,
+        116.43985887116668
+      ],
+      "negative_rpc_pairs": 1,
+      "rpc_gain_pct": 28.637948755528807,
+      "p50_reduction_pct": 36.81318681318682
+    },
+    "uds": {
+      "rpc_s": 176241.228,
+      "duplex_payload_mib_s": 1028.629604,
+      "duplex_tcp_framed_mib_s": 1038.041901,
+      "rpc_range": [
+        89273.607,
+        209658.169
+      ],
+      "min_samples": 7242,
+      "p50_us": 186.368,
+      "p99_us": 475.136,
+      "p999_us": 4456.448,
+      "duplex_protobuf_mib_s": 1032.663445
+    }
+  },
+  {
+    "case": "4096B-b1-8",
+    "bytes": 4096,
+    "batch_min": 1,
+    "batch_max": 8,
+    "codec": "protobuf",
+    "application_payload_bytes": 4084,
+    "rounds": 3,
+    "topology": [
+      "single-host-tcp-loopback"
+    ],
+    "shm-busy": {
+      "rpc_s": 112722.314,
+      "duplex_payload_mib_s": 878.063066,
+      "duplex_tcp_framed_mib_s": 884.083087,
+      "rpc_range": [
+        108928.584,
+        127070.952
+      ],
+      "min_samples": 8484,
+      "p50_us": 40.96,
+      "p99_us": 58.88,
+      "p999_us": 69.632,
+      "duplex_protobuf_mib_s": 880.643075,
+      "rpc_gain_range_pct": [
+        110.04390632502412,
+        189.70793401009507
+      ],
+      "negative_rpc_pairs": 0,
+      "rpc_gain_pct": 113.62533789014661,
+      "p50_reduction_pct": 55.625
+    },
+    "shm-eventfd": {
+      "rpc_s": 67876.66,
+      "duplex_payload_mib_s": 528.732836,
+      "duplex_tcp_framed_mib_s": 532.357841,
+      "rpc_range": [
+        47252.515,
+        75538.743
+      ],
+      "min_samples": 3667,
+      "p50_us": 58.368,
+      "p99_us": 135.168,
+      "p999_us": 2490.368,
+      "duplex_protobuf_mib_s": 530.28641,
+      "rpc_gain_range_pct": [
+        25.673427439679443,
+        26.991961917244044
+      ],
+      "negative_rpc_pairs": 0,
+      "rpc_gain_pct": 26.479649935996807,
+      "p50_reduction_pct": 30.625000000000004
+    },
+    "uds": {
+      "rpc_s": 53666.072,
+      "duplex_payload_mib_s": 418.03787,
+      "duplex_tcp_framed_mib_s": 420.903947,
+      "rpc_range": [
+        37599.448,
+        59483.09
+      ],
+      "min_samples": 3018,
+      "p50_us": 86.016,
+      "p99_us": 161.792,
+      "p999_us": 1040.384,
+      "duplex_protobuf_mib_s": 419.266189
+    }
+  },
+  {
+    "case": "4096B-b1-64",
+    "bytes": 4096,
+    "batch_min": 1,
+    "batch_max": 64,
+    "codec": "protobuf",
+    "application_payload_bytes": 4084,
+    "rounds": 3,
+    "topology": [
+      "single-host-tcp-loopback"
+    ],
+    "shm-busy": {
+      "rpc_s": 239751.157,
+      "duplex_payload_mib_s": 1867.568443,
+      "duplex_tcp_framed_mib_s": 1880.372536,
+      "rpc_range": [
+        216847.835,
+        249155.601
+      ],
+      "min_samples": 16741,
+      "p50_us": 133.12,
+      "p99_us": 221.184,
+      "p999_us": 245.76,
+      "duplex_protobuf_mib_s": 1873.055911,
+      "rpc_gain_range_pct": [
+        54.002287625822575,
+        130.2102679942863
+      ],
+      "negative_rpc_pairs": 0,
+      "rpc_gain_pct": 62.64617903196339,
+      "p50_reduction_pct": 48.0
+    },
+    "shm-eventfd": {
+      "rpc_s": 180557.269,
+      "duplex_payload_mib_s": 1406.471033,
+      "duplex_tcp_framed_mib_s": 1416.113831,
+      "rpc_range": [
+        151654.812,
+        189586.16
+      ],
+      "min_samples": 11796,
+      "p50_us": 165.888,
+      "p99_us": 311.296,
+      "p999_us": 2719.744,
+      "duplex_protobuf_mib_s": 1410.603661,
+      "rpc_gain_range_pct": [
+        17.1826048662467,
+        60.99996992427022
+      ],
+      "negative_rpc_pairs": 0,
+      "rpc_gain_pct": 22.489293760932185,
+      "p50_reduction_pct": 35.199999999999996
+    },
+    "uds": {
+      "rpc_s": 147406.572,
+      "duplex_payload_mib_s": 1148.239979,
+      "duplex_tcp_framed_mib_s": 1156.112339,
+      "rpc_range": [
+        94195.553,
+        161786.948
+      ],
+      "min_samples": 7301,
+      "p50_us": 256.0,
+      "p99_us": 557.056,
+      "p999_us": 2752.512,
+      "duplex_protobuf_mib_s": 1151.613847
+    }
+  },
+  {
+    "case": "8192B-b1-8",
+    "bytes": 8192,
+    "batch_min": 1,
+    "batch_max": 8,
+    "codec": "protobuf",
+    "application_payload_bytes": 8180,
+    "rounds": 3,
+    "topology": [
+      "single-host-tcp-loopback"
+    ],
+    "shm-busy": {
+      "rpc_s": 83878.874,
+      "duplex_payload_mib_s": 1308.687574,
+      "duplex_tcp_framed_mib_s": 1313.167189,
+      "rpc_range": [
+        73684.571,
+        85287.898
+      ],
+      "min_samples": 5745,
+      "p50_us": 51.2,
+      "p99_us": 72.704,
+      "p999_us": 83.968,
+      "duplex_protobuf_mib_s": 1310.607409,
+      "rpc_gain_range_pct": [
+        87.00373062736402,
+        214.60270976659106
+      ],
+      "negative_rpc_pairs": 0,
+      "rpc_gain_pct": 186.84535541002404,
+      "p50_reduction_pct": 67.52873563218391
+    },
+    "shm-eventfd": {
+      "rpc_s": 38523.429,
+      "duplex_payload_mib_s": 601.04684,
+      "duplex_tcp_framed_mib_s": 603.104213,
+      "rpc_range": [
+        34498.751,
+        53293.939
+      ],
+      "min_samples": 2797,
+      "p50_us": 99.328,
+      "p99_us": 270.336,
+      "p999_us": 4521.984,
+      "duplex_protobuf_mib_s": 601.928571,
+      "rpc_gain_range_pct": [
+        18.816156411770258,
+        49.96717132434449
+      ],
+      "negative_rpc_pairs": 0,
+      "rpc_gain_pct": 27.25604455819619,
+      "p50_reduction_pct": 34.523809523809526
+    },
+    "uds": {
+      "rpc_s": 27109.715,
+      "duplex_payload_mib_s": 422.968807,
+      "duplex_tcp_framed_mib_s": 424.416622,
+      "rpc_range": [
+        25687.908,
+        44854.118
+      ],
+      "min_samples": 2074,
+      "p50_us": 172.032,
+      "p99_us": 376.832,
+      "p999_us": 2457.6,
+      "duplex_protobuf_mib_s": 423.589299
+    }
+  },
+  {
+    "case": "8192B-b1-64",
+    "bytes": 8192,
+    "batch_min": 1,
+    "batch_max": 64,
+    "codec": "protobuf",
+    "application_payload_bytes": 8180,
+    "rounds": 3,
+    "topology": [
+      "single-host-tcp-loopback"
+    ],
+    "shm-busy": {
+      "rpc_s": 154716.093,
+      "duplex_payload_mib_s": 2413.897788,
+      "duplex_tcp_framed_mib_s": 2422.160519,
+      "rpc_range": [
+        132494.056,
+        154996.81
+      ],
+      "min_samples": 10272,
+      "p50_us": 182.272,
+      "p99_us": 319.488,
+      "p999_us": 368.64,
+      "duplex_protobuf_mib_s": 2417.438958,
+      "rpc_gain_range_pct": [
+        69.1659633128664,
+        180.25623634059724
+      ],
+      "negative_rpc_pairs": 0,
+      "rpc_gain_pct": 82.6211746053367,
+      "p50_reduction_pct": 60.96491228070175
+    },
+    "shm-eventfd": {
+      "rpc_s": 126401.821,
+      "duplex_payload_mib_s": 1972.135349,
+      "duplex_tcp_framed_mib_s": 1978.885934,
+      "rpc_range": [
+        91040.487,
+        127957.684
+      ],
+      "min_samples": 7069,
+      "p50_us": 225.28,
+      "p99_us": 401.408,
+      "p999_us": 1343.488,
+      "duplex_protobuf_mib_s": 1975.028457,
+      "rpc_gain_range_pct": [
+        39.65503468841296,
+        92.57214256641872
+      ],
+      "negative_rpc_pairs": 0,
+      "rpc_gain_pct": 49.20005136940419,
+      "p50_reduction_pct": 51.75438596491229
+    },
+    "uds": {
+      "rpc_s": 84719.69,
+      "duplex_payload_mib_s": 1321.806083,
+      "duplex_tcp_framed_mib_s": 1326.330603,
+      "rpc_range": [
+        47276.042,
+        91624.111
+      ],
+      "min_samples": 3691,
+      "p50_us": 466.944,
+      "p99_us": 909.312,
+      "p999_us": 4521.984,
+      "duplex_protobuf_mib_s": 1323.745163
+    }
+  },
+  {
+    "case": "16384B-b1-8",
+    "bytes": 16384,
+    "batch_min": 1,
+    "batch_max": 8,
+    "codec": "protobuf",
+    "application_payload_bytes": 16372,
+    "rounds": 3,
+    "topology": [
+      "single-host-tcp-loopback"
+    ],
+    "shm-busy": {
+      "rpc_s": 49072.194,
+      "duplex_payload_mib_s": 1532.382877,
+      "duplex_tcp_framed_mib_s": 1535.003615,
+      "rpc_range": [
+        41250.23,
+        56558.292
+      ],
+      "min_samples": 3301,
+      "p50_us": 88.064,
+      "p99_us": 129.024,
+      "p999_us": 145.408,
+      "duplex_protobuf_mib_s": 1533.50605,
+      "rpc_gain_range_pct": [
+        38.68127717045245,
+        149.12990688329324
+      ],
+      "negative_rpc_pairs": 0,
+      "rpc_gain_pct": 59.01188559772705,
+      "p50_reduction_pct": 47.916666666666664
+    },
+    "shm-eventfd": {
+      "rpc_s": 36546.651,
+      "duplex_payload_mib_s": 1141.246355,
+      "duplex_tcp_framed_mib_s": 1143.198156,
+      "rpc_range": [
+        30339.789,
+        44353.751
+      ],
+      "min_samples": 2468,
+      "p50_us": 107.52,
+      "p99_us": 194.56,
+      "p999_us": 1081.344,
+      "duplex_protobuf_mib_s": 1142.082841,
+      "rpc_gain_range_pct": [
+        22.868072177604624,
+        54.02915974021385
+      ],
+      "negative_rpc_pairs": 0,
+      "rpc_gain_pct": 24.69919671269547,
+      "p50_reduction_pct": 36.80555555555556
+    },
+    "uds": {
+      "rpc_s": 29744.628,
+      "duplex_payload_mib_s": 928.838836,
+      "duplex_tcp_framed_mib_s": 930.42737,
+      "rpc_range": [
+        19697.432,
+        35568.594
+      ],
+      "min_samples": 1578,
+      "p50_us": 165.888,
+      "p99_us": 311.296,
+      "p999_us": 3145.728,
+      "duplex_protobuf_mib_s": 929.519636
+    }
+  },
+  {
+    "case": "16384B-b1-64",
+    "bytes": 16384,
+    "batch_min": 1,
+    "batch_max": 64,
+    "codec": "protobuf",
+    "application_payload_bytes": 16372,
+    "rounds": 3,
+    "topology": [
+      "single-host-tcp-loopback"
+    ],
+    "shm-busy": {
+      "rpc_s": 75514.853,
+      "duplex_payload_mib_s": 2358.110748,
+      "duplex_tcp_framed_mib_s": 2362.143676,
+      "rpc_range": [
+        75140.166,
+        92179.33
+      ],
+      "min_samples": 5861,
+      "p50_us": 372.736,
+      "p99_us": 696.32,
+      "p999_us": 827.392,
+      "duplex_protobuf_mib_s": 2359.839146,
+      "rpc_gain_range_pct": [
+        80.00359892649278,
+        469.14388503957
+      ],
+      "negative_rpc_pairs": 0,
+      "rpc_gain_pct": 214.62764064293432,
+      "p50_reduction_pct": 70.88607594936708
+    },
+    "shm-eventfd": {
+      "rpc_s": 52485.203,
+      "duplex_payload_mib_s": 1638.961298,
+      "duplex_tcp_framed_mib_s": 1641.76431,
+      "rpc_range": [
+        52183.517,
+        75545.149
+      ],
+      "min_samples": 4091,
+      "p50_us": 520.192,
+      "p99_us": 1392.64,
+      "p999_us": 4784.128,
+      "duplex_protobuf_mib_s": 1640.162589,
+      "rpc_gain_range_pct": [
+        47.52112758292058,
+        295.5729390416809
+      ],
+      "negative_rpc_pairs": 0,
+      "rpc_gain_pct": 118.50333461015316,
+      "p50_reduction_pct": 59.810126582278485
+    },
+    "uds": {
+      "rpc_s": 23882.252,
+      "duplex_payload_mib_s": 745.773754,
+      "duplex_tcp_framed_mib_s": 747.049204,
+      "rpc_range": [
+        13268.148,
+        51209.715
+      ],
+      "min_samples": 1393,
+      "p50_us": 1294.336,
+      "p99_us": 6619.136,
+      "p999_us": 17301.504,
+      "duplex_protobuf_mib_s": 746.320376
+    }
+  },
+  {
+    "case": "32768B-b1-8",
+    "bytes": 32768,
+    "batch_min": 1,
+    "batch_max": 8,
+    "codec": "protobuf",
+    "application_payload_bytes": 32755,
+    "rounds": 3,
+    "topology": [
+      "single-host-tcp-loopback"
+    ],
+    "shm-busy": {
+      "rpc_s": 30912.133,
+      "duplex_payload_mib_s": 1931.241802,
+      "duplex_tcp_framed_mib_s": 1932.951649,
+      "rpc_range": [
+        27194.645,
+        37524.938
+      ],
+      "min_samples": 2206,
+      "p50_us": 143.36,
+      "p99_us": 210.944,
+      "p999_us": 231.424,
+      "duplex_protobuf_mib_s": 1932.008285,
+      "rpc_gain_range_pct": [
+        60.91857146612478,
+        164.66606002873024
+      ],
+      "negative_rpc_pairs": 0,
+      "rpc_gain_pct": 119.65369299661867,
+      "p50_reduction_pct": 61.224489795918366
+    },
+    "shm-eventfd": {
+      "rpc_s": 22629.403,
+      "duplex_payload_mib_s": 1413.776555,
+      "duplex_tcp_framed_mib_s": 1415.028258,
+      "rpc_range": [
+        18236.215,
+        30033.46
+      ],
+      "min_samples": 1466,
+      "p50_us": 169.984,
+      "p99_us": 389.12,
+      "p999_us": 2818.048,
+      "duplex_protobuf_mib_s": 1414.337664,
+      "rpc_gain_range_pct": [
+        28.79279052732877,
+        82.77980607059814
+      ],
+      "negative_rpc_pairs": 0,
+      "rpc_gain_pct": 56.1363356545739,
+      "p50_reduction_pct": 50.0
+    },
+    "uds": {
+      "rpc_s": 12380.691,
+      "duplex_payload_mib_s": 773.48622,
+      "duplex_tcp_framed_mib_s": 774.171034,
+      "rpc_range": [
+        11679.674,
+        23319.209
+      ],
+      "min_samples": 930,
+      "p50_us": 401.408,
+      "p99_us": 1163.264,
+      "p999_us": 5111.808,
+      "duplex_protobuf_mib_s": 773.793206
+    }
+  },
+  {
+    "case": "32768B-b1-64",
+    "bytes": 32768,
+    "batch_min": 1,
+    "batch_max": 64,
+    "codec": "protobuf",
+    "application_payload_bytes": 32755,
+    "rounds": 3,
+    "topology": [
+      "single-host-tcp-loopback"
+    ],
+    "shm-busy": {
+      "rpc_s": 40617.993,
+      "duplex_payload_mib_s": 2537.617435,
+      "duplex_tcp_framed_mib_s": 2539.864142,
+      "rpc_range": [
+        37775.167,
+        48238.615
+      ],
+      "min_samples": 3047,
+      "p50_us": 696.32,
+      "p99_us": 1294.336,
+      "p999_us": 1622.016,
+      "duplex_protobuf_mib_s": 2538.62458,
+      "rpc_gain_range_pct": [
+        86.31559562314177,
+        283.50178064850957
+      ],
+      "negative_rpc_pairs": 0,
+      "rpc_gain_pct": 172.37896559144534,
+      "p50_reduction_pct": 75.57471264367817
+    },
+    "shm-eventfd": {
+      "rpc_s": 37838.626,
+      "duplex_payload_mib_s": 2363.975882,
+      "duplex_tcp_framed_mib_s": 2366.068854,
+      "rpc_range": [
+        26916.991,
+        42781.655
+      ],
+      "min_samples": 2185,
+      "p50_us": 729.088,
+      "p99_us": 1638.4,
+      "p999_us": 2850.816,
+      "duplex_protobuf_mib_s": 2364.914111,
+      "rpc_gain_range_pct": [
+        65.23877256983354,
+        173.26719636209432
+      ],
+      "negative_rpc_pairs": 0,
+      "rpc_gain_pct": 153.74089284228214,
+      "p50_reduction_pct": 74.42528735632183
+    },
+    "uds": {
+      "rpc_s": 14912.309,
+      "duplex_payload_mib_s": 931.649539,
+      "duplex_tcp_framed_mib_s": 932.474385,
+      "rpc_range": [
+        9850.063,
+        25890.809
+      ],
+      "min_samples": 777,
+      "p50_us": 2850.816,
+      "p99_us": 5505.024,
+      "p999_us": 8060.928,
+      "duplex_protobuf_mib_s": 932.019298
+    }
+  },
+  {
+    "case": "65536B-b1-8",
+    "bytes": 65536,
+    "batch_min": 1,
+    "batch_max": 8,
+    "codec": "protobuf",
+    "application_payload_bytes": 65523,
+    "rounds": 3,
+    "topology": [
+      "single-host-tcp-loopback"
+    ],
+    "shm-busy": {
+      "rpc_s": 18630.725,
+      "duplex_payload_mib_s": 2328.37866,
+      "duplex_tcp_framed_mib_s": 2329.409183,
+      "rpc_range": [
+        16793.884,
+        20379.189
+      ],
+      "min_samples": 83970,
+      "p50_us": 229.376,
+      "p99_us": 356.352,
+      "p999_us": 401.408,
+      "duplex_protobuf_mib_s": 2328.840619,
+      "rpc_gain_range_pct": [
+        66.07630898887528,
+        186.19359359909845
+      ],
+      "negative_rpc_pairs": 0,
+      "rpc_gain_pct": 156.53405645254668,
+      "p50_reduction_pct": 65.93406593406593
+    },
+    "shm-eventfd": {
+      "rpc_s": 11275.364,
+      "duplex_payload_mib_s": 1409.140911,
+      "duplex_tcp_framed_mib_s": 1409.764587,
+      "rpc_range": [
+        10564.147,
+        17199.553
+      ],
+      "min_samples": 52822,
+      "p50_us": 344.064,
+      "p99_us": 1048.576,
+      "p999_us": 4915.2,
+      "duplex_protobuf_mib_s": 1409.42049,
+      "rpc_gain_range_pct": [
+        40.164472614613736,
+        72.23620604376049
+      ],
+      "negative_rpc_pairs": 0,
+      "rpc_gain_pct": 62.27984650297482,
+      "p50_reduction_pct": 51.13636363636363
+    },
+    "uds": {
+      "rpc_s": 6546.454,
+      "duplex_payload_mib_s": 818.14438,
+      "duplex_tcp_framed_mib_s": 818.506485,
+      "rpc_range": [
+        6509.833,
+        12270.979
+      ],
+      "min_samples": 32590,
+      "p50_us": 720.896,
+      "p99_us": 4063.232,
+      "p999_us": 6291.456,
+      "duplex_protobuf_mib_s": 818.306703
+    }
+  },
+  {
+    "case": "65536B-b1-32",
+    "bytes": 65536,
+    "batch_min": 1,
+    "batch_max": 32,
+    "codec": "protobuf",
+    "application_payload_bytes": 65523,
+    "rounds": 3,
+    "topology": [
+      "single-host-tcp-loopback"
+    ],
+    "shm-busy": {
+      "rpc_s": 22866.983,
+      "duplex_payload_mib_s": 2857.805843,
+      "duplex_tcp_framed_mib_s": 2859.070687,
+      "rpc_range": [
+        19413.928,
+        23982.207
+      ],
+      "min_samples": 97091,
+      "p50_us": 630.784,
+      "p99_us": 1146.88,
+      "p999_us": 1310.72,
+      "duplex_protobuf_mib_s": 2858.372842,
+      "rpc_gain_range_pct": [
+        85.9279957372293,
+        292.6052266396597
+      ],
+      "negative_rpc_pairs": 0,
+      "rpc_gain_pct": 191.85001805318396,
+      "p50_reduction_pct": 77.08333333333334
+    },
+    "shm-eventfd": {
+      "rpc_s": 19728.958,
+      "duplex_payload_mib_s": 2465.63058,
+      "duplex_tcp_framed_mib_s": 2466.72185,
+      "rpc_range": [
+        14172.092,
+        21510.902
+      ],
+      "min_samples": 70871,
+      "p50_us": 729.088,
+      "p99_us": 1490.944,
+      "p999_us": 3211.264,
+      "duplex_protobuf_mib_s": 2466.11977,
+      "rpc_gain_range_pct": [
+        66.7685920382539,
+        186.6002898340876
+      ],
+      "negative_rpc_pairs": 0,
+      "rpc_gain_pct": 151.79958145202224,
+      "p50_reduction_pct": 73.51190476190477
+    },
+    "uds": {
+      "rpc_s": 7835.183,
+      "duplex_payload_mib_s": 979.20362,
+      "duplex_tcp_framed_mib_s": 979.637008,
+      "rpc_range": [
+        4944.898,
+        12898.653
+      ],
+      "min_samples": 24746,
+      "p50_us": 2752.512,
+      "p99_us": 4915.2,
+      "p999_us": 7143.424,
+      "duplex_protobuf_mib_s": 979.397897
+    }
+  },
+  {
+    "case": "131072B-b1-8",
+    "bytes": 131072,
+    "batch_min": 1,
+    "batch_max": 8,
+    "codec": "protobuf",
+    "application_payload_bytes": 131059,
+    "rounds": 3,
+    "topology": [
+      "single-host-tcp-loopback"
+    ],
+    "shm-busy": {
+      "rpc_s": 8890.787,
+      "duplex_payload_mib_s": 2222.476336,
+      "duplex_tcp_framed_mib_s": 2222.968113,
+      "rpc_range": [
+        6521.008,
+        10947.563
+      ],
+      "min_samples": 32610,
+      "p50_us": 462.848,
+      "p99_us": 745.472,
+      "p999_us": 917.504,
+      "duplex_protobuf_mib_s": 2222.696788,
+      "rpc_gain_range_pct": [
+        63.263999537092005,
+        187.93460026297208
+      ],
+      "negative_rpc_pairs": 0,
+      "rpc_gain_pct": 95.74165615068095,
+      "p50_reduction_pct": 61.386138613861384
+    },
+    "shm-eventfd": {
+      "rpc_s": 6846.983,
+      "duplex_payload_mib_s": 1711.575986,
+      "duplex_tcp_framed_mib_s": 1711.954714,
+      "rpc_range": [
+        5918.723,
+        9874.497
+      ],
+      "min_samples": 29594,
+      "p50_us": 573.44,
+      "p99_us": 2097.152,
+      "p999_us": 4849.664,
+      "duplex_protobuf_mib_s": 1711.74576,
+      "rpc_gain_range_pct": [
+        47.261072956329755,
+        121.74452195428431
+      ],
+      "negative_rpc_pairs": 0,
+      "rpc_gain_pct": 77.66281567468202,
+      "p50_reduction_pct": 60.89108910891089
+    },
+    "uds": {
+      "rpc_s": 3331.436,
+      "duplex_payload_mib_s": 832.77651,
+      "duplex_tcp_framed_mib_s": 832.960782,
+      "rpc_range": [
+        3087.78,
+        6705.436
+      ],
+      "min_samples": 15443,
+      "p50_us": 1654.784,
+      "p99_us": 4915.2,
+      "p999_us": 7143.424,
+      "duplex_protobuf_mib_s": 832.859115
+    }
+  },
+  {
+    "case": "131072B-b1-16",
+    "bytes": 131072,
+    "batch_min": 1,
+    "batch_max": 16,
+    "codec": "protobuf",
+    "application_payload_bytes": 131059,
+    "rounds": 3,
+    "topology": [
+      "single-host-tcp-loopback"
+    ],
+    "shm-busy": {
+      "rpc_s": 9675.39,
+      "duplex_payload_mib_s": 2418.607554,
+      "duplex_tcp_framed_mib_s": 2419.14273,
+      "rpc_range": [
+        6017.538,
+        11841.329
+      ],
+      "min_samples": 30089,
+      "p50_us": 778.24,
+      "p99_us": 1376.256,
+      "p999_us": 1589.248,
+      "duplex_protobuf_mib_s": 2418.84746,
+      "rpc_gain_range_pct": [
+        87.4786398874621,
+        281.73859831236905
+      ],
+      "negative_rpc_pairs": 0,
+      "rpc_gain_pct": 125.13901100340092,
+      "p50_reduction_pct": 59.375
+    },
+    "shm-eventfd": {
+      "rpc_s": 7539.349,
+      "duplex_payload_mib_s": 1884.650264,
+      "duplex_tcp_framed_mib_s": 1885.067289,
+      "rpc_range": [
+        6839.336,
+        10878.248
+      ],
+      "min_samples": 34199,
+      "p50_us": 958.464,
+      "p99_us": 4063.232,
+      "p999_us": 5373.952,
+      "duplex_protobuf_mib_s": 1884.837207,
+      "rpc_gain_range_pct": [
+        72.23059501163296,
+        182.07575547831684
+      ],
+      "negative_rpc_pairs": 0,
+      "rpc_gain_pct": 169.84323505588154,
+      "p50_reduction_pct": 68.5483870967742
+    },
+    "uds": {
+      "rpc_s": 2672.81,
+      "duplex_payload_mib_s": 668.136257,
+      "duplex_tcp_framed_mib_s": 668.284098,
+      "rpc_range": [
+        2534.559,
+        6316.095
+      ],
+      "min_samples": 12675,
+      "p50_us": 3047.424,
+      "p99_us": 6684.672,
+      "p999_us": 20447.232,
+      "duplex_protobuf_mib_s": 668.20253
+    }
+  },
+  {
+    "case": "524288B-b1-4",
+    "bytes": 524288,
+    "batch_min": 1,
+    "batch_max": 4,
+    "codec": "protobuf",
+    "application_payload_bytes": 524275,
+    "rounds": 3,
+    "topology": [
+      "single-host-tcp-loopback"
+    ],
+    "shm-busy": {
+      "rpc_s": 2011.317,
+      "duplex_payload_mib_s": 2011.267292,
+      "duplex_tcp_framed_mib_s": 2011.378544,
+      "rpc_range": [
+        1874.565,
+        2505.256
+      ],
+      "min_samples": 9376,
+      "p50_us": 1114.112,
+      "p99_us": 1933.312,
+      "p999_us": 2129.92,
+      "duplex_protobuf_mib_s": 2011.317164,
+      "rpc_gain_range_pct": [
+        93.01547972350373,
+        232.66105418575847
+      ],
+      "negative_rpc_pairs": 0,
+      "rpc_gain_pct": 204.5013988808953,
+      "p50_reduction_pct": 70.94017094017093
+    },
+    "shm-eventfd": {
+      "rpc_s": 1905.02,
+      "duplex_payload_mib_s": 1904.972578,
+      "duplex_tcp_framed_mib_s": 1905.077951,
+      "rpc_range": [
+        1206.61,
+        2308.503
+      ],
+      "min_samples": 6034,
+      "p50_us": 1146.88,
+      "p99_us": 2850.816,
+      "p999_us": 6291.456,
+      "duplex_protobuf_mib_s": 1905.019814,
+      "rpc_gain_range_pct": [
+        77.85679946007417,
+        188.4086670057893
+      ],
+      "negative_rpc_pairs": 0,
+      "rpc_gain_pct": 114.1254928962602,
+      "p50_reduction_pct": 66.44736842105263
+    },
+    "uds": {
+      "rpc_s": 660.528,
+      "duplex_payload_mib_s": 660.511503,
+      "duplex_tcp_framed_mib_s": 660.548039,
+      "rpc_range": [
+        563.506,
+        1297.956
+      ],
+      "min_samples": 2818,
+      "p50_us": 3833.856,
+      "p99_us": 10092.544,
+      "p999_us": 12976.128,
+      "duplex_protobuf_mib_s": 660.527881
+    }
+  },
+  {
+    "case": "1048576B-b1-2",
+    "bytes": 1048576,
+    "batch_min": 1,
+    "batch_max": 2,
+    "codec": "protobuf",
+    "application_payload_bytes": 1048563,
+    "rounds": 3,
+    "topology": [
+      "single-host-tcp-loopback"
+    ],
+    "shm-busy": {
+      "rpc_s": 562.353,
+      "duplex_payload_mib_s": 1124.691246,
+      "duplex_tcp_framed_mib_s": 1124.722351,
+      "rpc_range": [
+        539.836,
+        709.998
+      ],
+      "min_samples": 2700,
+      "p50_us": 2588.672,
+      "p99_us": 3080.192,
+      "p999_us": 3506.176,
+      "duplex_protobuf_mib_s": 1124.70519,
+      "rpc_gain_range_pct": [
+        27.308686780300473,
+        90.25258416829077
+      ],
+      "negative_rpc_pairs": 0,
+      "rpc_gain_pct": 34.96493594389749,
+      "p50_reduction_pct": 24.761904761904763
+    },
+    "shm-eventfd": {
+      "rpc_s": 545.47,
+      "duplex_payload_mib_s": 1090.927003,
+      "duplex_tcp_framed_mib_s": 1090.957175,
+      "rpc_range": [
+        440.262,
+        667.165
+      ],
+      "min_samples": 2202,
+      "p50_us": 2523.136,
+      "p99_us": 5373.952,
+      "p999_us": 7471.104,
+      "duplex_protobuf_mib_s": 1090.940528,
+      "rpc_gain_range_pct": [
+        19.628365172548577,
+        55.16005455564288
+      ],
+      "negative_rpc_pairs": 0,
+      "rpc_gain_pct": 30.913009460815143,
+      "p50_reduction_pct": 26.66666666666667
+    },
+    "uds": {
+      "rpc_s": 416.666,
+      "duplex_payload_mib_s": 833.322499,
+      "duplex_tcp_framed_mib_s": 833.345546,
+      "rpc_range": [
+        283.747,
+        557.698
+      ],
+      "min_samples": 1421,
+      "p50_us": 3440.64,
+      "p99_us": 7208.96,
+      "p999_us": 10616.832,
+      "duplex_protobuf_mib_s": 833.33283
+    }
+  }
+]

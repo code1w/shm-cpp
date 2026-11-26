@@ -1,0 +1,12 @@
+{
+  "wire_unit": true,
+  "stream_unit": true,
+  "asan_ubsan_final_configurations": 84,
+  "host_pair_scripts": true,
+  "mode_mismatch_rejected": true,
+  "successful_sample_after_mismatch": false,
+  "formal_runs": 63,
+  "measured_rpcs": 59932002,
+  "paired_prefix_groups": 21,
+  "measurement_cpp_hashes_match": true
+}

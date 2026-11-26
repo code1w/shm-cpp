@@ -1,0 +1,8 @@
+syntax = "proto3";
+package chain_bench_pb;
+
+// Explicit presence keeps sequence=0 at exactly 9 serialized bytes too.
+message Rpc {
+  optional fixed64 sequence = 1;
+  bytes payload = 2;
+}
