@@ -1,0 +1,26 @@
+test_audit_round3_fixes: /home/dev/github/shm-cpp/include/shm_ipc/shm_connection.hpp:699: void shm::ShmConnection::AssertOperationIdle() const: Assertion `!sending_ && !draining_ && !codec_active_' failed.
+test_audit_round3_fixes: /home/dev/github/shm-cpp/include/shm_ipc/shm_connection.hpp:699: void shm::ShmConnection::AssertOperationIdle() const: Assertion `!sending_ && !draining_ && !codec_active_' failed.
+test_audit_round3_fixes: /home/dev/github/shm-cpp/include/shm_ipc/shm_connection.hpp:698: void shm::ShmConnection::AssertCodecIdle() const: Assertion `!codec_active_' failed.
+test_audit_round3_fixes: /home/dev/github/shm-cpp/include/shm_ipc/shm_connection.hpp:698: void shm::ShmConnection::AssertCodecIdle() const: Assertion `!codec_active_' failed.
+test_audit_round3_fixes: /home/dev/github/shm-cpp/include/shm_ipc/shm_connection.hpp:698: void shm::ShmConnection::AssertCodecIdle() const: Assertion `!codec_active_' failed.
+test_audit_round3_fixes: /home/dev/github/shm-cpp/include/shm_ipc/shm_connection.hpp:698: void shm::ShmConnection::AssertCodecIdle() const: Assertion `!codec_active_' failed.
+test_audit_round3_fixes: /home/dev/github/shm-cpp/include/shm_ipc/shm_connection.hpp:699: void shm::ShmConnection::AssertOperationIdle() const: Assertion `!sending_ && !draining_ && !codec_active_' failed.
+test_audit_round3_fixes: /home/dev/github/shm-cpp/include/shm_ipc/shm_connection.hpp:699: void shm::ShmConnection::AssertOperationIdle() const: Assertion `!sending_ && !draining_ && !codec_active_' failed.
+test_audit_round3_fixes: /home/dev/github/shm-cpp/include/shm_ipc/shm_connection.hpp:699: void shm::ShmConnection::AssertOperationIdle() const: Assertion `!sending_ && !draining_ && !codec_active_' failed.
+test_audit_round3_fixes: /home/dev/github/shm-cpp/include/shm_ipc/shm_connection.hpp:699: void shm::ShmConnection::AssertOperationIdle() const: Assertion `!sending_ && !draining_ && !codec_active_' failed.
+test_audit_round3_fixes: /home/dev/github/shm-cpp/include/shm_ipc/shm_connection.hpp:698: void shm::ShmConnection::AssertCodecIdle() const: Assertion `!codec_active_' failed.
+test_audit_round3_fixes: /home/dev/github/shm-cpp/include/shm_ipc/shm_connection.hpp:698: void shm::ShmConnection::AssertCodecIdle() const: Assertion `!codec_active_' failed.
+test_audit_round3_fixes: /home/dev/github/shm-cpp/include/shm_ipc/shm_connection.hpp:698: void shm::ShmConnection::AssertCodecIdle() const: Assertion `!codec_active_' failed.
+test_audit_round3_fixes: /home/dev/github/shm-cpp/include/shm_ipc/shm_connection.hpp:698: void shm::ShmConnection::AssertCodecIdle() const: Assertion `!codec_active_' failed.
+test_audit_round3_fixes: /home/dev/github/shm-cpp/include/shm_ipc/shm_connection.hpp:699: void shm::ShmConnection::AssertOperationIdle() const: Assertion `!sending_ && !draining_ && !codec_active_' failed.
+test_audit_round3_fixes: /home/dev/github/shm-cpp/include/shm_ipc/shm_connection.hpp:699: void shm::ShmConnection::AssertOperationIdle() const: Assertion `!sending_ && !draining_ && !codec_active_' failed.
+test_audit_round3_fixes: /home/dev/github/shm-cpp/include/shm_ipc/shm_connection.hpp:698: void shm::ShmConnection::AssertCodecIdle() const: Assertion `!codec_active_' failed.
+test_audit_round3_fixes: /home/dev/github/shm-cpp/include/shm_ipc/shm_connection.hpp:698: void shm::ShmConnection::AssertCodecIdle() const: Assertion `!codec_active_' failed.
+test_audit_round3_fixes: /home/dev/github/shm-cpp/include/shm_ipc/shm_connection.hpp:698: void shm::ShmConnection::AssertCodecIdle() const: Assertion `!codec_active_' failed.
+test_audit_round3_fixes: /home/dev/github/shm-cpp/include/shm_ipc/shm_connection.hpp:698: void shm::ShmConnection::AssertCodecIdle() const: Assertion `!codec_active_' failed.
+test_audit_round3_fixes: /home/dev/github/shm-cpp/include/shm_ipc/shm_connection.hpp:317: void shm::ShmConnection::SetMessageCallback(comm::AnyMessageCallback): Assertion `!messagecb_active_' failed.
+test_audit_round3_fixes: /home/dev/github/shm-cpp/include/shm_ipc/shm_connection.hpp:316: void shm::ShmConnection::SetConnectionCallback(comm::ConnectionCallback): Assertion `!connectioncb_active_' failed.
+test_audit_round3_fixes: /home/dev/github/shm-cpp/include/shm_ipc/shm_connection.hpp:319: void shm::ShmConnection::SetVerifyCallback(comm::VerifyCallback): Assertion `!verifycb_active_' failed.
+test_audit_round3_fixes: /home/dev/github/shm-cpp/include/shm_ipc/shm_connection.hpp:318: void shm::ShmConnection::SetCloseCallback(comm::CloseCallback): Assertion `!closecb_active_' failed.
+test_audit_round3_fixes: /home/dev/github/shm-cpp/include/shm_ipc/shm_connection.hpp:689: shm::ShmConnection::DebugFlagGuard::DebugFlagGuard(bool&): Assertion `!active' failed.
+round3 fixes passed

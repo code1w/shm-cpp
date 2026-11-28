@@ -1,0 +1,1 @@
+["taskset", "-c", "3", "/tmp/shm-registration-asan/bench_chain_protobuf", "gate-sidecar", "--mode", "shm-busy", "--local", "/tmp/chain-56r2oujv/gate.sock", "--tcp-address", "127.0.0.1", "--tcp-port", "34741"]

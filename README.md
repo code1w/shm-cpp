@@ -20,6 +20,8 @@
 
 端到端本机段/TCP/本机段测试及双机启动方法见 [gate/sidecar/world 链路基准](bench/chain.md)，输出RPC/s、完整RTT和MiB/s。
 
+事件监听的所有权、注册 ID、取消与定时器生命周期见 [EventLoop RAII 注册句柄](docs/event_registration.md)。
+
 ## 系统要求
 
 - Linux (kernel >= 3.17，需要 `memfd_create` 和 `timerfd`)

@@ -1,0 +1,4 @@
+connection callback after Stop in factory: 0, remaining connections: 0
+connection callback after Stop in factory: 0, remaining connections: 0
+connection callback after Stop in factory: 1, remaining connections: 1
+=== CORE REVIEW FIX REGRESSION PASSED ===

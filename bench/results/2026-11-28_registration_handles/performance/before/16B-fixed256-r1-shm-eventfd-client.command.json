@@ -1,0 +1,1 @@
+["taskset", "-c", "3", "/tmp/shm-registration-before/bench_acceptance", "client", "/tmp/shm-random-ab-8khxku5e/ipc.sock", "--transport", "shm", "--busy-poll", "0", "--bytes", "16", "--batch", "256", "--batch-min", "256", "--seed", "25383", "--single-type", "1", "--stride", "64", "--warmup", "1", "--seconds", "5"]

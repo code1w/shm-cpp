@@ -67,8 +67,7 @@ class ShmAsyncClient : public comm::ITcpAsyncClient
             // 未触发的验证定时器若不摘除，其回调（捕获裸 this）将在连接
             // 释放后命中悬垂指针（use-after-free）
             conn_->Close();
-            loop_->RemoveFd(conn_->NotifyFd());
-            loop_->RemoveFd(conn_->SocketFd());
+            conn_->ResetEventRegistrations();
         }
     }
 
@@ -175,8 +174,7 @@ class ShmAsyncClient : public comm::ITcpAsyncClient
             // 分配失败：清理已注册的 fd/连接，按连接失败处理
             if (conn_)
             {
-                loop_->RemoveFd(conn_->NotifyFd());
-                loop_->RemoveFd(conn_->SocketFd());
+                conn_->ResetEventRegistrations();
                 conn_->Close();
                 conn_.reset();
             }
@@ -188,8 +186,7 @@ class ShmAsyncClient : public comm::ITcpAsyncClient
             if (attempt != connect_generation_) throw;
             if (conn_)
             {
-                loop_->RemoveFd(conn_->NotifyFd());
-                loop_->RemoveFd(conn_->SocketFd());
+                conn_->ResetEventRegistrations();
                 conn_->Close();
                 conn_.reset();
             }
@@ -276,21 +273,15 @@ class ShmAsyncClient : public comm::ITcpAsyncClient
         }
         conn_ = conn;
 
-        if (loop_->BusyPolling())
+        const auto ec = conn->WatchEvents([this](int fd, short events) { OnNotify(fd, events); },
+                                          [this](int fd, short events) { OnSocket(fd, events); });
+        if (ec != ErrorCode::kOk)
         {
-            const auto ec = loop_->AddBusyPollFd(conn->NotifyFd(), [this](int fd, short revents) {
-                OnNotify(fd, revents);
-                return ErrorCode::kOk;
-            });
-            if (ec != ErrorCode::kOk)
-            {
-                conn->Close();
-                conn_.reset();
-                return ec;
-            }
+            conn->ResetEventRegistrations();
+            conn->Close();
+            conn_.reset();
+            return ec;
         }
-        else loop_->AddFd(conn->NotifyFd(), [this](int fd, short revents) { OnNotify(fd, revents); });
-        loop_->AddFd(conn->SocketFd(), [this](int fd, short revents) { OnSocket(fd, revents); });
 
         state_ = comm::TcpClientStates::established;
         conn->OnConnection();
@@ -372,8 +363,7 @@ class ShmAsyncClient : public comm::ITcpAsyncClient
         auto conn = std::move(conn_);
         if (conn)
         {
-            loop_->RemoveFd(conn->NotifyFd());
-            loop_->RemoveFd(conn->SocketFd());
+            conn->ResetEventRegistrations();
             conn->OnClose();
         }
     }

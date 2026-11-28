@@ -46,9 +46,157 @@ class EventLoop
     using Hook     = std::function<void()>;
     using HookId   = uint64_t;
 
+    // A registration owns only a subscription. Watched timer subscriptions also
+    // own their timerfd; ordinary watched fds remain owned by the caller.
+    // All operations are owner-thread only. The EventLoop must outlive the handle.
+    class Registration
+    {
+        friend class EventLoop;
+        EventLoop* loop_ = nullptr;
+        uint64_t id_     = 0;
+        Registration(EventLoop* loop, uint64_t id) noexcept : loop_(loop), id_(id) {}
+
+     public:
+        Registration() noexcept = default;
+        ~Registration() { Reset(); }
+        Registration(const Registration&)            = delete;
+        Registration& operator=(const Registration&) = delete;
+        Registration(Registration&& other) noexcept
+            : loop_(std::exchange(other.loop_, nullptr)), id_(std::exchange(other.id_, 0))
+        {}
+        Registration& operator=(Registration&& other) noexcept
+        {
+            if (this != &other)
+            {
+                Reset();
+                loop_ = std::exchange(other.loop_, nullptr);
+                id_   = std::exchange(other.id_, 0);
+            }
+            return *this;
+        }
+        void Reset() noexcept;
+        uint64_t Id() const noexcept { return id_; }
+        int Fd() const noexcept;
+        explicit operator bool() const noexcept;
+    };
+
+    // The callable is stored directly in one nothrow-allocated node. No
+    // std::function conversion/allocation is required by these new interfaces.
+    // Failure leaves the existing output registration unchanged.
+    template <class F>
+    [[nodiscard]]
+    ErrorCode WatchFd(int fd, F&& cb, Registration* out, short events = POLLIN) noexcept
+    {
+        using Stored = std::decay_t<F>;
+        CheckWatchCallable<Stored, F>();
+        static_assert(std::is_same_v<std::invoke_result_t<Stored&, int, short>, void>, "fd callback must return void");
+        if (!out || fd < 0 || !ValidCallable(cb) || !next_registration_id_)
+            return ErrorCode::kInvalidArgument;
+        auto* entry = new (std::nothrow) WatchedNode<Stored>(fd, events, std::forward<F>(cb));
+        if (!entry)
+            return ErrorCode::kNoMemory;
+        InstallWatch(entry, out);
+        return ErrorCode::kOk;
+    }
+
+    template <class F>
+    [[nodiscard]]
+    ErrorCode WatchBusyFd(int fd, F&& cb, Registration* out) noexcept
+    {
+        using Stored = std::decay_t<F>;
+        CheckWatchCallable<Stored, F>();
+        static_assert(std::is_invocable_r_v<ErrorCode, Stored&, int, short>, "busy callback must return ErrorCode");
+        if (!out || !busy_polling_ || fd < 0 || !ValidCallable(cb) || !next_registration_id_)
+            return ErrorCode::kInvalidArgument;
+        auto* entry = new (std::nothrow) BusyNode<Stored>(fd, std::forward<F>(cb));
+        if (!entry)
+            return ErrorCode::kNoMemory;
+        entry->registration_id = next_registration_id_++;
+        if (busy_tail_)
+            busy_tail_->next = entry;
+        else
+            busy_head_ = entry;
+        busy_tail_ = entry;
+        *out       = Registration(this, entry->registration_id);
+        return ErrorCode::kOk;
+    }
+
+    template <class F>
+    [[nodiscard]]
+    ErrorCode WatchTimer(int interval_ms, F&& cb, Registration* out, int* sys_errno = nullptr) noexcept
+    {
+        if (interval_ms <= 0)
+            return ErrorCode::kInvalidArgument;
+        return WatchTimed(interval_ms, interval_ms, std::forward<F>(cb), out, sys_errno);
+    }
+    template <class F>
+    [[nodiscard]]
+    ErrorCode WatchOneShotTimer(int64_t delay_ms, F&& cb, Registration* out, int* sys_errno = nullptr) noexcept
+    {
+        return WatchTimed(delay_ms, 0, std::forward<F>(cb), out, sys_errno);
+    }
+
+    // Exact identity cancellation; a stale handle cannot cancel a reused fd.
+    void CancelRegistration(uint64_t id) noexcept
+    {
+        if (!id)
+            return;
+        BusyEntry** busy_link    = &busy_head_;
+        BusyEntry* busy_previous = nullptr;
+        while (*busy_link)
+        {
+            BusyEntry* e = *busy_link;
+            if (e->registration_id == id)
+            {
+                e->dead = true;
+                if (!run_active_.load(std::memory_order_relaxed) && !destroying_ && !compacting_)
+                {
+                    *busy_link = e->next;
+                    if (busy_tail_ == e)
+                        busy_tail_ = busy_previous;
+                    delete e;
+                }
+                return;
+            }
+            busy_previous = e;
+            busy_link     = &e->next;
+        }
+        WatchedEntry** link    = &watched_head_;
+        WatchedEntry* previous = nullptr;
+        while (*link)
+        {
+            WatchedEntry* e = *link;
+            if (e->id == id)
+            {
+                e->dead = true;
+                // Preserve the timerfd until its current callback returns.
+                if (!e->dispatching)
+                    e->timer_fd.Reset();
+                if (!run_active_.load(std::memory_order_relaxed) && !destroying_ && !compacting_)
+                {
+                    *link = e->next;
+                    if (watched_tail_ == e)
+                        watched_tail_ = previous;
+                    --watched_count_;
+                    delete e;
+                }
+                return;
+            }
+            previous = e;
+            link     = &e->next;
+        }
+    }
+
     EventLoop() { wake_error_ = CreateEventfd(&wake_fd_, &wake_errno_); }
     ~EventLoop()
     {
+        destroying_ = true;
+        while (watched_head_)
+        {
+            WatchedEntry* old = watched_head_;
+            watched_head_     = old->next;
+            delete old;
+        }
         while (busy_head_)
         {
             BusyEntry* old = busy_head_;
@@ -71,14 +219,18 @@ class EventLoop
      *
      * 可在回调内安全调用：新条目自下一轮 poll 生效。
      */
-    void AddFd(int fd, Callback cb, short events = POLLIN) { entries_.push_back({fd, events, false, std::move(cb)}); }
+    void AddFd(int fd, Callback cb, short events = POLLIN)
+    {
+        entries_.push_back({next_registration_id_++, fd, events, false, std::move(cb)});
+    }
 
     /// Configure on the owner thread before registering fds/connecting/Run.
     /// Control fds are checked every control_interval spin iterations, not a time bound.
     [[nodiscard]]
     ErrorCode SetBusyPolling(bool enabled, uint32_t control_interval = 256) noexcept
     {
-        if (run_active_.load(std::memory_order_relaxed) || !entries_.empty() || busy_head_ || !control_interval)
+        if (run_active_.load(std::memory_order_relaxed) || !entries_.empty() || busy_head_ || watched_head_ ||
+            !control_interval)
             return ErrorCode::kInvalidArgument;
         busy_polling_ = enabled;
         control_interval_ = control_interval;
@@ -163,6 +315,13 @@ class EventLoop
      */
     void RemoveFd(int fd)
     {
+        for (WatchedEntry* e = watched_head_; e; e = e->next)
+            if (e->fd == fd)
+            {
+                e->dead = true;
+                if (!e->dispatching)
+                    e->timer_fd.Reset();
+            }
         for (BusyEntry* e = busy_head_; e; e = e->next)
             if (e->fd == fd) e->dead = true;
 
@@ -356,30 +515,42 @@ class EventLoop
                 if (!running_.load(std::memory_order_relaxed)) break;
                 if (++spins < control_interval_)
                 {
-#if defined(__i386__) || defined(__x86_64__)
-                    __builtin_ia32_pause();
-#elif defined(__aarch64__)
-                    asm volatile("yield");
-#endif
                     continue;
                 }
                 spins = 0;
             }
-            // 构建 pollfd 数组（跳过墓碑条目；idx 记录 pfds → entries 下标映射）
+            // 构建 pollfd 与稳定分发引用快照（跳过墓碑条目）
             std::vector<pollfd> pfds;
-            std::vector<std::size_t> idx;
+            std::vector<DispatchTarget> targets;
             try
             {
-                pfds.reserve(entries_.size() + 1);
-                idx.reserve(entries_.size());
-                for (std::size_t k = 0; k < entries_.size(); ++k)
+                pfds.reserve(entries_.size() + watched_count_ + 1);
+                targets.reserve(entries_.size() + watched_count_);
+                // Merge by registration order, preserving ordering across old
+                // AddFd and scoped WatchFd interfaces. Nodes/references stay
+                // stable during callbacks; cancellation only marks tombstones.
+                auto legacy           = entries_.begin();
+                WatchedEntry* watched = watched_head_;
+                while (legacy != entries_.end() || watched)
                 {
-                    if (entries_[k].dead)
+                    if (watched && (legacy == entries_.end() || watched->id < legacy->id))
                     {
-                        continue;
+                        if (!watched->dead)
+                        {
+                            pfds.push_back({watched->fd, watched->events, 0});
+                            targets.push_back({nullptr, watched});
+                        }
+                        watched = watched->next;
                     }
-                    pfds.push_back({entries_[k].fd, entries_[k].events, 0});
-                    idx.push_back(k);
+                    else
+                    {
+                        if (!legacy->dead)
+                        {
+                            pfds.push_back({legacy->fd, legacy->events, 0});
+                            targets.push_back({&*legacy, nullptr});
+                        }
+                        ++legacy;
+                    }
                 }
                 pfds.push_back({wake_fd_.Get(), POLLIN, 0});
             }
@@ -410,16 +581,37 @@ class EventLoop
                 while (::read(wake_fd_.Get(), &count, sizeof(count)) < 0 && errno == EINTR) {}
             }
 
-            // 分发事件。分发期间 AddFd 只追加（deque 追加不失效既有元素引用）、
-            // RemoveFd 只打墓碑（分发前重查），下标映射保持稳定
+            // 分发期间注册只追加，取消只打墓碑，快照中的引用保持有效。
             try
             {
-                for (std::size_t i = 0; i < idx.size() && running_.load(std::memory_order_relaxed); ++i)
+                for (std::size_t i = 0; i < targets.size() && running_.load(std::memory_order_relaxed); ++i)
                 {
-                    Entry& e = entries_[idx[i]];
-                    if (!e.dead && pfds[i].revents != 0 && e.cb)
+                    if (!pfds[i].revents)
+                        continue;
+                    auto& target = targets[i];
+                    if (target.watched)
                     {
-                        e.cb(pfds[i].fd, pfds[i].revents);
+                        WatchedEntry* e = target.watched;
+                        if (e->dead)
+                            continue;
+                        if (e->timer_fd)
+                        {
+                            e->dispatching = true;
+                            if (e->one_shot)
+                            {
+                                DrainTimerfd(e->fd);
+                                e->dead = true;
+                            }
+                            WatchDispatchGuard guard{e};
+                            e->invoke(e, pfds[i].fd, pfds[i].revents);
+                        }
+                        else e->invoke(e, pfds[i].fd, pfds[i].revents);
+                    }
+                    else
+                    {
+                        Entry& e = *target.legacy;
+                        if (!e.dead && e.cb)
+                            e.cb(pfds[i].fd, pfds[i].revents);
                     }
                 }
             }
@@ -543,6 +735,7 @@ class EventLoop
     struct BusyEntry
     {
         int fd;
+        uint64_t registration_id = 0;
         bool dead = false;
         BusyEntry* next = nullptr;
         ErrorCode (*invoke)(BusyEntry*, int, short);
@@ -563,11 +756,115 @@ class EventLoop
     };
     struct Entry
     {
+        uint64_t id;
         int fd;        ///< 文件描述符
         short events;  ///< 监听事件掩码
         bool dead;     ///< 墓碑标记：不再参与 poll 与分发，待回收
         Callback cb;   ///< 事件回调
     };
+
+    struct WatchedEntry
+    {
+        int fd;
+        short events;
+        uint64_t id = 0;
+        bool dead = false, one_shot = false, dispatching = false;
+        WatchedEntry* next = nullptr;
+        UniqueFd timer_fd;
+        void (*invoke)(WatchedEntry*, int, short);
+        WatchedEntry(int descriptor, short mask, void (*dispatch)(WatchedEntry*, int, short)) noexcept
+            : fd(descriptor), events(mask), invoke(dispatch)
+        {}
+        virtual ~WatchedEntry() = default;
+    };
+    template <class F>
+    struct WatchedNode final : WatchedEntry
+    {
+        F cb;
+        template <class T>
+        WatchedNode(int fd, short events, T&& callback) noexcept
+            : WatchedEntry(fd, events, Dispatch), cb(std::forward<T>(callback))
+        {}
+        static void Dispatch(WatchedEntry* entry, int fd, short events)
+        {
+            static_cast<WatchedNode*>(entry)->cb(fd, events);
+        }
+    };
+    struct DispatchTarget
+    {
+        Entry* legacy;
+        WatchedEntry* watched;
+    };
+    struct WatchDispatchGuard
+    {
+        WatchedEntry* entry;
+        ~WatchDispatchGuard()
+        {
+            entry->dispatching = false;
+            if (entry->dead)
+                entry->timer_fd.Reset();
+        }
+    };
+    template <class Stored, class Input>
+    static constexpr void CheckWatchCallable() noexcept
+    {
+        static_assert(std::is_nothrow_constructible_v<Stored, Input&&>,
+                      "move callback or use a nothrow-copyable callable");
+        static_assert(std::is_nothrow_destructible_v<Stored>, "callback destructor must not throw");
+    }
+    template <class F>
+    static bool ValidCallable(const F& cb) noexcept
+    {
+        if constexpr (std::is_pointer_v<std::decay_t<F>> || std::is_same_v<std::decay_t<F>, Callback>)
+            return static_cast<bool>(cb);
+        else
+            return true;
+    }
+    void InstallWatch(WatchedEntry* entry, Registration* out) noexcept
+    {
+        entry->id = next_registration_id_++;
+        if (watched_tail_)
+            watched_tail_->next = entry;
+        else
+            watched_head_ = entry;
+        watched_tail_ = entry;
+        ++watched_count_;
+        *out = Registration(this, entry->id);
+    }
+    template <class F>
+    ErrorCode WatchTimed(int64_t initial_ms, int64_t interval_ms, F&& cb, Registration* out, int* sys_errno) noexcept
+    {
+        using Stored = std::decay_t<F>;
+        CheckWatchCallable<Stored, F>();
+        static_assert(std::is_same_v<std::invoke_result_t<Stored&, int, short>, void>,
+                      "timer callback must return void");
+        if (!out || !ValidCallable(cb) || !next_registration_id_)
+            return ErrorCode::kInvalidArgument;
+        int fd        = -1;
+        const auto ec = CreateTimerfd(initial_ms, interval_ms, &fd, sys_errno);
+        if (ec != ErrorCode::kOk)
+            return ec;
+        UniqueFd owner(fd);
+        auto* entry = new (std::nothrow) WatchedNode<Stored>(fd, POLLIN, std::forward<F>(cb));
+        if (!entry)
+            return ErrorCode::kNoMemory;
+        entry->timer_fd = std::move(owner);
+        entry->one_shot = interval_ms == 0;
+        InstallWatch(entry, out);
+        return ErrorCode::kOk;
+    }
+    int RegisteredFd(uint64_t id) const noexcept
+    {
+        if (!id)
+            return -1;
+        for (const auto* e = watched_head_; e; e = e->next)
+            if (e->id == id)
+                return e->dead ? -1 : e->fd;
+        for (const auto* e = busy_head_; e; e = e->next)
+            if (e->registration_id == id)
+                return e->dead ? -1 : e->fd;
+        return -1;
+    }
 
     /** @brief 执行 post-dispatch 钩子；钩子异常被吞掉以免破坏事件循环 */
     void RunPostDispatchHooksNoThrow() noexcept
@@ -613,6 +910,29 @@ class EventLoop
     /** @brief 回收所有墓碑条目（仅在非分发阶段调用） */
     void CompactDead()
     {
+        struct CompactGuard
+        {
+            bool& active;
+            explicit CompactGuard(bool& flag) noexcept : active(flag) { active = true; }
+            ~CompactGuard() { active = false; }
+        } guard(compacting_);
+        WatchedEntry** watched_link = &watched_head_;
+        watched_tail_               = nullptr;
+        while (*watched_link)
+        {
+            auto* e = *watched_link;
+            if (e->dead)
+            {
+                *watched_link = e->next;
+                --watched_count_;
+                delete e;
+            }
+            else
+            {
+                watched_tail_ = e;
+                watched_link  = &e->next;
+            }
+        }
         BusyEntry** link = &busy_head_;
         busy_tail_ = nullptr;
         while (*link)
@@ -639,6 +959,11 @@ class EventLoop
     std::deque<Entry> entries_;                        ///< fd 监听条目列表
     std::vector<OwnedTimer> owned_timerfds_;             ///< EventLoop 持有的 timerfd 列表
     std::vector<std::pair<HookId, Hook>> post_hooks_;  ///< 分发批次结束钩子
+    WatchedEntry* watched_head_    = nullptr;
+    WatchedEntry* watched_tail_    = nullptr;
+    std::size_t watched_count_     = 0;
+    uint64_t next_registration_id_ = 1;
+    bool destroying_ = false, compacting_ = false;
     BusyEntry* busy_head_ = nullptr;
     BusyEntry* busy_tail_ = nullptr;
     bool busy_polling_ = false;
@@ -652,6 +977,16 @@ class EventLoop
     std::atomic<bool> running_{false};
     std::atomic<bool> run_active_{false};  ///< Run 独占所有权，至分发/回收完全退出才释放
 };
+
+inline void EventLoop::Registration::Reset() noexcept
+{
+    EventLoop* owner  = std::exchange(loop_, nullptr);
+    const uint64_t id = std::exchange(id_, 0);
+    if (owner)
+        owner->CancelRegistration(id);
+}
+inline int EventLoop::Registration::Fd() const noexcept { return loop_ ? loop_->RegisteredFd(id_) : -1; }
+inline EventLoop::Registration::operator bool() const noexcept { return Fd() >= 0; }
 
 }  // namespace shm
 

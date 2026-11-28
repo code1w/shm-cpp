@@ -74,6 +74,7 @@ class ShmConnection : public comm::ITcpConnection,
     {
         assert(!sending_ && !draining_ && !codec_active_ && !messagecb_active_ &&
                !connectioncb_active_ && !closecb_active_ && !verifycb_active_);
+        ResetEventRegistrations();
         RemoveVerifyTimer();
     }
 
@@ -250,31 +251,26 @@ class ShmConnection : public comm::ITcpConnection,
     void StartVerifyTimer(int64_t expired_ms, int64_t interval_ms, comm::TimeAction action) override
     {
         AssertCodecIdle();
-        if (verify_timer_ >= 0)
+        if (verify_timer_)
+            return;
+        (void)interval_ms;
+        if (!loop_)
         {
+            Close();
             return;
         }
-        (void)interval_ms;  // 一次性定时器，不支持重复触发
-
-        int tfd            = 0;
-        const ErrorCode ec = loop_->AddOneShotTimer(
+        const ErrorCode ec = loop_->WatchOneShotTimer(
             expired_ms,
             [weak = weak_from_this(), action = std::move(action)](int, short) mutable {
                 if (auto conn = weak.lock())
                 {
-                    conn->verify_timer_ = -1;  // 定时器已自行移除
+                    conn->verify_timer_.Reset();
                     action(0);
                 }
             },
-            &tfd);
-        if (ec == ErrorCode::kOk)
-        {
-            verify_timer_ = tfd;
-        }
-        else
-        {
-            Close();  // 无法挂载超时定时器：fail-closed（避免验证永不超时）
-        }
+            &verify_timer_);
+        if (ec != ErrorCode::kOk)
+            Close();  // fail closed on registration failure
     }
 
     /**
@@ -329,6 +325,35 @@ class ShmConnection : public comm::ITcpConnection,
     int SocketFd() const noexcept { return socket_fd_.Get(); }
     /// @brief 对端写入通知的 eventfd（owner 用于注册 POLLIN 实时读）
     int NotifyFd() const noexcept { return channel_.NotifyReadFd(); }
+    // Owner-only installation. Keep registration ownership inside the connection;
+    // application code cannot move its watches away from their callback context.
+    template <class Notify, class Socket>
+    ErrorCode WatchEvents(Notify&& notify, Socket&& socket) noexcept
+    {
+        if (!loop_ || notify_registration_ || socket_registration_)
+            return ErrorCode::kInvalidArgument;
+        ErrorCode ec;
+        if (loop_->BusyPolling())
+            ec = loop_->WatchBusyFd(
+                NotifyFd(),
+                [cb = std::forward<Notify>(notify)](int fd, short events) mutable {
+                    cb(fd, events);
+                    return ErrorCode::kOk;
+                },
+                &notify_registration_);
+        else
+            ec = loop_->WatchFd(NotifyFd(), std::forward<Notify>(notify), &notify_registration_);
+        if (ec == ErrorCode::kOk)
+            ec = loop_->WatchFd(SocketFd(), std::forward<Socket>(socket), &socket_registration_);
+        if (ec != ErrorCode::kOk)
+            ResetEventRegistrations();
+        return ec;
+    }
+    void ResetEventRegistrations() noexcept
+    {
+        notify_registration_.Reset();
+        socket_registration_.Reset();
+    }
     /// @brief 访问底层通道（批量写入等高级用法）
     DefaultRingChannel& Channel() noexcept { return channel_; }
 
@@ -751,14 +776,7 @@ class ShmConnection : public comm::ITcpConnection,
         }
     }
 
-    void RemoveVerifyTimer()
-    {
-        if (verify_timer_ >= 0)
-        {
-            loop_->RemoveTimer(static_cast<int>(verify_timer_));
-            verify_timer_ = -1;
-        }
-    }
+    void RemoveVerifyTimer() noexcept { verify_timer_.Reset(); }
 
     EventLoop* loop_;                                         ///< 事件循环（验证定时器用）
     uint64_t id_;                                             ///< 连接 ID
@@ -772,7 +790,9 @@ class ShmConnection : public comm::ITcpConnection,
     comm::VerifyCallback verifycb_;                           ///< 验证回调
     std::any context_;                                        ///< 用户上下文
     std::any rpc_context_;                                    ///< RPC 上下文
-    comm::TimerID verify_timer_ = -1;                          ///< 验证超时定时器
+    EventLoop::Registration notify_registration_;
+    EventLoop::Registration socket_registration_;
+    EventLoop::Registration verify_timer_;                    ///< 验证超时定时器
     comm::CloseType close_type_{comm::CloseType::Passive};    ///< 关闭类型
     comm::TcpConnType conntype_{comm::TcpConnType::Unknown};  ///< 连接类型
     uint32_t direct_encode_min_bytes_ = kDirectEncodeMinBytes;

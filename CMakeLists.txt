@@ -191,3 +191,13 @@ if(Protobuf_FOUND)
     target_link_libraries(test_chain_protobuf PRIVATE shm_ipc chain_proto)
     target_compile_options(test_chain_protobuf PRIVATE -fno-exceptions)
 endif()
+
+add_executable(test_registration test/test_registration.cpp)
+target_link_libraries(test_registration PRIVATE shm_ipc)
+target_link_options(test_registration PRIVATE -Wl,--wrap=_ZnwmRKSt9nothrow_t)
+
+add_executable(test_registration_app test/test_registration_app.cpp)
+target_link_libraries(test_registration_app PRIVATE shm_ipc)
+target_link_options(test_registration_app PRIVATE -Wl,--wrap=_ZnwmRKSt9nothrow_t)
+
+target_compile_options(test_registration_app PRIVATE -UNDEBUG)

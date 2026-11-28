@@ -1,0 +1,17 @@
+{
+  "role": "result",
+  "session": 1,
+  "bytes": 16,
+  "batch": 256,
+  "gap_us": 0,
+  "messages": 7303278408192,
+  "seconds": 604800.0000018,
+  "msg_s": 12075526.469,
+  "samples": 114113994465,
+  "p50_ns": 9600,
+  "p99_ns": 13824,
+  "p999_ns": 25856,
+  "max_ns": 32612339785,
+  "full_checks": 114114892235,
+  "errors": 0
+}

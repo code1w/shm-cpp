@@ -1,5 +1,5 @@
 {
-  "state": "running",
+  "state": "passed",
   "started_utc": "2026-11-21T13:54:47.306375+00:00",
   "seconds_requested": 604800,
   "warmup_seconds": 5,
@@ -8,7 +8,15 @@
   "batch": 256,
   "server_cpu": 2,
   "client_cpu": 4,
-  "elapsed_s": 218090.9,
-  "latest_replies": 2633656600320,
-  "progress_age_s": 0.3
+  "elapsed_s": 604807.079,
+  "latest_replies": 7303335885056,
+  "progress_age_s": 0.3,
+  "measured_replies": 7303278408192,
+  "reason": null,
+  "finished_utc": "2026-11-28T13:54:54.993936+00:00",
+  "forced_kills": [],
+  "exit_codes": {
+    "server": 0,
+    "client": 0
+  }
 }

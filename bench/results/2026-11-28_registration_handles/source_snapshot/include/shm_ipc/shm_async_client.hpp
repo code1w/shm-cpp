@@ -1,0 +1,391 @@
+/**
+ * @file shm_async_client.hpp
+ * @brief 共享内存异步客户端实现（C++17）：shm::ShmAsyncClient 实现 comm::ITcpAsyncClient
+ *
+ * 应用层只依赖 comm::ITcpAsyncClient 接口编程，传输实现可替换：
+ * @code
+ * shm::EventLoop loop;
+ * shm::ShmAsyncClient client(&loop);
+ * client.SetCodecFactory([] { return comm::codec::Adapt(std::make_shared<MyCodec>()); });
+ * client.SetConnectionCallback([](const comm::TcpConnPtr &conn) { ... });
+ * client.SetMessageCallback([](const comm::TcpConnPtr &conn, const std::any &pkg) { ... });
+ * client.SetCloseCallback([](const comm::TcpConnPtr &conn) { ... });
+ * client.SetConnectErrorCallback([](bool autoreconnect, const std::string &uri) { ... });
+ * client.Connect("shm:///tmp/app.socket");
+ * loop.Run();
+ * @endcode
+ *
+ * shm 实现的特点：
+ * - Connect() 是同步阻塞的（本地 connect + fd 交换握手，5 秒超时），
+ *   但回调时机与框架一致：成功后触发 connection 回调，失败触发 error 回调
+ * - uri 支持 "shm:///path"、"uds:///path" 或裸路径（本地 Unix socket）
+ * - SetAutoReconnect 仅记录标志并透传给 error 回调（与框架一致，重连逻辑为 TODO）
+ * - 所有方法必须在 EventLoop 所在线程调用；进程需自行忽略 SIGPIPE
+ */
+
+#ifndef SHM_IPC_SHM_ASYNC_CLIENT_HPP_
+#define SHM_IPC_SHM_ASYNC_CLIENT_HPP_
+
+#include <assert.h>
+#include <unistd.h>
+
+#include <any>
+#include <cstdint>
+#include <new>
+#include <string>
+#include <string_view>
+#include <utility>
+
+#include <comm/client.h>
+
+#include "common.hpp"
+#include "event_loop.hpp"
+#include "shm_connection.hpp"
+
+namespace shm {
+
+/**
+ * @brief 共享内存异步客户端（实现 comm::ITcpAsyncClient，对应框架 io::TcpAsyncClient）
+ *
+ * @thread-safety 非线程安全：所有公共方法与回调都在其绑定的 EventLoop 线程上
+ *                使用；Connect/Close 不得与事件循环并发执行。
+ */
+class ShmAsyncClient : public comm::ITcpAsyncClient
+{
+ public:
+    /**
+     * @param loop 外部事件循环（必须比 ShmAsyncClient 存活更久）
+     */
+    explicit ShmAsyncClient(EventLoop* loop) noexcept : loop_(loop) {}
+
+    /// @brief 析构时静默移除 fd（不触发 close 回调，避免触碰已析构的用户对象）
+    ~ShmAsyncClient() override
+    {
+        if (conn_ && loop_)
+        {
+            // 先 Close（内部含 RemoveVerifyTimer）：verifing 中析构时，
+            // 未触发的验证定时器若不摘除，其回调（捕获裸 this）将在连接
+            // 释放后命中悬垂指针（use-after-free）
+            conn_->Close();
+            conn_->ResetEventRegistrations();
+        }
+    }
+
+    // 禁止复制和移动（EventLoop 回调持有 this）
+    ShmAsyncClient(const ShmAsyncClient&)            = delete;
+    ShmAsyncClient& operator=(const ShmAsyncClient&) = delete;
+    ShmAsyncClient(ShmAsyncClient&&)                 = delete;
+    ShmAsyncClient& operator=(ShmAsyncClient&&)      = delete;
+
+    // ------------------------------------------------------------------
+    // comm::ITcpAsyncClient 接口实现
+    // ------------------------------------------------------------------
+
+    void SetVerifyCallback(comm::VerifyCallback cb) override { verifycb_ = std::move(cb); }
+    void SetConnectionCallback(comm::ConnectionCallback cb) override { connectioncb_ = std::move(cb); }
+    void SetMessageCallback(comm::AnyMessageCallback cb) override { messagecb_ = std::move(cb); }
+    void SetCloseCallback(comm::CloseCallback cb) override { closecb_ = std::move(cb); }
+    void SetConnectErrorCallback(comm::ConnectErrorCallback cb) override { errorcb_ = std::move(cb); }
+    void SetCodecFactory(comm::codec::CodecFactoryCallback cb) override { codec_factory_ = std::move(cb); }
+
+    void SetContext(std::any context) override { context_ = std::move(context); }
+    [[nodiscard]]
+    const std::any& Context() const override
+    {
+        return context_;
+    }
+    void SetAutoReconnect(bool autoreconn) override { autoreconnect_ = autoreconn; }
+
+    void ResizeBuffer(size_t size, size_t max) override
+    {
+        init_buffer_size_ = size;
+        max_buffer_size_  = max;
+    }
+
+    /// @brief 客户端状态（取值见 comm::TcpClientStates）
+    [[nodiscard]]
+    int32_t State() const override
+    {
+        return state_;
+    }
+
+    /// @brief 连接 ID（client 端固定为 1），未连接返回 0
+    [[nodiscard]]
+    uint64_t Id() const override
+    {
+        return conn_ ? conn_->Id() : 0;
+    }
+
+    /**
+     * @brief 连接服务端（同步 connect + 握手）
+     *
+     * uri 支持 "shm:///path"、"uds:///path" 或裸路径。
+     * 成功后注册事件回调并触发 connection 回调；
+     * 失败触发 error 回调（首参为 autoreconnect 标志，与框架一致）。
+     */
+    void Connect(const std::string_view& uri) override
+    {
+        assert(connectioncb_);
+        assert(messagecb_);
+        assert(closecb_);
+        assert(codec_factory_);
+
+        if (state_ == comm::TcpClientStates::connecting || state_ == comm::TcpClientStates::established)
+        {
+            return;
+        }
+
+        const uint64_t attempt = ++connect_generation_;
+        state_          = comm::TcpClientStates::connecting;
+        last_error_     = ErrorCode::kOk;
+        last_sys_errno_ = 0;
+
+        const detail::IoDeadline deadline{5000};
+        UniqueFd sock;
+        ErrorCode ec = ConnectUnixSocket(UriToPath(uri), &sock, &last_sys_errno_, &deadline);
+        if (ec != ErrorCode::kOk)
+        {
+            FailConnect(uri, ec);
+            return;
+        }
+
+        DefaultRingChannel channel;
+        ec = DefaultRingChannel::CreateRingChannel(sock.Get(), ChannelRole::kClient, &channel, &last_sys_errno_, &deadline);
+        if (ec != ErrorCode::kOk)
+        {
+            FailConnect(uri, ec);
+            return;
+        }
+
+        try
+        {
+            auto codec = codec_factory_ ? codec_factory_() : nullptr;
+            if (!codec)
+            {
+                FailConnect(uri, ErrorCode::kInvalidArgument);
+                return;
+            }
+            ec = InstallConnection(std::move(sock), std::move(channel), std::move(codec));
+            if (ec != ErrorCode::kOk) FailConnect(uri, ec);
+        }
+        catch (const std::bad_alloc&)
+        {
+            if (attempt != connect_generation_) return;  // 旧尝试不得清理重入建立的新连接
+            // 分配失败：清理已注册的 fd/连接，按连接失败处理
+            if (conn_)
+            {
+                conn_->ResetEventRegistrations();
+                conn_->Close();
+                conn_.reset();
+            }
+            FailConnect(uri, ErrorCode::kNoMemory);
+            // TODO 自动重连（与框架一致，暂未实现）
+        }
+        catch (...)
+        {
+            if (attempt != connect_generation_) throw;
+            if (conn_)
+            {
+                conn_->ResetEventRegistrations();
+                conn_->Close();
+                conn_.reset();
+            }
+            state_ = comm::TcpClientStates::close;
+            throw;  // 用户工厂/建连回调异常保持传播，状态已回滚
+        }
+    }
+
+    /**
+     * @brief 发送消息包
+     * @return true 成功；未连接或编码/写入失败返回 false
+     */
+    bool SendCmd(const std::any& pkg) override
+    {
+        auto conn = conn_;
+        if (conn && state_ == comm::TcpClientStates::established)
+        {
+            return conn->SendCmd(pkg);
+        }
+        return false;
+    }
+
+    /**
+     * @brief 主动关闭连接：shutdown 并触发 close 回调
+     */
+    void Close() override
+    {
+        if (state_ != comm::TcpClientStates::established)
+        {
+            return;
+        }
+
+        state_    = comm::TcpClientStates::closeing;
+        auto conn = conn_;
+        if (conn)
+        {
+            conn->Close();
+        }
+        Teardown();
+    }
+
+    // ------------------------------------------------------------------
+    // shm 扩展接口（非接口方法）
+    // ------------------------------------------------------------------
+
+    /// @brief 当前连接对象（未连接返回 nullptr）
+    [[nodiscard]]
+    ShmConnPtr Conn() const
+    {
+        return conn_;
+    }
+
+    /// @brief 最近一次 Connect 的错误码（扩展接口）
+    [[nodiscard]]
+    ErrorCode LastError() const noexcept
+    {
+        return last_error_;
+    }
+
+    /// @brief 最近一次 Connect 失败时的 errno（扩展接口）
+    [[nodiscard]]
+    int LastSysErrno() const noexcept
+    {
+        return last_sys_errno_;
+    }
+
+ private:
+    /// @brief 创建连接对象、装配回调/codec 并注册 fd，最后触发 connection 回调
+    ErrorCode InstallConnection(UniqueFd sock, DefaultRingChannel channel, comm::codec::CodecPtr codec)
+    {
+        const uint64_t id = 1;
+        auto conn         = std::make_shared<ShmConnection>(loop_, id, std::move(sock), std::move(channel));
+        codec->conn_id    = id;
+        conn->SetMessageCallback(messagecb_.Copy());
+        conn->SetCloseCallback(closecb_.Copy());
+        conn->SetConnectionCallback(connectioncb_.Copy());
+        conn->SetVerifyCallback(verifycb_.Copy());
+        conn->SetCodec(codec);
+        conn->SetConnType(comm::TcpConnType::TcpConn_Client);
+        conn->ResizeBuffer(init_buffer_size_, max_buffer_size_);
+        if (context_.has_value())
+        {
+            conn->SetContext(context_);
+        }
+        conn_ = conn;
+
+        const auto ec = conn->WatchEvents([this](int fd, short events) { OnNotify(fd, events); },
+                                          [this](int fd, short events) { OnSocket(fd, events); });
+        if (ec != ErrorCode::kOk)
+        {
+            conn->ResetEventRegistrations();
+            conn->Close();
+            conn_.reset();
+            return ec;
+        }
+
+        state_ = comm::TcpClientStates::established;
+        conn->OnConnection();
+        return ErrorCode::kOk;
+    }
+
+    /// @brief 连接失败收尾：记录错误码并触发 error 回调
+    void FailConnect(const std::string_view& uri, ErrorCode ec)
+    {
+        last_error_ = ec;
+        state_      = comm::TcpClientStates::close;
+        if (!errorcb_)
+        {
+            return;
+        }
+        try
+        {
+            errorcb_(autoreconnect_, std::string(uri));
+        }
+        catch (const std::bad_alloc&)
+        {
+            // 无法构造回调参数字符串：错误码已通过 LastError() 暴露
+        }
+    }
+
+    /// @brief eventfd 回调：对端写入新数据，立即消费并解码分发
+    void OnNotify(int efd, short /*revents*/)
+    {
+        if (efd >= 0) DefaultRingChannel::DrainNotify(efd);
+        // 持有本地拷贝：消息回调内可能调用 Close() 触发 Teardown()，
+        // 若直接用 conn_ 访问会在 DrainRing 返回后踩空
+        auto conn = conn_;
+        if (!conn)
+        {
+            return;
+        }
+        const int n = conn->DrainRing();
+        // 协议错误，或消息回调内调用了 Close()（连接进入 closeing）
+        if (conn_ == conn && (n < 0 || conn->State() == comm::TcpConnStates::closeing))
+        {
+            Teardown();
+        }
+    }
+
+    /// @brief socket 回调：断连检测（socket 在握手后不再承载数据）
+    void OnSocket(int fd, short revents)
+    {
+        auto conn = conn_;  // 同 OnNotify，防止回调内 Teardown 后踩空
+        if (!conn)
+        {
+            return;
+        }
+        if (revents & (POLLHUP | POLLERR | POLLIN))
+        {
+            char buf{};
+            const ssize_t n = ::read(fd, &buf, 1);
+            if (n <= 0)
+            {
+                // 对端关闭：先读掉环中可能残留的最后数据，再收尾
+                conn->DrainRing();
+                // 消息/关闭回调可能已重连；旧连接的 EOF 不得清理新连接。
+                if (conn_ == conn)
+                {
+                    Teardown();
+                }
+            }
+        }
+    }
+
+    /// @brief 收尾：移除 fd、触发 close 回调、释放连接（幂等）
+    void Teardown()
+    {
+        if (state_ == comm::TcpClientStates::close)
+        {
+            return;
+        }
+        state_ = comm::TcpClientStates::close;
+        // 先复位连接再触发回调：close 回调内允许立即重新 Connect()
+        auto conn = std::move(conn_);
+        if (conn)
+        {
+            conn->ResetEventRegistrations();
+            conn->OnClose();
+        }
+    }
+
+    EventLoop* loop_ = nullptr;                        ///< 外部事件循环
+    uint64_t connect_generation_ = 0;  ///< 每次 Connect 的事务身份，含回调内重连
+    ShmConnPtr conn_;                                  ///< 当前连接（client 托管其生命周期）
+    int state_ = comm::TcpClientStates::close;         ///< 连接状态（初值同框架：close）
+    detail::StableCallback<comm::ConnectionCallback> connectioncb_;            ///< 连接建立回调
+    detail::StableCallback<comm::AnyMessageCallback> messagecb_;               ///< 消息回调
+    detail::StableCallback<comm::CloseCallback> closecb_;                      ///< 连接关闭回调
+    detail::StableCallback<comm::VerifyCallback> verifycb_;                    ///< 验证回调
+    detail::StableCallback<comm::ConnectErrorCallback> errorcb_;               ///< 连接失败回调
+    detail::StableCallback<comm::codec::CodecFactoryCallback> codec_factory_;  ///< codec 工厂
+    std::any context_;                                 ///< 用户上下文（建连时同步到连接）
+    bool autoreconnect_{false};                        ///< 自动重连标志（透传给 error 回调）
+    ErrorCode last_error_ = ErrorCode::kOk;            ///< 最近一次 Connect 错误码
+    int last_sys_errno_   = 0;                         ///< 最近一次 Connect 的 errno
+    uint32_t init_buffer_size_{128 * 1024};            ///< 编码缓冲初始大小（同框架默认）
+    uint32_t max_buffer_size_{1024 * 1024};            ///< 编码缓冲上限（同框架默认）
+};
+
+}  // namespace shm
+
+#endif  // SHM_IPC_SHM_ASYNC_CLIENT_HPP_

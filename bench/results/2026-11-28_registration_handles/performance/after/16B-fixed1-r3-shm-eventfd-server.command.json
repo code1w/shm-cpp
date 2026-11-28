@@ -1,0 +1,1 @@
+["taskset", "-c", "1", "/tmp/shm-registration-after/bench_acceptance", "server", "/tmp/shm-random-ab-b_dpefby/ipc.sock", "--transport", "shm", "--busy-poll", "0", "--bytes", "16", "--batch", "1", "--batch-min", "1", "--seed", "148259", "--single-type", "1"]

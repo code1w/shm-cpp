@@ -175,12 +175,12 @@ class ShmServer : public comm::ITcpServer
         // 2) 注销监听与握手完成通知 fd
         if (listen_fd_)
         {
-            loop_->RemoveFd(listen_fd_.Get());
+            listen_registration_.Reset();
             listen_fd_.Reset();
         }
         if (hs_wake_fd_)
         {
-            loop_->RemoveFd(hs_wake_fd_.Get());
+            handshake_registration_.Reset();
         }
         // hs_wake_fd_ 不在此关闭：握手线程已 join，留待成员析构，
         // 避免关闭后 fd 号被复用导致握手线程误写
@@ -324,15 +324,16 @@ class ShmServer : public comm::ITcpServer
 
         started_ = true;
         ++run_generation_;
-        try
+        ec = loop_->WatchFd(
+            listen_fd_.Get(), [this](int fd, short revents) { OnAccept(fd, revents); }, &listen_registration_);
+        if (ec == ErrorCode::kOk)
+            ec = loop_->WatchFd(
+                hs_wake_fd_.Get(), [this](int fd, short revents) { OnHandshakeComplete(fd, revents); },
+                &handshake_registration_);
+        if (ec != ErrorCode::kOk)
         {
-            loop_->AddFd(listen_fd_.Get(), [this](int fd, short revents) { OnAccept(fd, revents); });
-            loop_->AddFd(hs_wake_fd_.Get(), [this](int fd, short revents) { OnHandshakeComplete(fd, revents); });
-        }
-        catch (const std::bad_alloc&)
-        {
-            Stop();  // 回滚监听、线程与 fd 注册
-            return FailStart(ErrorCode::kNoMemory);
+            Stop();
+            return FailStart(ec);
         }
 
         if (successcb_)
@@ -497,31 +498,22 @@ class ShmServer : public comm::ITcpServer
 
             conns_[id] = conn;
 
-            // eventfd：对端写入新数据，实时读取
-            if (loop_->BusyPolling())
+            const auto ec = conn->WatchEvents([this, id](int fd, short events) { OnConnNotify(fd, events, id); },
+                                              [this, id](int fd, short events) { OnConnSocket(fd, events, id); });
+            if (ec != ErrorCode::kOk)
             {
-                const auto ec = loop_->AddBusyPollFd(conn->NotifyFd(), [this, id](int fd, short revents) {
-                    OnConnNotify(fd, revents, id);
-                    return ErrorCode::kOk;
-                });
-                if (ec != ErrorCode::kOk)
-                {
-                    conns_.erase(id);
-                    conn->Close();
-                    return;
-                }
+                conn->ResetEventRegistrations();
+                conns_.erase(id);
+                conn->Close();
+                return;
             }
-            else loop_->AddFd(conn->NotifyFd(), [this, id](int fd, short revents) { OnConnNotify(fd, revents, id); });
-            // socket：仅用于断连检测
-            loop_->AddFd(conn->SocketFd(), [this, id](int fd, short revents) { OnConnSocket(fd, revents, id); });
         }
         catch (const std::bad_alloc&)
         {
             // 注册是事务：连接表与两个 fd 监听必须一起回滚。
             if (conn)
             {
-                loop_->RemoveFd(conn->NotifyFd());
-                loop_->RemoveFd(conn->SocketFd());
+                conn->ResetEventRegistrations();
                 conns_.erase(id);
                 conn->Close();
             }
@@ -574,8 +566,7 @@ class ShmServer : public comm::ITcpServer
     /// @brief 移除连接：注销 fd、移出连接表、触发 close 回调
     void RemoveConn(const ShmConnPtr& conn)
     {
-        loop_->RemoveFd(conn->NotifyFd());
-        loop_->RemoveFd(conn->SocketFd());
+        conn->ResetEventRegistrations();
         conns_.erase(conn->Id());
         conn->OnClose();
     }
@@ -636,6 +627,9 @@ class ShmServer : public comm::ITcpServer
     detail::StableCallback<comm::codec::CodecFactoryCallback> codec_factory_;  ///< codec 工厂
     detail::StableCallback<comm::StartFailedCallback> failedcb_;               ///< 启动失败回调
     detail::StableCallback<comm::StartSuccessCallback> successcb_;             ///< 启动成功回调
+    // Destroy registrations before listener/handshake fds and callback state.
+    EventLoop::Registration listen_registration_;
+    EventLoop::Registration handshake_registration_;
 };
 
 }  // namespace shm

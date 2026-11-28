@@ -1,0 +1,28 @@
+{
+  "registration_tests": "Release and ASan/UBSan passed",
+  "registration_app_fault_injection": "Release with assertions and ASan/UBSan passed",
+  "eventloop_regressions": "Release and ASan/UBSan passed",
+  "shm_app_modes": [
+    "eventfd",
+    "busy-server",
+    "busy-client",
+    "busy-both"
+  ],
+  "sanitizer_chain": {
+    "state": "passed",
+    "completed": 15,
+    "total": 15
+  },
+  "performance": {
+    "state": "passed",
+    "completed": 60,
+    "total": 60
+  },
+  "new_exception_statements": 0,
+  "wire_protocol_changed": false,
+  "core_audits": [
+    "test_audit_core_fixes",
+    "test_audit_round2_fixes",
+    "test_audit_round3_fixes"
+  ]
+}
